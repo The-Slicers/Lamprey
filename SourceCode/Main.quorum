@@ -1,0 +1,80 @@
+use Libraries.Game.Graphics.Models.Data.ModelLoader
+use Libraries.Game.Graphics.Models.Data.ModelData
+use Libraries.Game.Graphics.Models.Data.MeshData
+use Libraries.Containers.Array
+use Libraries.Containers.Number32BitArray
+use Libraries.Containers.Integer32BitArray
+use Libraries.Compute.Vector4
+use Libraries.System.File
+
+class Main
+    action Main
+        // Load in model from assets folder 
+        File file
+        file:SetPath("assets/bunny.obj") 
+        
+        // packages model data into a ModelData class
+        ModelLoader loader
+        ModelData data = loader:Load(file) 
+        
+        output "File: " + file:GetPath()
+        
+        // simple program to check data in the model
+        PrintMeshStats(data)
+    end
+    
+    // helper function to check if a resource exists for a model
+    action HasData(Number32BitArray array) returns text
+        if array = undefined or array:GetSize() = 0
+            return "no :("
+        end
+        return "yes :)"
+    end
+    
+    // Outputs mesh data ignoring materials and animations
+    action PrintMeshStats(ModelData data)
+        Array<MeshData> meshes = data:GetMeshes()
+        integer totalVertices = 0
+        integer totalTriangles = 0
+        integer totalIndices = 0
+
+        output "Meshes: " + meshes:GetSize() 
+        
+        // loops through all meshes
+        integer i = 0
+        repeat while i < meshes:GetSize()
+            MeshData mesh = meshes:Get(i) 
+            
+            integer vertices = 0
+            Number32BitArray positions = mesh:GetVertices()
+            // we divide by 3 since positions are given as 3 values, xyz, for a single position
+            if positions not= undefined
+                vertices = positions:GetSize() / 3
+            end
+
+            integer indices = 0
+            Integer32BitArray indexArray = mesh:GetIndices()
+            // luckily just the size of the array
+            if indexArray not= undefined
+                indices = indexArray:GetSize()
+            end
+            // since triangles have 3 points, every point contains a single position and indice
+            // so for every 3 indices there exists 1 triangle
+            integer triangles = indices / 3
+
+            totalVertices = totalVertices + vertices
+            totalTriangles = totalTriangles + triangles
+            totalIndices = totalIndices + indices
+                
+            output "Mesh " + i + ":"
+            output "Vertices: " + vertices
+            output "Indices: " + indices
+            output "Triangles: " + triangles
+            output "Normals: " + HasData(mesh:GetNormals())
+            output "UVs: " + HasData(mesh:GetTextureCoordinates())
+            output "Tangents: " + HasData(mesh:GetTangents())
+        
+            i = i + 1
+        end
+    end
+end

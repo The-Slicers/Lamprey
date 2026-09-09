@@ -1,0 +1,5 @@
+Build/
+Run/
+
+## ignore model types
+assets/*.obj
