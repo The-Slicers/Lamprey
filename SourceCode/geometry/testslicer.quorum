@@ -1,0 +1,239 @@
+package geometry
+
+use Libraries.Containers.Array 
+use Libraries.Containers.Number32BitArray
+use Libraries.Containers.Integer32BitArray
+
+class TestSlicer
+    Number32BitArray vertX
+    Number32BitArray vertY
+    Number32BitArray vertZ
+    Integer32BitArray faceCorners
+
+    integer maxCrossingsPerFace = 0
+    integer oddCount = 0
+    
+    action SetTriangles(Number32BitArray x, Number32BitArray y, Number32BitArray z,
+                   Integer32BitArray corners)
+        vertX = x
+        vertY = y
+        vertZ = z
+        faceCorners = corners
+    end
+
+    action BuildPlanes(number zMin, number zMax, number delta) returns Array<number>
+        Array<number> planes
+        number z = zMin + delta / 2.0
+        repeat while z < zMax
+            planes:Add(z) 
+            z = z + delta
+        end
+        return planes
+    end
+
+    action GetMaxCrossingsPerFace returns integer
+        return maxCrossingsPerFace
+    end
+
+    action GetOddCrossingCount returns integer
+        return oddCount
+    end
+
+    private action GetFaceCount returns integer
+        return faceCorners:GetSize() / 3
+    end
+    
+    private action GetCorner(integer f, integer j) returns integer
+        return faceCorners:Get(3*f+j)
+    end
+
+    action Slice(Array<number> planeZ) returns Array<Segment>
+        Array<Segment> result
+        Array<Crossing> crossings
+        
+        maxCrossingsPerFace = 0
+        oddCount = 0
+        
+        integer faceCount = GetFaceCount()
+        integer planeCount = planeZ:GetSize() 
+        
+        // for every face we find zMin and zMax
+        integer f = 0
+        repeat while f < faceCount
+            integer degree = 3 // this should be a function but all faces are currently triangles
+            
+            number zMin = vertZ:Get(GetCorner(f,0)) 
+            number zMax = zMin
+
+            integer c = 1
+            repeat while c < degree
+                number z = vertZ:Get(GetCorner(f,c)) 
+                if z < zMin
+                    zMin = z
+                end
+                if z > zMax
+                    zMax = z
+                end
+                c = c + 1
+            end
+            
+            // we then check if a plane is outside the current
+            // face's z range
+            integer i = 0
+            repeat while i < planeCount
+                number planeValue = planeZ:Get(i) 
+                
+                boolean consider = true
+                if planeValue < zMin or planeValue > zMax
+                    consider = false
+                end
+                
+                // if within range then we collect all
+                // points at which the plane intersects
+                // with our face :(
+                if consider
+                    crossings:Empty()
+                    CollectCrossings(f,degree,planeValue,crossings)
+                    
+                    integer n = crossings:GetSize() 
+                    if n > maxCrossingsPerFace
+                        maxCrossingsPerFace = n
+                    end
+                    
+                    // if even then z-montonic else not
+                    if n mod 2 not= 0
+                        oddCount = oddCount + 1
+                    elseif n > 0
+                        // if even thus a valid monotone face!
+                        // then we sort current crossings
+                        SortCrossings(crossings)
+                        // once sorted we can construct line
+                        // segments that represent the plane as it 
+                        // traveled through our face
+                        EmitPairs(crossings,i,result)
+                    end
+                end
+                i = i + 1
+            end
+            f = f + 1
+        end
+        
+        return result
+    end
+
+    private action CollectCrossings(integer f, integer degree, number planeValue,
+                               Array<Crossing> result)
+        integer j = 0
+        repeat while j < degree
+            integer k = j+1
+            if k = degree
+                k = 0
+            end
+            
+            integer va = GetCorner(f,j)
+            integer vb = GetCorner(f,k)
+            
+            number za = vertZ:Get(va) 
+            number zb = vertZ:Get(vb) 
+            
+            boolean aBelow = za < planeValue
+            boolean bBelow = zb < planeValue
+
+            if aBelow not= bBelow
+                number t = (planeValue - za) / (zb - za)
+                
+                Crossing point
+                point:x = vertX:Get(va) + t * (vertX:Get(vb) - vertX:Get(va)) 
+                point:y = vertY:Get(va) + t * (vertY:Get(vb) - vertY:Get(va))
+
+                if va < vb
+                    point:edgeLow = va
+                    point:edgeHigh = vb
+                else
+                    point:edgeLow = vb
+                    point:edgeHigh = va
+                end
+
+                result:Add(point) 
+            end
+
+            j = j + 1
+        end
+    end
+
+    private action SortCrossings(Array<Crossing> points)
+        integer n = points:GetSize()
+        
+        number minX = points:Get(0):x 
+        number maxX = minX
+        number minY = points:Get(0):y 
+        number maxY = minY
+
+        integer i = 1
+        repeat while i < n
+            Crossing p = points:Get(i) 
+            
+            if p:x < minX
+                minX = p:x 
+            end
+            if p:y < minY
+                minY = p:y
+            end
+            if p:x > maxX
+                maxX = p:x
+            end
+            if p:y > maxY
+                maxY = p:y
+            end
+            i = i + 1
+        end
+
+        boolean useX = (maxX-minX) >= (maxY-minY)
+        
+        i = 0
+        repeat while i < n
+            Crossing p = points:Get(i)
+            if useX
+                p:key = p:x
+            else
+                p:key = p:y
+            end
+            i = i + 1
+        end
+
+        i = 1
+        repeat while i < n
+            Crossing curr = points:Get(i) 
+            integer j = i - 1
+            repeat while j >= 0 and points:Get(j):key > curr:key
+                points:Set(j + 1, points:Get(j))
+                j = j - 1
+            end
+            points:Set(j + 1, curr)
+            i = i + 1
+        end
+    end
+
+    private action EmitPairs(Array<Crossing> points, integer planeIndex, Array<Segment> result)
+        integer n = points:GetSize() 
+        integer k = 0
+        repeat while k + 1 < n
+            Crossing p = points:Get(k) 
+            Crossing q = points:Get(k + 1)
+            
+            Segment s
+            s:planeIndex = planeIndex
+            s:x0 = p:x
+            s:y0 = p:y
+            s:x1 = q:x
+            s:y1 = q:y
+            s:aLow = p:edgeLow
+            s:aHigh = p:edgeHigh
+            s:bLow = q:edgeLow
+            s:bHigh = q:edgeHigh
+
+            result:Add(s)
+            k = k + 2
+        end
+    end
+end
