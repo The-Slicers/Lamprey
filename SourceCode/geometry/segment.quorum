@@ -1,0 +1,16 @@
+package geometry
+
+class Segment
+    public integer planeIndex = 0
+    
+    public integer aLow = 0
+    public integer aHigh = 0
+    
+    public integer bLow = 0
+    public integer bHigh = 0
+    
+    public number x0 = 0.0
+    public number y0 = 0.0
+    public number x1 = 0.0
+    public number y1 = 0.0
+end

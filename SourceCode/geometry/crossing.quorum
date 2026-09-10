@@ -1,0 +1,11 @@
+package geometry
+
+class Crossing
+    public integer edgeLow = 0
+    public integer edgeHigh = 0
+    
+    public number x = 0.0
+    public number y = 0.0
+    
+    public number key = 0.0
+end
