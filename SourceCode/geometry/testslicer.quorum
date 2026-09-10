@@ -117,35 +117,55 @@ class TestSlicer
             end
             f = f + 1
         end
-        
+        // returns all line segment array
         return result
     end
 
     private action CollectCrossings(integer f, integer degree, number planeValue,
                                Array<Crossing> result)
+        // a degree is a point in our polygons
+        // so we want to go from edge to edge
+        // traveling from point to point finding
+        // every intersection in between that our
+        // planeValue causes
         integer j = 0
         repeat while j < degree
             integer k = j+1
             if k = degree
                 k = 0
             end
-            
+            // get the two edge indices
             integer va = GetCorner(f,j)
             integer vb = GetCorner(f,k)
-            
+            // get the two edge z values
             number za = vertZ:Get(va) 
             number zb = vertZ:Get(vb) 
             
+            // want to see if one of edges is
+            // above the plane whilst the other is 
+            // below the plane
             boolean aBelow = za < planeValue
             boolean bBelow = zb < planeValue
-
+            
+            // if both edges are aboce or below a plane
+            // it is clear that there will be no intersection
+            // however if one is above and one is below, ie they're
+            // different booleans then we have an intersection
             if aBelow not= bBelow
+                // calculate percentage distance along the edge
+                // the numerator is how far above point A is the plane measured in z
+                // the denominator is the total z difference between A and B
+                // the ratio returns a value between 0 and 1 that express how far
+                // we have to travel between endpoints to reach where the plane is
+                // on the z axis
                 number t = (planeValue - za) / (zb - za)
                 
+                // https://en.wikipedia.org/wiki/Linear_interpolation
                 Crossing point
                 point:x = vertX:Get(va) + t * (vertX:Get(vb) - vertX:Get(va)) 
                 point:y = vertY:Get(va) + t * (vertY:Get(vb) - vertY:Get(va))
-
+                
+                // store the endpoint bounds that produced the crossing
                 if va < vb
                     point:edgeLow = va
                     point:edgeHigh = vb
@@ -168,7 +188,8 @@ class TestSlicer
         number maxX = minX
         number minY = points:Get(0):y 
         number maxY = minY
-
+        
+        // find smallest and largest, x and y
         integer i = 1
         repeat while i < n
             Crossing p = points:Get(i) 
@@ -187,9 +208,11 @@ class TestSlicer
             end
             i = i + 1
         end
-
+        
+        // selects the larger range to be keys from sorting
         boolean useX = (maxX-minX) >= (maxY-minY)
         
+        // gives every crossing a key
         i = 0
         repeat while i < n
             Crossing p = points:Get(i)
@@ -200,7 +223,8 @@ class TestSlicer
             end
             i = i + 1
         end
-
+        
+        // amazing sorting algorithm!
         i = 1
         repeat while i < n
             Crossing curr = points:Get(i) 
