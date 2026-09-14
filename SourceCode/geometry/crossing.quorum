@@ -7,5 +7,6 @@ class Crossing
     public number x = 0.0
     public number y = 0.0
     
+    public boolean above = false
     public number key = 0.0
 end

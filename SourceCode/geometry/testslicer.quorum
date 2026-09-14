@@ -13,6 +13,9 @@ class TestSlicer
     integer maxCrossingsPerFace = 0
     integer oddCount = 0
     
+    number firstPlaneZ = 0.0
+    number planeDelta = 0.0
+    
     action SetTriangles(Number32BitArray x, Number32BitArray y, Number32BitArray z,
                    Integer32BitArray corners)
         vertX = x
@@ -23,7 +26,10 @@ class TestSlicer
 
     action BuildPlanes(number zMin, number zMax, number delta) returns Array<number>
         Array<number> planes
-        number z = zMin + delta / 2.0
+        firstPlaneZ = zMin + delta / 2.0
+        planeDelta = delta
+        
+        number z = firstPlaneZ
         repeat while z < zMax
             planes:Add(z) 
             z = z + delta
@@ -47,6 +53,22 @@ class TestSlicer
         return faceCorners:Get(3*f+j)
     end
 
+    private action FloorToInt(number v) returns integer
+        integer res = cast(integer,v)
+        if v < 0 and cast(number, res) not= v
+            res = res - 1
+        end
+        return res
+    end
+
+    private action CeilingToInt(number v) returns integer
+        integer res = cast(integer,v)
+        if v > 0 and cast(number, res) not= v
+            res = res + 1
+        end
+        return res
+    end
+    
     action Slice(Array<number> planeZ) returns Array<Segment>
         Array<Segment> result
         Array<Crossing> crossings
@@ -77,42 +99,36 @@ class TestSlicer
                 c = c + 1
             end
             
-            // we then check if a plane is outside the current
-            // face's z range
-            integer i = 0
-            repeat while i < planeCount
+            // optimization ! :D
+            integer idStart = CeilingToInt((zMin - firstPlaneZ) / planeDelta)
+            integer idEnd = FloorToInt((zMax - firstPlaneZ) / planeDelta)
+            
+            if idStart < 0
+                idStart = 0
+            end 
+            if idEnd > planeCount - 1
+                idEnd = planeCount - 1
+            end
+
+            integer i = idStart
+            repeat while i <= idEnd
                 number planeValue = planeZ:Get(i) 
                 
-                boolean consider = true
-                if planeValue < zMin or planeValue > zMax
-                    consider = false
-                end
-                
-                // if within range then we collect all
-                // points at which the plane intersects
-                // with our face :(
-                if consider
-                    crossings:Empty()
-                    CollectCrossings(f,degree,planeValue,crossings)
+                crossings:Empty()
+                CollectCrossings(f,degree,planeValue,crossings)
                     
-                    integer n = crossings:GetSize() 
-                    if n > maxCrossingsPerFace
-                        maxCrossingsPerFace = n
-                    end
-                    
-                    // if even then z-montonic else not
-                    if n mod 2 not= 0
-                        oddCount = oddCount + 1
-                    elseif n > 0
-                        // if even thus a valid monotone face!
-                        // then we sort current crossings
-                        SortCrossings(crossings)
-                        // once sorted we can construct line
-                        // segments that represent the plane as it 
-                        // traveled through our face
-                        EmitPairs(crossings,i,result)
-                    end
+                integer n = crossings:GetSize() 
+                if n > maxCrossingsPerFace
+                    maxCrossingsPerFace = n
                 end
+                    
+                // if even then z-montonic else not
+                if n mod 2 not= 0
+                    oddCount = oddCount + 1
+                elseif n = 2
+                    EmitPairs(crossings,i,result)
+                end
+               
                 i = i + 1
             end
             f = f + 1
@@ -176,7 +192,8 @@ class TestSlicer
                 // store the endpoint bounds that produced the crossing
                 point:edgeHigh = high
                 point:edgeLow = low
-
+                
+                point:above = aBelow
                 result:Add(point) 
             end
 
@@ -184,83 +201,28 @@ class TestSlicer
         end
     end
 
-    private action SortCrossings(Array<Crossing> points)
-        integer n = points:GetSize()
-        
-        number minX = points:Get(0):x 
-        number maxX = minX
-        number minY = points:Get(0):y 
-        number maxY = minY
-        
-        // find smallest and largest, x and y
-        integer i = 1
-        repeat while i < n
-            Crossing p = points:Get(i) 
-            
-            if p:x < minX
-                minX = p:x 
-            end
-            if p:y < minY
-                minY = p:y
-            end
-            if p:x > maxX
-                maxX = p:x
-            end
-            if p:y > maxY
-                maxY = p:y
-            end
-            i = i + 1
-        end
-        
-        // selects the larger range to be keys from sorting
-        boolean useX = (maxX-minX) >= (maxY-minY)
-        
-        // gives every crossing a key
-        i = 0
-        repeat while i < n
-            Crossing p = points:Get(i)
-            if useX
-                p:key = p:x
-            else
-                p:key = p:y
-            end
-            i = i + 1
-        end
-        
-        // amazing sorting algorithm!
-        i = 1
-        repeat while i < n
-            Crossing curr = points:Get(i) 
-            integer j = i - 1
-            repeat while j >= 0 and points:Get(j):key > curr:key
-                points:Set(j + 1, points:Get(j))
-                j = j - 1
-            end
-            points:Set(j + 1, curr)
-            i = i + 1
-        end
-    end
-
     private action EmitPairs(Array<Crossing> points, integer planeIndex, Array<Segment> result)
-        integer n = points:GetSize() 
-        integer k = 0
-        repeat while k + 1 < n
-            Crossing p = points:Get(k) 
-            Crossing q = points:Get(k + 1)
-            
-            Segment s
-            s:planeIndex = planeIndex
-            s:x0 = p:x
-            s:y0 = p:y
-            s:x1 = q:x
-            s:y1 = q:y
-            s:aLow = p:edgeLow
-            s:aHigh = p:edgeHigh
-            s:bLow = q:edgeLow
-            s:bHigh = q:edgeHigh
-
-            result:Add(s)
-            k = k + 2
+        Crossing a = points:Get(0) 
+        Crossing b = points:Get(1) 
+        
+        Crossing from = a
+        Crossing to = b
+        if a:above
+            from = b
+            to = a
         end
+
+        Segment s
+        s:planeIndex = planeIndex
+        s:x0 = from:x 
+        s:y0 = from:y 
+        s:x1 = to:x 
+        s:y1 = to:y 
+        s:aLow = from:edgeLow
+        s:aHigh = from:edgeHigh
+        s:bLow = to:edgeLow
+        s:bHigh = to:edgeHigh
+
+        result:Add(s) 
     end
 end
