@@ -71,12 +71,33 @@ class Main
             i = i + 1
         end        
         
+        number low = vertZ:Get(0) 
+        number high = low
+        i = 1
+        repeat while i < vertZ:GetSize()
+            number v = vertZ:Get(i) 
+            if v < low
+                low = v
+            end
+            if v > high
+                high = v
+            end
+            i = i + 1
+        end
+        
+        i = 0
+        repeat while i < vertZ:GetSize()
+            vertZ:Set(i,vertZ:Get(i) - low)
+            i = i + 1
+        end
+        number height = high - low
+
         TestSlicer slicer
         slicer:SetTriangles(vertX,vertY,vertZ,corners)
     
         output "verts: " + vertX:GetSize() + "  corners: " + corners:GetSize()
-      
-        Array<number> planes = slicer:BuildPlanes(-0.5,0.5,0.02)
+        Array<number> range = slicer:ComputeRange()
+        Array<number> planes = slicer:BuildPlanes(0.0,height,0.1)
         output "planes: " + planes:GetSize()
         
         Array<Segment> segments = slicer:Slice(planes) 
