@@ -158,21 +158,24 @@ class TestSlicer
                 // the ratio returns a value between 0 and 1 that express how far
                 // we have to travel between endpoints to reach where the plane is
                 // on the z axis
-                number t = (planeValue - za) / (zb - za)
+                
+                integer low = va
+                integer high = vb
+                if vb < va
+                    low = vb
+                    high = va
+                end
+
+                number t = (planeValue - vertZ:Get(low)) / (vertZ:Get(high) - vertZ:Get(low))
                 
                 // https://en.wikipedia.org/wiki/Linear_interpolation
                 Crossing point
-                point:x = vertX:Get(va) + t * (vertX:Get(vb) - vertX:Get(va)) 
-                point:y = vertY:Get(va) + t * (vertY:Get(vb) - vertY:Get(va))
+                point:x = vertX:Get(low) + t * (vertX:Get(high) - vertX:Get(low)) 
+                point:y = vertY:Get(low) + t * (vertY:Get(high) - vertY:Get(low))
                 
                 // store the endpoint bounds that produced the crossing
-                if va < vb
-                    point:edgeLow = va
-                    point:edgeHigh = vb
-                else
-                    point:edgeLow = vb
-                    point:edgeHigh = va
-                end
+                point:edgeHigh = high
+                point:edgeLow = low
 
                 result:Add(point) 
             end
