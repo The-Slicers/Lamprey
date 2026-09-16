@@ -1,0 +1,14 @@
+use Libraries.System.File
+
+class Shader
+   action ReadShader(text filepath) returns text
+        File myfile
+        myfile:SetPath(filepath)
+        
+        text fileString = myfile:Read()
+        return fileString
+    end
+end
+
+
+        
