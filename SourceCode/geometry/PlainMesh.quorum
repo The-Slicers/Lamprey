@@ -1,0 +1,114 @@
+package geometry
+use Libraries.Containers.Array
+use Libraries.Containers.Number32BitArray
+use Libraries.Containers.Number64BitArray
+use Libraries.Containers.Integer32BitArray
+use Libraries.Game.Graphics.Models.Data.ModelData
+use Libraries.Game.Graphics.Models.Data.MeshData
+
+class PlainMesh
+    Integer32BitArray corners        
+    Number64BitArray vertX
+    Number64BitArray vertY
+    Number64BitArray vertZ
+
+    Array<integer> vertStart
+    Array<integer> cornerStart
+    integer lastVert = 0
+    integer lastCorner = 0
+    
+    action splitCoords (ModelData data)
+        Array<MeshData> meshes = data:GetMeshes()
+
+        integer vertOffset = 0
+        integer indexOffset = 0
+        
+        integer i = 0
+        repeat while i < meshes:GetSize()
+            MeshData mesh = meshes:Get(i)
+            Integer32BitArray indices = mesh:GetIndices()
+            Number32BitArray vertices = mesh:GetVertices()
+            
+            vertStart:Add(vertOffset)
+            cornerStart:Add(indexOffset)
+
+            // seperate vert coords into X, Y, Z arrs
+            integer vertCnt = vertices:GetSize()/3
+            vertX:SetSize(vertCnt+vertOffset)
+            vertY:SetSize(vertCnt+vertOffset)
+            vertZ:SetSize(vertCnt+vertOffset)
+            
+            integer j = 0
+            repeat while j < vertCnt
+                vertX:Set(j+vertOffset,vertices:Get(3*j))
+                vertY:Set(j+vertOffset,vertices:Get(3*j+1))
+                vertZ:Set(j+vertOffset,vertices:Get(3*j+2))
+                j = j + 1
+            end
+            
+            // list of total indices
+            corners:SetSize(indices:GetSize()+indexOffset)
+            integer k = 0
+            repeat while k < indices:GetSize()
+                corners:Set(k+indexOffset,indices:Get(k)+vertOffset)
+                k = k + 1
+            end
+
+            // next mesh
+            vertOffset = vertCnt + vertOffset
+            indexOffset = indices:GetSize() + indexOffset
+            i = i + 1
+        end
+
+        lastVert = vertOffset
+        lastCorner = indexOffset
+    end
+    
+    action GetCorners returns Integer32BitArray
+        return corners
+    end
+
+    action GetVertexX returns Number64BitArray
+        return vertX
+    end
+
+    action GetVertexY returns Number64BitArray
+        return vertY
+    end
+
+    action GetVertexZ returns Number64BitArray
+        return vertZ
+    end
+    
+    action GetVertexStarts returns Array<integer>
+        return vertStart
+    end
+
+    action GetCornerStarts returns Array<integer>
+        return cornerStart
+    end
+
+    // get start and end of specific mesh
+    action GetMeshVertStart(integer mesh) returns integer
+        return vertStart:Get(mesh)
+    end
+
+    action GetMeshVertEnd(integer mesh) returns integer
+        if mesh+1 >= vertStart:GetSize()
+            return lastVert
+        end
+        return vertStart:Get(mesh+1)
+    end
+
+    action GetMeshCornerStart(integer mesh) returns integer
+        return cornerStart:Get(mesh)
+    end
+
+    action GetMeshCornerEnd(integer mesh) returns integer
+        if mesh+1 >= cornerStart:GetSize()
+            return lastCorner
+        end
+        return cornerStart:Get(mesh+1)
+    end
+
+end
