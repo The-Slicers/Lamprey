@@ -1,4 +1,5 @@
 package geometry
+
 use Libraries.Containers.Array
 use Libraries.Containers.Number32BitArray
 use Libraries.Containers.Number64BitArray
@@ -6,7 +7,7 @@ use Libraries.Containers.Integer32BitArray
 use Libraries.Game.Graphics.Models.Data.ModelData
 use Libraries.Game.Graphics.Models.Data.MeshData
 
-class PlainMesh
+class PlaneMesh
     Integer32BitArray corners        
     Number64BitArray vertX
     Number64BitArray vertY

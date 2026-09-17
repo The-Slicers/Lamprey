@@ -9,6 +9,7 @@ use Libraries.System.File
 
 use geometry.TestSlicer
 use geometry.Segment
+use geometry.PlaneMesh
 
 class Main
     action Main
@@ -29,53 +30,12 @@ class Main
     end
 
     action SampleRun(ModelData data)
-        Array<MeshData> meshes = data:GetMeshes()
-        Integer32BitArray corners
-        Number32BitArray vertX        
-        Number32BitArray vertY
-        Number32BitArray vertZ
-        Integer32BitArray indices
-
-        integer indexOffset = 0
-        integer vertOffset = 0
-        integer i = 0
-        repeat while i < meshes:GetSize()
-            MeshData mesh = meshes:Get(i)
-            indices = mesh:GetIndices()
-            Number32BitArray positions = mesh:GetVertices()
-            
-            vertX:SetSize(positions:GetSize()/3+vertOffset)
-            vertY:SetSize(positions:GetSize()/3+vertOffset)
-            vertZ:SetSize(positions:GetSize()/3+vertOffset)
-
-            integer vertCount = positions:GetSize() / 3
-            integer j = 0
-            repeat while j < vertCount
-                vertX:Set(j+indexOffset,positions:Get(3*j))
-                vertY:Set(j+indexOffset,positions:Get(3*j+1))
-                vertZ:Set(j+indexOffset,positions:Get(3*j+2))
-                
-                j = j + 1
-            end
-
-            corners:SetSize(indices:GetSize()+indexOffset)
-            k = 0
-            repeat while k < indices:GetSize()
-                corners:Set(k+indexOffset,indices:Get(k))
-                k = k + 1
-            end
-            output "x: " + vertX:GetSize() + " y: " + vertY:GetSize() + " z: " + vertZ:GetSize()
-        
-            indexOffset = indexOffset + indices:GetSize()
-            vertOffset = vertOffset + vertX:GetSize()
-            i = i + 1
-        end        
+        PlaneMesh meshData
+        meshData:splitCoords(data)
         
         TestSlicer slicer
-        slicer:SetTriangles(vertX,vertY,vertZ,corners)
+        slicer:SetTriangles(meshData)
     
-        output "verts: " + vertX:GetSize() + "  corners: " + corners:GetSize()
-      
         Array<number> planes = slicer:BuildPlanes(-0.5,0.5,0.02)
         output "planes: " + planes:GetSize()
         

@@ -2,23 +2,23 @@ package geometry
 
 use Libraries.Containers.Array 
 use Libraries.Containers.Number32BitArray
+use Libraries.Containers.Number64BitArray
 use Libraries.Containers.Integer32BitArray
 
 class TestSlicer
-    Number32BitArray vertX
-    Number32BitArray vertY
-    Number32BitArray vertZ
+    Number64BitArray vertX
+    Number64BitArray vertY
+    Number64BitArray vertZ
     Integer32BitArray faceCorners
 
     integer maxCrossingsPerFace = 0
     integer oddCount = 0
     
-    action SetTriangles(Number32BitArray x, Number32BitArray y, Number32BitArray z,
-                   Integer32BitArray corners)
-        vertX = x
-        vertY = y
-        vertZ = z
-        faceCorners = corners
+    action SetTriangles(PlaneMesh meshData)
+        vertX = meshData:GetVertexX()
+        vertY = meshData:GetVertexY()
+        vertZ = meshData:GetVertexZ()
+        faceCorners = meshData:GetCorners()
     end
 
     action BuildPlanes(number zMin, number zMax, number delta) returns Array<number>
