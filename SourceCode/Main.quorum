@@ -13,34 +13,57 @@ use geometry.PlaneMesh
 
 class Main
     action Main
-        // Load in model from assets folder 
+        // Load in model from assets folder
         File file
-        file:SetPath("assets/bunny.obj") 
-        
+        file:SetPath("assets/bunny.obj")
+
         // packages model data into a ModelData class
         ModelLoader loader
-        ModelData data = loader:Load(file) 
-        
+        ModelData data = loader:Load(file)
+
         output "File: " + file:GetPath()
-        
+
         // simple program to check data in the model
         PrintMeshStats(data)
-        
+
         SampleRun(data)
     end
 
     action SampleRun(ModelData data)
         PlaneMesh meshData
         meshData:splitCoords(data)
-        
+
+        number low = vertZ:Get(0)
+        number high = low
+        i = 1
+        repeat while i < vertZ:GetSize()
+            number v = vertZ:Get(i)
+            if v < low
+                low = v
+            end
+            if v > high
+                high = v
+            end
+            i = i + 1
+        end
+
+        i = 0
+        repeat while i < vertZ:GetSize()
+            vertZ:Set(i,vertZ:Get(i) - low)
+            i = i + 1
+        end
+        number height = high - low
+
         TestSlicer slicer
         slicer:SetTriangles(meshData)
-    
-        Array<number> planes = slicer:BuildPlanes(-0.5,0.5,0.02)
+
+        output "verts: " + vertX:GetSize() + "  corners: " + corners:GetSize()
+        Array<number> range = slicer:ComputeRange()
+        Array<number> planes = slicer:BuildPlanes(0.0,height,0.1)
         output "planes: " + planes:GetSize()
-        
-        Array<Segment> segments = slicer:Slice(planes) 
-        
+
+        Array<Segment> segments = slicer:Slice(planes)
+
         output "segments: " + segments:GetSize()
         output "max crossings: " + slicer:GetMaxCrossingsPerFace()
         output "odd faces: " + slicer:GetOddCrossingCount()
@@ -53,7 +76,7 @@ class Main
         end
         return "yes :)"
     end
-    
+
     // Outputs mesh data ignoring materials and animations
     action PrintMeshStats(ModelData data)
         Array<MeshData> meshes = data:GetMeshes()
@@ -61,13 +84,13 @@ class Main
         integer totalTriangles = 0
         integer totalIndices = 0
 
-        output "Meshes: " + meshes:GetSize() 
-        
+        output "Meshes: " + meshes:GetSize()
+
         // loops through all meshes
         integer i = 0
         repeat while i < meshes:GetSize()
-            MeshData mesh = meshes:Get(i) 
-            
+            MeshData mesh = meshes:Get(i)
+
             integer vertices = 0
             Number32BitArray positions = mesh:GetVertices()
             // we divide by 3 since positions are given as 3 values, xyz, for a single position
@@ -88,7 +111,7 @@ class Main
             totalVertices = totalVertices + vertices
             totalTriangles = totalTriangles + triangles
             totalIndices = totalIndices + indices
-                
+
             output "Mesh " + i + ":"
             output "Vertices: " + vertices
             output "Indices: " + indices
@@ -96,7 +119,7 @@ class Main
             output "Normals: " + HasData(mesh:GetNormals())
             output "UVs: " + HasData(mesh:GetTextureCoordinates())
             output "Tangents: " + HasData(mesh:GetTangents())
-        
+
             i = i + 1
         end
     end
