@@ -1,0 +1,18 @@
+use Libraries.Containers.Array
+use Libraries.Compute.Math
+
+class gcode
+    action generate_gcode(Array<Array<number>> polylines, number layerHeight, number nozzleWidth, number filamentArea) returns Array<text>
+        Iterator<integer> i = polylines:GetIterator()
+        Array<text> gcode
+        integer i = 0
+        repeat while i < polylines:GetSize() - 1
+            number distance = math:SquareRoot(math:RaiseToPower(polylines:Get(i):Get(0) - polylines:Get(i+1):Get(0), 2) + math:RaiseToPower(polylines:Get(i):Get(1) - polylines:Get(i+1):Get(1), 2) + math:RaiseToPower(polylines:Get(i):Get(2) - polylines:Get(i+1):Get(2), 2))
+            number extrusion = distance * layerHeight * nozzleWidth 
+            number filamentLength = extrusion / filamentArea
+            gcode:Add("G1 X" = cast(text, math:Round(polylines:Get(i+1):Get(0), 2)) + " Y" + cast(text, math:Round(polylines:Get(i+1):Get(1), 2)) + " Z" + cast(text, math:Round(polylines:Get(i+1):Get(2), 2)) + " E" + cast(text, math:Round(filamentLength * 10000 / 10000)) + "F1200")
+            i = i + 1
+        end
+        return gcode
+    end
+end 
