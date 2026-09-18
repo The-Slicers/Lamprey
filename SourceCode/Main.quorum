@@ -3,6 +3,7 @@ use Libraries.Game.Graphics.Models.Data.ModelData
 use Libraries.Game.Graphics.Models.Data.MeshData
 use Libraries.Containers.Array
 use Libraries.Containers.Number32BitArray
+use Libraries.Containers.Number64BitArray
 use Libraries.Containers.Integer32BitArray
 use Libraries.Compute.Vector4
 use Libraries.System.File
@@ -10,6 +11,8 @@ use Libraries.System.File
 use geometry.TestSlicer
 use geometry.Segment
 use geometry.PlaneMesh
+
+use tool.LineRender
 
 class Main
     action Main
@@ -32,7 +35,8 @@ class Main
     action SampleRun(ModelData data)
         PlaneMesh meshData
         meshData:splitCoords(data)
-
+    
+        Number64BitArray vertZ = meshData:GetVertexZ() 
         number low = vertZ:Get(0)
         number high = low
         i = 1
@@ -57,8 +61,6 @@ class Main
         TestSlicer slicer
         slicer:SetTriangles(meshData)
 
-        output "verts: " + vertX:GetSize() + "  corners: " + corners:GetSize()
-        Array<number> range = slicer:ComputeRange()
         Array<number> planes = slicer:BuildPlanes(0.0,height,0.1)
         output "planes: " + planes:GetSize()
 
@@ -67,6 +69,10 @@ class Main
         output "segments: " + segments:GetSize()
         output "max crossings: " + slicer:GetMaxCrossingsPerFace()
         output "odd faces: " + slicer:GetOddCrossingCount()
+
+//        LineRender lr
+//        lr:SetData(planes, segments)
+//        lr:LineRender()
     end
 
     // helper function to check if a resource exists for a model
