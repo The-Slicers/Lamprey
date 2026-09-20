@@ -4,6 +4,7 @@ use Libraries.Containers.Array
 use Libraries.Containers.Number32BitArray
 use Libraries.Containers.Number64BitArray
 use Libraries.Containers.Integer32BitArray
+use Libraries.Containers.HashTable
 
 class TestSlicer
     Number64BitArray vertX
@@ -17,11 +18,28 @@ class TestSlicer
     number firstPlaneZ = 0.0
     number planeDelta = 0.0
 
+    Array<integer> mergedIds
+
     action SetTriangles(PlaneMesh meshData)
         vertX = meshData:GetVertexX()
         vertY = meshData:GetVertexY()
         vertZ = meshData:GetVertexZ()
         faceCorners = meshData:GetCorners()
+
+        HashTable<text, integer> seen
+        mergedIds:Empty()
+        integer v = 0
+        repeat while v < vertX:GetSize()
+            text key = "" + vertX:Get(v) + "_" + vertY:Get(v) + "_" + vertZ:Get(v)
+            if seen:HasKey(key)
+                mergedIds:Add(seen:GetValue(key))
+            else
+                seen:Add(key, v)
+                mergedIds:Add(v)
+            end
+            v = v + 1
+        end
+        output "merged vertices: " + seen:GetSize() + " unique of " + vertX:GetSize()
     end
 
     action BuildPlanes(number zMin, number zMax, number delta) returns Array<number>
@@ -29,10 +47,10 @@ class TestSlicer
         firstPlaneZ = zMin + delta / 2.0
         planeDelta = delta
 
-        number z = firstPlaneZ
-        repeat while z < zMax
-            planes:Add(z)
-            z = z + delta
+        integer i = 0
+        repeat while firstPlaneZ + i * delta < zMax
+            planes:Add(firstPlaneZ + i * delta)
+            i = i + 1
         end
         return planes
     end
@@ -100,9 +118,9 @@ class TestSlicer
             end
 
             // optimization ! :D
-            integer idStart = CeilingToInt((zMin - firstPlaneZ) / planeDelta)
-            integer idEnd = FloorToInt((zMax - firstPlaneZ) / planeDelta)
-
+            integer idStart = CeilingToInt((zMin - firstPlaneZ) / planeDelta) - 1
+            integer idEnd = FloorToInt((zMax - firstPlaneZ) / planeDelta) + 1
+            
             if idStart < 0
                 idStart = 0
             end
@@ -179,7 +197,7 @@ class TestSlicer
                 integer high = vb
                 if vb < va
                     low = vb
-                    high = va
+                    high = va          
                 end
 
                 number t = (planeValue - vertZ:Get(low)) / (vertZ:Get(high) - vertZ:Get(low))
@@ -190,8 +208,18 @@ class TestSlicer
                 point:y = vertY:Get(low) + t * (vertY:Get(high) - vertY:Get(low))
 
                 // store the endpoint bounds that produced the crossing
-                point:edgeHigh = high
-                point:edgeLow = low
+                integer ca = mergedIds:Get(va) 
+                integer cb = mergedIds:Get(vb) 
+                point:edgeHigh = ca
+                point:edgeLow = cb
+                
+                if cb < ca
+                    point:edgeLow = cb
+                    point:edgeHigh = ca
+                else
+                    point:edgeLow = ca
+                    point:edgeHigh = cb
+                end
 
                 point:above = aBelow
                 result:Add(point)
@@ -207,6 +235,11 @@ class TestSlicer
 
         Crossing from = a
         Crossing to = b
+
+        if from:x = to:x and from:y = to:y
+            return now
+        end
+        
         if a:above
             from = b
             to = a

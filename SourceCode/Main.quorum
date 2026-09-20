@@ -70,9 +70,9 @@ class Main
         output "max crossings: " + slicer:GetMaxCrossingsPerFace()
         output "odd faces: " + slicer:GetOddCrossingCount()
 
-//        LineRender lr
-//        lr:SetData(planes, segments)
-//        lr:LineRender()
+        LineRender lr
+        lr:SetData(planes, segments)
+        lr:LineRender()
     end
 
     // helper function to check if a resource exists for a model

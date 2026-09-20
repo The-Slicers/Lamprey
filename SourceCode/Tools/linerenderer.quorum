@@ -1,0 +1,334 @@
+package tool
+
+use Libraries.Game.Game 
+use Libraries.Game.Graphics.Drawable
+use Libraries.Game.Graphics.Color
+use Libraries.Interface.Item2D
+use Libraries.Interface.Events.KeyboardListener
+use Libraries.Interface.Events.KeyboardEvent
+use Libraries.Containers.Array
+use Libraries.Containers.Number64BitArray
+use Libraries.Containers.HashTable
+use Libraries.Compute.Math
+
+use geometry.Segment
+
+class LineRender is Game, KeyboardListener
+    Array<Segment> segments
+    Array<number> planes
+    integer currPlane = 0
+    Array<Drawable> draws
+    
+    integer screenSize = 800
+    number margin = 40.0
+    number minX = 0.0
+    number minY = 0.0
+    number scale = 1.0
+    
+    HashTable<integer, boolean> plotted
+    integer pixelSize = 2 
+
+    Math math
+    action SetData(Array<number> p, Array<Segment> s)
+        planes = p
+        segments = s
+    end    
+
+    action LineRender   
+        SetScreenSize(screenSize,screenSize)
+        StartGame()
+    end
+
+    action CreateGame
+        ComputeBounds()
+        AddKeyboardListener(me)
+        currPlane = planes:GetSize() / 2
+
+        integer q = 0
+        repeat while q < planes:GetSize() 
+            DrawPlaneWinding(q)
+            q = q + 1
+        end
+        DrawPlaneWinding(currPlane)
+    end
+
+    action PressedKey(KeyboardEvent event)
+        if event:keyCode = event:UP and currPlane < planes:GetSize() - 1
+            currPlane = currPlane + 1
+            DrawPlaneWinding(currPlane)
+        elseif event:keyCode = event:DOWN and currPlane > 0
+            currPlane = currPlane - 1
+            DrawPlaneWinding(currPlane)
+        end
+    end
+
+    action ReleasedKey(KeyboardEvent event)
+    end
+    
+    private action Min2(number a, number b) returns number
+        if a < b
+            return a
+        end
+        return b
+    end 
+    
+    private action Max2(number a, number b) returns number
+        if a > b
+            return a
+        end
+        return b
+    end
+    
+    private action AbsInt(integer a) returns integer
+        if a < 0
+            return -a
+        end
+        return a
+    end
+
+    private action ComputeBounds
+        if segments:GetSize() = 0
+            return now
+        end
+        
+        Segment first = segments:Get(0) 
+        minX = first:x0 
+        minY = first:y0 
+        number maxX = minX
+        number maxY = minY
+        
+        integer i = 0
+        repeat while i < segments:GetSize() 
+            Segment s = segments:Get(i)
+            minX = Min2(minX, Min2(s:x0, s:x1))
+            minY = Min2(minY, Min2(s:y0, s:y1))
+            maxX = Max2(maxX, Max2(s:x0, s:x1))
+            maxY = Max2(maxY, Max2(s:y0, s:y1))
+            i = i + 1
+        end
+
+        number span = Max2(maxX-minX,maxY-minY)
+        if span <= 0
+            span = 1.0
+        end
+        
+        scale = (cast(number, screenSize) - 2.0 * margin) / span
+    end
+    
+    private action ToScreenX(number x) returns number
+        return margin + (x - minX) * scale
+    end
+    
+    private action ToScreenY(number y) returns number
+        return margin + (y - minY) * scale
+    end
+     
+    private action FloorToInt(number a) returns integer
+        integer res = cast(integer, a)
+        if a < 0 and cast(number, res) not= a
+            res = res -1
+        end
+        return res
+    end
+
+    private action RoundToInt(number a) returns integer
+        return cast(integer, a + 0.5)
+    end
+    
+    private action Plot(integer x, integer y, Color color)
+        integer key = y * screenSize + x
+        if plotted:HasKey(key)
+            return now
+        end
+        plotted:Add(key, true)  
+        
+        Drawable dot
+        dot:LoadFilledRectangle(pixelSize, pixelSize, color)
+        dot:SetPosition(x, y)
+        Add(dot)
+        draws:Add(dot) 
+    end
+
+    private action DrawBresenLine(integer x0, integer y0, integer x1,
+                                 integer y1, Color color)
+        integer dx = AbsInt(x1 - x0)
+        integer dy = -AbsInt(y1 - y0)
+        integer sx = 1
+        if x0 > x1
+            sx = -1
+        end
+        integer sy = 1
+        if y0 > y1
+            sy = -1
+        end
+        integer err = dx + dy
+        integer x = x0
+        integer y = y0
+
+        boolean done = false
+        repeat until done
+            Plot(x, y, color)
+            if x = x1 and y = y1
+                done = true
+            else
+                integer e2 = 2 * err
+                if e2 >= dy
+                    err = err + dy
+                    x = x + sx
+                end
+                if e2 <= dx
+                    err = err + dx
+                    y = y + sy
+                end
+            end
+        end
+    end
+    
+    private action EdgeKey(integer a, integer b) returns text
+        if a < b
+            return "" + a + "_" + b
+        end
+        return "" + b + "_" + a
+    end
+
+    private action PointKey(number x, number y) returns text
+        return "" + RoundToInt(x * 1000000.0) + "_" + RoundToInt(y * 1000000.0 + 0.5)
+    end
+
+    private action DrawPlaneWinding(integer p)
+        integer d = 0
+        repeat while d < draws:GetSize()
+            Remove(draws:Get(d))
+            d = d + 1
+        end
+        draws:Empty() 
+        plotted:Empty() 
+
+        HashTable<text, integer> byEntry
+        HashTable<text, integer> byExit
+        Array<integer> ids
+        integer dupEntry = 0
+        integer dupExit = 0
+        integer i = 0
+        repeat while i < segments:GetSize()
+            Segment s = segments:Get(i)
+            if s:planeIndex = p
+                ids:Add(i)
+                text ek = EdgeKey(s:aLow, s:aHigh)
+                text xk = EdgeKey(s:bLow, s:bHigh)
+                if byEntry:HasKey(ek)
+                    dupEntry = dupEntry + 1
+                end
+                if byExit:HasKey(xk)
+                    dupExit = dupExit + 1
+                end
+                byEntry:Add(ek, i)
+                byExit:Add(xk, i)
+            end
+            i = i + 1
+        end
+        output "segments " + ids:GetSize() + ", duplicate entry keys " + dupEntry + ", duplicate exit keys " + dupExit
+
+        // Heads first: segments whose entry edge is nobody's exit edge
+        Array<integer> order
+        integer heads = 0
+        integer h = 0
+        repeat while h < ids:GetSize()
+            Segment s = segments:Get(ids:Get(h))
+            if not byExit:HasKey(EdgeKey(s:aLow, s:aHigh))
+                order:Add(ids:Get(h))
+                heads = heads + 1
+            end
+            h = h + 1
+        end
+        h = 0
+        repeat while h < ids:GetSize()
+            order:Add(ids:Get(h))
+            h = h + 1
+        end
+        output "chain heads (true breaks): " + heads
+        
+        HashTable<integer, boolean> visited
+        integer loopCount = 0
+        integer flipped = 0
+        integer k = 0
+        repeat while k < order:GetSize()
+            integer start = order:Get(k)
+            if not visited:HasKey(start)
+                Array<integer> chain
+                integer cur = start
+                boolean closed = false
+                boolean stop = false
+                text reason = ""
+                repeat until stop
+                    visited:Add(cur, true)
+                    chain:Add(cur)
+                    Segment s = segments:Get(cur)
+                    text exitKey = EdgeKey(s:bLow, s:bHigh)
+                    if byEntry:HasKey(exitKey)
+                        integer nxt = byEntry:GetValue(exitKey)
+                        if nxt = start
+                            closed = true
+                            stop = true
+                        elseif visited:HasKey(nxt)
+                            reason = "ran into visited seg " + nxt
+                            stop = true
+                        else
+                            cur = nxt
+                        end
+                    else
+                        reason = "no segment enters edge " + exitKey
+                        stop = true
+                    end
+                end
+                // existing area / output / drawing code, and add:
+                if not closed
+                    output "   stopped: " + reason
+                end
+
+                // Shoelace: twice the signed area (positive = counterclockwise)
+                number area2 = 0.0
+                integer j = 0
+                repeat while j < chain:GetSize()
+                    Segment s = segments:Get(chain:Get(j))
+                    area2 = area2 + (s:x0 * s:y1 - s:x1 * s:y0)
+                    j = j + 1
+                end
+                text direction = "CCW"
+                if area2 < 0
+                    direction = "CW"
+                end
+                output "Loop " + loopCount + ": " + chain:GetSize() + " segments, closed=" + closed
+                    + ", " + direction + ", area=" + (area2 / 2.0)
+
+                // Draw the loop as a gradient: blue at the start -> red at the end
+                integer n = chain:GetSize()
+                j = 0
+                repeat while j < n
+                    Segment s = segments:Get(chain:Get(j))
+                    number t = cast(number, j) / cast(number, n)
+                    Color c
+                    c:SetColor(t, 0.2, 1.0 - t, 1.0)
+                    DrawBresenLine(RoundToInt(ToScreenX(s:x0)), RoundToInt(ToScreenY(s:y0)),
+                                  RoundToInt(ToScreenX(s:x1)), RoundToInt(ToScreenY(s:y1)), c)
+                    j = j + 1
+                end
+
+                // Green square at the loop's start point
+                Segment first = segments:Get(start)
+                Color green
+                green:SetColor(0.0, 0.8, 0.0, 1.0)
+                Drawable marker
+                marker:LoadFilledRectangle(8, 8, green)
+                marker:SetPosition(RoundToInt(ToScreenX(first:x0)) - 4, RoundToInt(ToScreenY(first:y0)) - 4)
+                Add(marker)
+                draws:Add(marker)
+
+                loopCount = loopCount + 1
+            end
+            k = k + 1
+        end
+        output "Plane " + p + ": " + loopCount + " loops, " + flipped + " flipped links"
+    end
+
+end
