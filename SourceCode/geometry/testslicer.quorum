@@ -6,6 +6,8 @@ use Libraries.Containers.Number64BitArray
 use Libraries.Containers.Integer32BitArray
 use Libraries.Containers.HashTable
 
+use Libraries.Compute.Math
+
 class TestSlicer
     Number64BitArray vertX
     Number64BitArray vertY
@@ -20,12 +22,77 @@ class TestSlicer
 
     Array<integer> mergedIds
 
+    Math math
+
     action SetTriangles(PlaneMesh meshData)
         vertX = meshData:GetVertexX()
         vertY = meshData:GetVertexY()
         vertZ = meshData:GetVertexZ()
         faceCorners = meshData:GetCorners()
-
+     
+        Number64BitArray srcX = meshData:GetVertexX()
+        Number64BitArray srcY = meshData:GetVertexY()      
+        Number64BitArray srcZ = meshData:GetVertexZ()
+        
+        // find the direction that currently points up for model
+        integer base = FindBaseDirection(srcX, srcY, srcZ)
+        output "Detected base direction: " + base
+        
+        // rotate the model so that Z points up
+        integer i = 0
+        repeat while i < srcX:GetSize() 
+            number x = srcX:Get(i)
+            number y = srcY:Get(i)
+            number z = srcZ:Get(i)
+        
+            if base = 4 // -z, z is already up
+                vertX:Set(i, x)
+                vertY:Set(i, y)
+                vertZ:Set(i, z)
+            elseif base = 5 // +z, z is upside down
+                vertX:Set(i, x)
+                vertY:Set(i, -y)
+                vertZ:Set(i, -z)
+            elseif base = 2 // -y, y is up
+                vertX:Set(i, x)
+                vertY:Set(i, -z)
+                vertZ:Set(i, y)
+            elseif base = 3 // +y, y is upside down
+                vertX:Set(i, x)
+                vertY:Set(i, z)
+                vertZ:Set(i, -y)
+            elseif base = 0 // -x, x is up
+                vertX:Set(i, -z)
+                vertY:Set(i, y)
+                vertZ:Set(i, x)
+            elseif base = 1 // +x, x is upside down
+                vertX:Set(i, z)
+                vertY:Set(i, y)
+                vertZ:Set(i, -x)
+            else
+                output "unable to find a suitable base :("
+                return now
+            end
+            i = i + 1
+        end
+        
+        // offset Z so the lowest is 0
+        number lowZ = vertZ:Get(0) 
+        i = 1
+        repeat while i < vertZ:GetSize()
+            if vertZ:Get(i) < lowZ
+                lowZ = vertZ:Get(i) 
+            end
+            i = i + 1
+        end
+    
+        i = 0
+        repeat while i < vertZ:GetSize() 
+            vertZ:Set(i, vertZ:Get(i) - lowZ)
+            i = i + 1
+        end
+        
+        // remove duplicate edges
         HashTable<text, integer> seen
         mergedIds:Empty()
         integer v = 0
@@ -42,6 +109,27 @@ class TestSlicer
         output "merged vertices: " + seen:GetSize() + " unique of " + vertX:GetSize()
     end
 
+    action GetSliceRange returns Array<number>
+        Array<number> range
+        
+        number low = vertZ:Get(0) 
+        number high = low
+        integer i = 1
+        repeat while i < vertZ:GetSize()
+            if vertZ:Get(i) < low
+                low = vertZ:Get(i) 
+            end 
+            if vertZ:Get(i) > high
+                high = vertZ:Get(i) 
+            end
+            i = i + 1
+        end
+        // returns the min and max Z
+        range:Add(low) 
+        range:Add(high)
+        return range
+    end
+        
     action BuildPlanes(number zMin, number zMax, number delta) returns Array<number>
         Array<number> planes
         firstPlaneZ = zMin + delta / 2.0
@@ -154,6 +242,120 @@ class TestSlicer
         // returns all line segment array
         return result
     end
+    
+    private action Max2(number a, number b) returns number
+        if a > b
+            return a
+        end
+        return b
+    end
+
+    private action Min2(number a, number b) returns number
+        if a < b
+            return a
+        end
+        return b
+    end 
+
+    private action FindBaseDirection(Number64BitArray x, Number64BitArray y, Number64BitArray z) returns integer
+        integer base = 4
+        
+        // making a bounding box
+        number minX = x:Get(0)
+        number maxX = minX
+        number minY = x:Get(0)
+        number maxY = minX
+        number minZ = x:Get(0)
+        number maxZ = minX
+        
+        integer i = 1
+        repeat while i < x:GetSize()
+            if x:Get(i) < minX
+                minX = x:Get(i)
+            end
+            if x:Get(i) > maxX
+                maxX = x:Get(i)
+            end
+            if y:Get(i) < minY
+                minY = y:Get(i)
+            end
+            if y:Get(i) > maxY
+                maxY = y:Get(i)
+            end
+            if z:Get(i) < minZ
+                minZ = z:Get(i)
+            end
+            if z:Get(i) > maxZ
+                maxZ = z:Get(i)
+            end
+            i = i + 1
+        end
+        
+        number eps = 0.002 * Max2(maxX - minX, Max2(maxY - minY, maxZ - minZ))
+        
+        Array<number> area
+        i = 0
+        repeat while i < 6
+            area:Add(0.0) 
+            i = i + 1
+        end        
+    
+        integer f = 0
+        repeat while f < GetFaceCount()
+            integer i0 = GetCorner(f, 0)
+            integer i1 = GetCorner(f, 1)
+            integer i2 = GetCorner(f, 2)
+            number ax = x:Get(i1) - x:Get(i0)
+            number ay = y:Get(i1) - y:Get(i0)
+            number az = z:Get(i1) - z:Get(i0)
+            number bx = x:Get(i2) - x:Get(i0)
+            number by = y:Get(i2) - y:Get(i0)
+            number bz = z:Get(i2) - z:Get(i0)
+
+            number nx = ay * bz - az * by
+            number ny = ax * bx - ax * bz
+            number nz = ax * by - ay * bx
+            number len = math:SquareRoot(nx * nx + ny * ny + nz * nz)
+
+            if len > 0
+                number faceArea = len / 2.0
+                nx = nx / len
+                ny = ny / len
+                nz = nz / len
+
+                if nx < -0.99 and Max2(x:Get(i0), Max2(x:Get(i1), x:Get(i2))) <= minX + eps
+                    area:Set(0, area:Get(0) + faceArea)
+                end
+                if nx > 0.99 and Min2(x:Get(i0), Min2(x:Get(i1), x:Get(i2))) <= maxX - eps
+                    area:Set(1, area:Get(1) + faceArea)
+                end
+                if ny < -0.99 and Max2(y:Get(i0), Max2(y:Get(i1), y:Get(i2))) <= minY + eps
+                    area:Set(2, area:Get(2) + faceArea)
+                end
+                if ny > 0.99 and Min2(y:Get(i0), Min2(y:Get(i1), y:Get(i2))) <= maxY - eps
+                    area:Set(3, area:Get(3) + faceArea)
+                end
+                if nz < -0.99 and Max2(z:Get(i0), Max2(z:Get(i1), z:Get(i2))) <= minZ + eps
+                    area:Set(4, area:Get(4) + faceArea)
+                end
+                if nz > 0.99 and Min2(z:Get(i0), Min2(z:Get(i1), z:Get(i2))) <= maxZ - eps
+                    area:Set(5, area:Get(5) + faceArea)
+                end
+            end
+            f = f + 1
+        end
+        
+        i = 0
+        repeat while i < 6
+            output "Base area toward direction " + i + ": " + area:Get(i) 
+            if area:Get(i) > area:Get(base) * 1.2
+                base = i
+            end
+            i = i + 1
+        end
+
+        return base
+    end
 
     private action CollectCrossings(integer f, integer degree, number planeValue,
                                Array<Crossing> result)
@@ -228,7 +430,7 @@ class TestSlicer
             j = j + 1
         end
     end
-
+    
     private action EmitPairs(Array<Crossing> points, integer planeIndex, Array<Segment> result)
         Crossing a = points:Get(0)
         Crossing b = points:Get(1)

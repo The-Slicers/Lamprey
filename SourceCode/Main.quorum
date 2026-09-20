@@ -60,8 +60,9 @@ class Main
 
         TestSlicer slicer
         slicer:SetTriangles(meshData)
-
-        Array<number> planes = slicer:BuildPlanes(0.0,height,0.1)
+        Array<number> planeRange = slicer:GetSliceRange()         
+        output "Plane Low: " + planeRange:Get(0) + " Plane High: " + planeRange:Get(1)
+        Array<number> planes = slicer:BuildPlanes(planeRange:Get(0),planeRange:Get(1),0.1)
         output "planes: " + planes:GetSize()
 
         Array<Segment> segments = slicer:Slice(planes)
