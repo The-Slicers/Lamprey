@@ -2,9 +2,18 @@ use Libraries.Containers.Array
 use Libraries.Compute.Math
 
 class gcode
-    action generate_gcode(Array<Array<number>> polylines, number layerHeight, number nozzleWidth, number filamentArea) returns Array<text>
+    action generate_gcode(Array<Array<number>> polylines, number layerHeight, number nozzleWidth, number filamentArea, number bedTemp, number nozzleTemp, number travelSpeed) returns Array<text>
         Iterator<integer> i = polylines:GetIterator()
         Array<text> gcode
+        gcode:Add("G90")
+        gcode:Add("M83")
+        gcode:Add("M140 S" + cast(text, bedTemp))
+        gcode:Add("M104 S" + cast(text, nozzleTemp))
+        gcode:Add("G28")
+        gcode:Add("M190 S" + cast(text, bedTemp))
+        gcode:Add("M109 S" + cast(text, nozzleTemp))
+        gcode:Add("G1 Z2.0 F" + cast(text, travelSpeed))
+        gcode:Add("G92 E0")
         integer i = 0
         repeat while i < polylines:GetSize() - 1
             number distance = math:SquareRoot(math:RaiseToPower(polylines:Get(i):Get(0) - polylines:Get(i+1):Get(0), 2) + math:RaiseToPower(polylines:Get(i):Get(1) - polylines:Get(i+1):Get(1), 2) + math:RaiseToPower(polylines:Get(i):Get(2) - polylines:Get(i+1):Get(2), 2))
@@ -13,6 +22,15 @@ class gcode
             gcode:Add("G1 X" = cast(text, math:Round(polylines:Get(i+1):Get(0), 2)) + " Y" + cast(text, math:Round(polylines:Get(i+1):Get(1), 2)) + " Z" + cast(text, math:Round(polylines:Get(i+1):Get(2), 2)) + " E" + cast(text, math:Round(filamentLength * 10000 / 10000)) + "F1200")
             i = i + 1
         end
+        gcode:Add("M104 S0")
+        gcode:Add("M140 S0")
+        gcode:Add("M107")
+        gcode:Add("G91")
+        gcode:Add("G1 E-2 F2700")
+        gcode:Add("G1 Z10 F3000")
+        gcode:Add("G90")
+        gcode:Add("G28 X0 Y0")
+        gcode:Add("M84")
         return gcode
     end
 end 
