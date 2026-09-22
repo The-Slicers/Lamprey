@@ -3,3 +3,6 @@ Run/
 
 ## ignore model types
 assets/*.obj
+
+
+*.png

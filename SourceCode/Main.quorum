@@ -36,28 +36,6 @@ class Main
         PlaneMesh meshData
         meshData:splitCoords(data)
     
-        Number64BitArray vertZ = meshData:GetVertexZ() 
-        number low = vertZ:Get(0)
-        number high = low
-        i = 1
-        repeat while i < vertZ:GetSize()
-            number v = vertZ:Get(i)
-            if v < low
-                low = v
-            end
-            if v > high
-                high = v
-            end
-            i = i + 1
-        end
-
-        i = 0
-        repeat while i < vertZ:GetSize()
-            vertZ:Set(i,vertZ:Get(i) - low)
-            i = i + 1
-        end
-        number height = high - low
-
         TestSlicer slicer
         slicer:SetTriangles(meshData)
         Array<number> planeRange = slicer:GetSliceRange()         
