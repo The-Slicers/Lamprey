@@ -1,0 +1,141 @@
+package geometry
+
+use Libraries.Containers.Number64BitArray
+use Libraries.Containers.Number32BitArray
+use Libraries.Containers.Integer32BitArray
+use Libraries.Containers.Stack
+
+class BaseArea
+
+    Number64BitArray Xcoords_default
+    Number64BitArray Ycoords_default
+
+    Number64BitArray Xcoords_sorted
+    Number64BitArray Ycoords_sorted
+
+    Stack<number> possible_coords
+    Number32BitArray Xcoords_convex
+    Number32BitArray Ycoords_convex
+
+    // using Andrew's Monotone Chain Algorithm to find convex hull
+    action ConvexHull (Number64BitArray Xcoords, Number64BitArray Ycoords) 
+
+        // error check
+        if Xcoords:GetSize() != Ycoords:GetSize()
+            output "ERROR: mismatched coordinates for convhull algo"
+            return
+        elseif Xcoords:GetSize() < 3
+            output "ERROR: not enough points for convhull algo"
+            return
+        end
+       
+        // store default coordinates
+        Xcoords_default = Xcoords
+        Ycoords_default = Ycoords
+
+        Integer32BitArray sorted_indices = SortCoords(Xcoords, Ycoords)
+
+        // rearrange coordinates according to sorted indices
+
+        // actual convex hull algo
+
+        // calculate padding for stability?
+
+    end
+
+    // lexicographically sorting the (x,y) coordinates
+    action SortCoords(Number64BitArray Xcoords, Number64BitArray Ycoords)  returns Integer32BitArray
+
+        integer size = Xcoords:GetSize()
+        Integer32BitArray indices
+        Integer32BitArray temp
+
+        indices:SetSize(size)
+        temp:SetSize(size)
+
+        integer i = 0
+        repeat while i < Xcoords:GetSize()
+            indices:Set(i, i)
+            temp:Set(i, 0)
+            i = i + 1
+        end
+
+        split(Xcoords, Ycoords, indices, temp, 0, size-1)
+        return indices
+    end
+
+    // resursively split left and right halves of array
+    action split (Number64BitArray Xcoords, Number64BitArray Ycoords, Integer32BitArray indices, Integer32BitArray temp, integer l_index, integer r_index)
+        // base case: subarray is minimal
+        if l_index >= r_index
+            return
+        end
+        
+        integer middle = (l_index + r_index) / 2
+        split(Xcoords, Ycoords, indices, temp, l_index, middle)
+        split(Xcoords, Ycoords, indices, temp, middle + 1, r_index)
+
+        join(Xcoords, Ycoords, indicesm temp, l_index, r_index, middle)
+    end
+
+    // merges sorted array halves
+    action join (Number64BitArray Xcoords, Number64BitArray Ycoords, Integer32BitArray indices, Integer32BitArray temp, integer l_index, integer r_index, integer middle)
+        integer left1 = l_index
+        integer left2 = middle + 1
+        integer current = l_index
+        
+        // compares subarrays, stores smaller coordinate in temp array
+        repeat while left1 <= middle and left2 <= r_index
+            integer sub1_index = indices:Get(left1)
+            integer sub2_index = indices:Get(left2)
+
+            boolean smaller = compare(XCoords, YCoords, sub1_index, sub2_index)
+
+            if smaller
+                temp:Set(current, sub1_index)
+                left1 = left1 + 1
+            else
+                temp:Set(current, sub2_index)
+                left2 = left2 + 1
+            end
+
+            current = current + 1
+        end
+
+        // right subarray finished, move remaining left subarray content into temp
+        repeat while left1 <= middle
+            temp:Set(current, indices:Get(left1))
+            left1 = left1 + 1
+            current = current + 1
+        end
+
+        // left subarray finished, move remaining right subarray content into temp
+        repeat while left2 <= r_index
+            temp:Set(current, indices:Get(left2))
+            left2 = left2 + 1
+            current = current + 1
+        end
+        
+        // copy over temp into main indices
+        current = l_index
+        repeat while current <= r_index
+            indices:Set(current, temp:Get(current))
+            current = current + 1
+        end
+    end
+
+    // true if coordinates in left subarray are smaller than right subarray's coordinates
+    action compare (Number64BitArray Xcoords, Number64BitArray Ycoords, integer index1, integer index2) returns boolean
+        number x1 = Xcoords:Get(index1)
+        number x2 = Xcoords:Get(index2)
+
+        // compare y coords for tiebreaker
+        if x1 = x2
+            number y1 = Ycoords:Get(index1)
+            number y2 = Ycoords:Get(index2)
+            return y1 <= y2
+        end
+
+        return x1 < x2
+    end
+end
