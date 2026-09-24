@@ -13,7 +13,6 @@ class BaseArea
     Number64BitArray Xcoords_sorted
     Number64BitArray Ycoords_sorted
 
-    Stack<number> possible_coords
     Number32BitArray Xcoords_convex
     Number32BitArray Ycoords_convex
 
@@ -21,10 +20,12 @@ class BaseArea
     action ConvexHull (Number64BitArray Xcoords, Number64BitArray Ycoords) 
 
         // error check
-        if Xcoords:GetSize() != Ycoords:GetSize()
+        integer size = Xcoords:GetSize()
+
+        if size != Ycoords:GetSize()
             output "ERROR: mismatched coordinates for convhull algo"
             return
-        elseif Xcoords:GetSize() < 3
+        elseif size < 3
             output "ERROR: not enough points for convhull algo"
             return
         end
@@ -33,17 +34,93 @@ class BaseArea
         Xcoords_default = Xcoords
         Ycoords_default = Ycoords
 
+        // rearrange coordinates according to sorted indices
+        Xcoords_sorted:SetSize(size)
+        Ycoords_sorted:SetSize(size)
         Integer32BitArray sorted_indices = SortCoords(Xcoords, Ycoords)
 
-        // rearrange coordinates according to sorted indices
+        integer i = 0
+        repeat while i < size
+            index = sorted_indices:Get(i)
+            Xcoords_sorted:Set(i, Xcoords:Get(index))
+            Ycoords_sorted:Set(i, Ycoords:Get(index))
+            i = i + 1
+        end
+    
+        // actual convex hull algo ----------------------------
+        Stack<integer> possible_indices
 
-        // actual convex hull algo
+        // lowerhull
+        integer i = 0
+        repeat while i < size
+            curr_index = sorted_indices:Get(i)
+
+            repeat while possible_indices:GetSize() >= 2
+                // get 2 points indices from stack
+                first = possible_indices:Peek()
+                possible_indices:Pop()
+                second = possible_indices:Peek()
+
+                // stop popping if 3 points make cw rotation + add popped value back
+                if clockwise(stack2nd, stack1st, curr_index)
+                    possible_indices:Push(first)
+                    break
+                end
+            end
+
+            possible_indices:Push(curr_index)
+            i = i + 1
+        end
+
+        // store stack values
+        repeat while possible_indices:GetSize() > 0
+            index = possible_indices:Pop()
+            x_val = Xcoords_sorted:Get(index)
+            y_val = Ycoords_sorted:Get(index)
+
+            Xcoords_convex:Add(x_val)
+            Ycoords_convex:Add(y_val)
+        end
+
+        // upperhull
+        i = size - 1
+        repeat while i >= 0
+            curr_index = sorted_indices:Get(i)
+
+            repeat while possible_indices:GetSize() >= 2
+                // get 2 points indices from stack
+                first = possible_indices:Peek()
+                possible_indices:Pop()
+                second = possible_indices:Peek()
+
+                // stop popping if 3 points make cw rotation + add popped value back
+                if clockwise(stack2nd, stack1st, curr_index)
+                    possible_indices:Push(first)
+                    break
+                end
+            end
+
+            possible_indices:Push(curr_index)
+            i = i - 1
+        end
+
+        // store stack values (except first)
+        repeat while possible_indices:GetSize() > 1
+            index = possible_indices:Pop()
+            x_val = Xcoords_sorted:Get(index)
+            y_val = Ycoords_sorted:Get(index)
+
+            Xcoords_convex:Set(current, x_val)
+            Ycoords_convex:Set(current, y_val)
+        end
+
+        // may need to add stack values in reverse order...
 
         // calculate padding for stability?
 
     end
 
-    // lexicographically sorting the (x,y) coordinates
+    // lexicographically sorting the (x,y) coordinates; mergesort
     action SortCoords(Number64BitArray Xcoords, Number64BitArray Ycoords)  returns Integer32BitArray
 
         integer size = Xcoords:GetSize()
@@ -89,7 +166,7 @@ class BaseArea
             integer sub1_index = indices:Get(left1)
             integer sub2_index = indices:Get(left2)
 
-            boolean smaller = compare(XCoords, YCoords, sub1_index, sub2_index)
+            boolean smaller = compare(Xcoords, Ycoords, sub1_index, sub2_index)
 
             if smaller
                 temp:Set(current, sub1_index)
@@ -137,5 +214,20 @@ class BaseArea
         end
 
         return x1 < x2
+    end
+
+    // calculate cross product to determine if 3 points create a clockwise rotation
+    action clockwise (integer index1, integer index2, integer index3) return boolean
+        number x1 = Xcoords_sorted:Get(index1)
+        number x2 = Xcoords_sorted:Get(index2)
+        number x3 = Xcoords_sorted:Get(index3)
+
+        number y1 = Ycoords_sorted:Get(index1)
+        number y2 = Ycoords_sorted:Get(index2)
+        number y3 = Ycoords_sorted:Get(index3)
+
+        // positive cross_product is counter-clockwise
+        number cross_product = (x2-x1)*(y3-y1)-(y2-y1)*(x3-x1)
+        return cross_product > 0
     end
 end
