@@ -1,0 +1,325 @@
+package geometry
+
+use Libraries.Containers.Array  
+use Libraries.Containers.HashTable
+
+class ContourGenerator
+    integer flippedCount = 0
+    number simplifyTolerance = 0.02
+    number minArea = 0.05
+
+    integer pointsBefore = 0
+    integer pointsAfter = 0
+    integer droppedCount = 0
+    
+    action SetSimplifyTolerance(number tolerance)
+        simplifyTolerance = tolerance
+    end
+    
+    action SetMinArea(number area)
+        minArea = area
+    end
+    
+    action GetPointsBefore returns integer
+        return pointsBefore
+    end
+    
+    action GetPointsAfter returns integer
+        return pointsAfter
+    end
+
+    action GetDroppedCount returns integer
+        return droppedCount
+    end
+
+    action GetFlippedCount returns integer
+        return flippedCount
+    end
+
+    action Build(Array<Segment> segments, integer planeCount, number maxGap) returns Array<Contour>
+        Array<Contour> result
+        flippedCount = 0
+
+        Array<integer> starts
+        integer p = 0
+        repeat while p <= planeCount
+            starts:Add(0) 
+            p = p + 1
+        end
+        
+        integer s = 0
+        repeat while s < segments:GetSize() 
+            Segment seg = segments:Get(s) 
+            starts:Set(seg:planeIndex + 1, starts:Get(seg:planeIndex + 1) + 1)
+            s = s + 1
+        end
+
+        p = 1
+        repeat while p <= planeCount
+            starts:Set(p, starts:Get(p) + starts:Get(p - 1))
+            p = p + 1
+        end
+
+        Array<integer> fill
+        Array<integer> order
+        p = 0 
+        repeat while p < planeCount
+            fill:Add(starts:Get(p))
+            p = p + 1
+        end
+        
+        s = 0
+        repeat while s < segments:GetSize()
+            order:Add(0) 
+            s = s + 1
+        end
+
+        s = 0
+        repeat while s < segments:GetSize() 
+            Segment seg2 = segments:Get(s) 
+            integer slot = fill:Get(seg2:planeIndex)
+            order:Set(slot, s)
+            fill:Set(seg2:planeIndex, slot + 1)
+            s = s + 1
+        end 
+        
+        p = 0
+        repeat while p < planeCount
+            if starts:Get(p + 1) > starts:Get(p) 
+                ChainPlane(segments, order, starts:Get(p), starts:Get(p + 1), p, maxGap, result)
+            end
+            p = p + 1
+        end
+
+        return result
+    end
+
+    private action ChainPlane(Array<Segment> segments, Array<integer> order, integer from, integer to,
+                              integer planeIndex, number maxGap, Array<Contour> result)
+        integer n = to - from
+        Array<boolean> used
+        Array<Contour> open
+        Array<Contour> planeResult
+        HashTable<text, integer> startMap
+        HashTable<text, integer> endMap
+    
+        integer i = 0
+        repeat while i < n
+            used:Add(false)
+            Segment seg = segments:Get(order:Get(from + i))
+            text startKey = StartKey(seg)
+            text endKey = EndKey(seg)
+            if not startMap:HasKey(startKey)
+                startMap:Add(startKey, i)    
+            end
+            if not endMap:HasKey(endKey)    
+                endMap:Add(endKey, i)
+            end
+            i = i + 1
+        end
+    
+        integer pass = 0
+        repeat while pass < 2
+            i = 0
+            repeat while i < n  
+                if not used:Get(i) 
+                    Segment seed = segments:Get(order:Get(from + i))
+                    if pass = 1 or not endMap:HasKey(StartKey(seed))
+                        Contour c = WalkChain(segments, order, from, i, startMap, used) 
+                        c:planeIndex = planeIndex
+                        if c:closed
+                            planeResult:Add(c) 
+                        else
+                            open:Add(c)
+                        end   
+                    end
+                end
+                i = i + 1
+            end
+            pass = pass + 1
+        end
+        
+        BridgeGaps(open, maxGap, planeResult)
+    
+        Array<Contour> cleaned
+        i = 0
+        repeat while i < planeResult:GetSize() 
+            Contour cand = planeResult:Get(i) 
+            pointsBefore = pointsBefore + cand:GetSize() 
+            if simplifyTolerance > 0
+                cand:Simplify(simplifyTolerance)
+            end
+            pointsAfter = pointsAfter + cand:GetSize() 
+            
+            boolean keep = true
+            if cand:closed and minArea > 0
+                number area = cand:SignedArea2() / 2.0
+                if area < 0
+                    area = -area
+                end
+                if area < minArea
+                    keep = false
+                    droppedCount = droppedCount + 1
+                end
+            end
+            if keep
+                cleaned:Add(cand) 
+            end
+            i = i + 1
+        end
+
+        OrientPlane(cleaned)
+        
+        i = 0
+        repeat while i < cleaned:GetSize() 
+            result:Add(cleaned:Get(i))
+            i = i + 1
+        end
+    end
+
+    private action OrientPlane(Array<Contour> contours)
+        integer m = contours:GetSize() 
+        integer i = 0
+        repeat while i < m
+            Contour a = contours:Get(i) 
+            if a:closed and a:GetSize() >= 3
+                number px = a:HeadX() 
+                number py = a:HeadY() 
+                integer depth = 0
+                integer j = 0
+                
+                repeat while j < m
+                    if j not= i
+                        Contour b = contours:Get(j) 
+                        if b:closed and b:ContainsPoint(px, py)
+                            depth = depth + 1
+                        end
+                    end
+                    j = j + 1
+                end
+                
+                a:depth = depth
+                a:isHole = false
+                if depth mod 2 = 1
+                    a:isHole = true
+                end
+                
+                number area2 = a:SignedArea2()
+                boolean isCCW = area2 > 0
+                if a:isHole = isCCW
+                    a:Reverse() 
+                    flippedCount = flippedCount + 1
+                end
+            end
+            i = i + 1
+        end
+    end
+
+    private action WalkChain(Array<Segment> segments, Array<integer> order, integer from, integer seedLocal,
+                             HashTable<text, integer> startMap, Array<boolean> used) returns Contour
+        Contour c
+        Segment first = segments:Get(order:Get(from + seedLocal))
+        text firstKey = StartKey(first)
+        c:AddPoint(first:x0, first:y0) 
+        
+        integer curr = seedLocal
+        repeat while true
+            used:Set(curr, true)
+            Segment seg = segments:Get(order:Get(from + curr))
+            c:AddPoint(seg:x1, seg:y1) 
+        
+            text endKey = EndKey(seg)
+            if endKey = firstKey
+                c:closed = true
+                c:DropClosingDuplicate()
+                return c
+            end
+    
+            if not startMap:HasKey(endKey) 
+                return c
+            end
+
+            integer nextIndex = startMap:GetValue(endKey) 
+            if used:Get(nextIndex) 
+                return c
+            end
+            
+            curr = nextIndex
+        end
+        
+        return c
+    end
+
+    private action BridgeGaps(Array<Contour> open, number maxGap, Array<Contour> result)
+        Array<boolean> alive
+        integer i = 0
+        repeat while i < open:GetSize() 
+            alive:Add(true) 
+            i = i + 1
+        end
+
+        number maxGap2 = maxGap * maxGap
+        repeat while true
+            integer bestI = -1
+            integer bestJ = -1
+            number best = maxGap2
+        
+            i = 0
+            repeat while i < open:GetSize()
+                if alive:Get(i) 
+                    Contour a = open:Get(i) 
+                    number tx = a:TailX() 
+                    number ty = a:TailY() 
+                    integer j = 0
+                    repeat while j < open:GetSize() 
+                        if alive:Get(j) 
+                            Contour b = open:Get(j) 
+                            if i not= j or a:GetSize() >= 3
+                                number dx = b:HeadX() - tx
+                                number dy = b:HeadY() - ty
+                                number d2 = dx * dx + dy * dy
+                                if d2 <= best
+                                    best = d2
+                                    bestI = i
+                                    bestJ = j
+                                end
+                            end
+                        end
+                        j = j + 1
+                    end
+                end
+                i = i + 1
+            end
+
+            if bestI = -1
+                i = 0
+                repeat while i < open:GetSize() 
+                    if alive:Get(i) 
+                        result:Add(open:Get(i))
+                    end
+                    i = i + 1
+                end
+                return now
+            end
+
+            Contour joined = open:Get(bestI) 
+            if bestI = bestJ
+                joined:closed = true
+                joined:DropClosingDuplicate()
+                result:Add(joined) 
+                alive:Set(bestI, false)
+            else
+                joined:AppendAll(open:Get(bestJ))
+                alive:Set(bestJ, false)
+            end
+        end
+    end
+
+    private action StartKey(Segment s) returns text
+        return "" + s:aLow + "_" + s:aHigh
+    end
+
+    private action EndKey(Segment s) returns text
+        return "" + s:bLow + "_" + s:bHigh 
+    end
+end

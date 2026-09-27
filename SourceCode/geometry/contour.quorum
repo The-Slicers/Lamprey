@@ -1,0 +1,252 @@
+package geometry
+
+use Libraries.Containers.Array 
+
+class Contour
+    public integer planeIndex = 0
+    public boolean closed = false
+    public Array<number> xs
+    public Array<number> ys
+    
+    public integer depth = 0
+    public boolean isHole = false
+
+    action GetSize returns integer
+        return xs:GetSize()
+    end
+    
+    action HeadX returns number
+        return xs:Get(0)
+    end
+    
+    action HeadY returns number
+        return ys:Get(0)
+    end
+    
+    action TailX returns number
+        return xs:Get(xs:GetSize() - 1)
+    end
+
+    action TailY returns number
+        return ys:Get(ys:GetSize() - 1)
+    end
+
+    action AddPoint(number x, number y)
+        integer n = xs:GetSize() 
+        if n > 0
+            if xs:Get(n - 1) = x and ys:Get(n - 1) = y
+                return now
+            end
+        end
+        xs:Add(x)   
+        ys:Add(y)
+    end
+
+    action AppendAll(Contour other)
+        integer i = 0
+        repeat while i < other:GetSize() 
+            AddPoint(other:xs:Get(i), other:ys:Get(i)) 
+            i = i + 1
+        end
+    end    
+
+    action DropClosingDuplicate
+        integer n = xs:GetSize() 
+        if n > 1
+            if xs:Get(n - 1) = xs:Get(0) and ys:Get(n - 1) = ys:Get(0)
+                xs:RemoveAt(n - 1)
+                ys:RemoveAt(n - 1)
+            end
+        end
+    end
+
+    action SignedArea2 returns number
+        number area2 = 0.0
+        integer n = xs:GetSize() 
+        integer i = 0 
+        repeat while i < n
+            integer j = i + 1
+            if j = n
+                j = 0
+            end
+            area2 = area2 + (xs:Get(i) * ys:Get(j) - xs:Get(j) * ys:Get(i)) 
+            i = i + 1
+        end
+        return area2
+    end
+
+    action Reverse
+        integer i = 0
+        integer j = xs:GetSize() - 1
+        repeat while i < j
+            number tx = xs:Get(i)
+            number ty = ys:Get(i) 
+            xs:Set(i, xs:Get(j)) 
+            xs:Set(j, tx)
+            ys:Set(i, ys:Get(j)) 
+            ys:Set(j, ty)
+            i = i + 1
+            j = j - 1
+        end
+    end
+
+    action ContainsPoint(number px, number py) returns boolean
+        boolean inside = false
+        integer n = xs:GetSize() 
+        if n < 3
+            return false
+        end
+        
+        integer i = 0
+        integer j = n - 1
+        repeat while i < n  
+            number xi = xs:Get(i) 
+            number xj = xs:Get(j) 
+            number yi = ys:Get(i) 
+            number yj = ys:Get(j) 
+            boolean iAbove = yi > py
+            boolean jAbove = yj > py
+            if iAbove not= jAbove
+                number xCross = xi + (py - yi) * (xj - xi) / (yj - yi)
+                if px < xCross
+                    inside = not inside
+                end
+            end
+            j = i
+            i = i + 1
+        end
+
+        return inside       
+    end
+    
+    // Douglas-Peucker simplification
+    action Simplify(number tolerance)
+        integer n = xs:GetSize() 
+        if n < 4 or tolerance <= 0
+            return now
+        end
+        number tol2 = tolerance * tolerance
+        
+        Array<boolean> keep
+        integer i = 0
+        repeat while i < n
+            keep:Add(false) 
+            i = i + 1
+        end
+        
+        if closed
+            integer far = 0
+            number farD2 = -1.0
+            i = 1 
+            repeat while i < n
+                number dx = xs:Get(i) - xs:Get(0) 
+                number dy = ys:Get(i) - ys:Get(0) 
+                number d2 = dx * dx + dy * dy
+                if d2 > farD2
+                    farD2 = d2
+                    far = i
+                end
+                i = i + 1
+            end
+            keep:Set(0, true)
+            keep:Set(far, true)
+            SimplifyRange(0, far, tol2, keep)
+            SimplifyRange(far, n, tol2, keep)
+        else
+            keep:Set(0, true)
+            keep:Set(n - 1, true)
+            SimplifyRange(0, n - 1, tol2, keep)
+        end
+
+        integer kept = 0
+        i = 0
+        repeat while i < n
+            if keep:Get(i) 
+                kept = kept + 1
+            end
+            i = i + 1
+        end
+
+        if closed and kept < 3
+            return now
+        end
+        
+        Array<number> newXs
+        Array<number> newYs
+        i = 0
+        repeat while i < n
+            if keep:Get(i) 
+                newXs:Add(xs:Get(i))
+                newYs:Add(ys:Get(i))
+            end
+            i = i + 1
+        end
+        xs = newXs
+        ys = newYs
+    end
+    
+    private action SimplifyRange(integer first, integer last, number tol2, Array<boolean> keep)
+        integer n = xs:GetSize() 
+        Array<integer> stackA   
+        Array<integer> stackB
+        stackA:Add(first)     
+        stackB:Add(last) 
+        
+        repeat while stackA:GetSize() > 0
+            integer top = stackA:GetSize() - 1
+            integer a = stackA:Get(top) 
+            integer b = stackB:Get(top) 
+            stackA:RemoveAt(top) 
+            stackB:RemoveAt(top) 
+    
+            if b - a >= 2
+                integer bi = b mod n
+                number ax = xs:Get(a) 
+                number ay = ys:Get(a) 
+                number bx = xs:Get(bi) 
+                number by = ys:Get(bi) 
+
+                integer worst = -1
+                number worstD2 = tol2
+                integer i = a + 1
+                repeat while i < b
+                    number d2 = SegmentDistance2(xs:Get(i), ys:Get(i), ax, ay, bx, by)
+                    if d2 > worstD2
+                        worstD2 = d2
+                        worst = i
+                    end
+                    i = i + 1
+                end
+
+                if worst not= -1
+                    keep:Set(worst, true)
+                    stackA:Add(a) 
+                    stackB:Add(worst) 
+                    stackA:Add(worst) 
+                    stackB:Add(b) 
+                end
+            end
+        end
+    end
+
+    private action SegmentDistance2(number px, number py, number ax, number ay, number bx, number by) returns number
+        number vx = bx - ax
+        number vy = by - ay
+        number wx = px - ax
+        number wy = py - ay
+        number len2 = vx * vx + vy * vy
+        number t = 0.0
+        if len2 > 0.0
+            t = (wx * vx + wy * wy) / len2
+            if t < 0
+                t = 0.0
+            elseif t > 1
+                t = 1.0
+            end
+        end
+        number dx = wx - t * vx
+        number dy = wy - t * vy
+        return dx * dx + dy * dy
+    end
+
+end

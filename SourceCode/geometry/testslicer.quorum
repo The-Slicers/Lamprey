@@ -22,7 +22,15 @@ class TestSlicer
 
     Array<integer> mergedIds
 
+    number unitScale = 1.0
+    number forcedUnitScale = 0.0
+    number bedSize = 220.0
+
     Math math
+
+    action SetUnitScale(number scale)
+        forcedUnitScale = scale
+    end
 
     action SetTriangles(PlaneMesh meshData)
         vertX = meshData:GetVertexX()
@@ -37,13 +45,14 @@ class TestSlicer
         // find the direction that currently points up for model
         integer base = FindBaseDirection(srcX, srcY, srcZ)
         output "Detected base direction: " + base
+        unitScale = DetectUnitScale(srcX, srcY, srcZ)
         
         // rotate the model so that Z points up
         integer i = 0
         repeat while i < srcX:GetSize() 
-            number x = srcX:Get(i)
-            number y = srcY:Get(i)
-            number z = srcZ:Get(i)
+            number x = srcX:Get(i) * unitScale
+            number y = srcY:Get(i) * unitScale
+            number z = srcZ:Get(i) * unitScale
         
             if base = 4 // -z, z is already up
                 vertX:Set(i, x)
@@ -263,9 +272,9 @@ class TestSlicer
         // making a bounding box
         number minX = x:Get(0)
         number maxX = minX
-        number minY = x:Get(0)
+        number minY = y:Get(0)
         number maxY = minX
-        number minZ = x:Get(0)
+        number minZ = z:Get(0)
         number maxZ = minX
         
         integer i = 1
@@ -313,7 +322,7 @@ class TestSlicer
             number bz = z:Get(i2) - z:Get(i0)
 
             number nx = ay * bz - az * by
-            number ny = ax * bx - ax * bz
+            number ny = az * bx - ax * bz
             number nz = ax * by - ay * bx
             number len = math:SquareRoot(nx * nx + ny * ny + nz * nz)
 
@@ -326,19 +335,19 @@ class TestSlicer
                 if nx < -0.99 and Max2(x:Get(i0), Max2(x:Get(i1), x:Get(i2))) <= minX + eps
                     area:Set(0, area:Get(0) + faceArea)
                 end
-                if nx > 0.99 and Min2(x:Get(i0), Min2(x:Get(i1), x:Get(i2))) <= maxX - eps
+                if nx > 0.99 and Min2(x:Get(i0), Min2(x:Get(i1), x:Get(i2))) >= maxX - eps
                     area:Set(1, area:Get(1) + faceArea)
                 end
                 if ny < -0.99 and Max2(y:Get(i0), Max2(y:Get(i1), y:Get(i2))) <= minY + eps
                     area:Set(2, area:Get(2) + faceArea)
                 end
-                if ny > 0.99 and Min2(y:Get(i0), Min2(y:Get(i1), y:Get(i2))) <= maxY - eps
+                if ny > 0.99 and Min2(y:Get(i0), Min2(y:Get(i1), y:Get(i2))) >= maxY - eps
                     area:Set(3, area:Get(3) + faceArea)
                 end
                 if nz < -0.99 and Max2(z:Get(i0), Max2(z:Get(i1), z:Get(i2))) <= minZ + eps
                     area:Set(4, area:Get(4) + faceArea)
                 end
-                if nz > 0.99 and Min2(z:Get(i0), Min2(z:Get(i1), z:Get(i2))) <= maxZ - eps
+                if nz > 0.99 and Min2(z:Get(i0), Min2(z:Get(i1), z:Get(i2))) >= maxZ - eps
                     area:Set(5, area:Get(5) + faceArea)
                 end
             end
@@ -357,6 +366,44 @@ class TestSlicer
         return base
     end
 
+    private action DetectUnitScale(Number64BitArray x, Number64BitArray y, Number64BitArray z) returns number
+        if forcedUnitScale > 0
+            return forcedUnitScale
+        end
+            
+        number minX = x:Get(0)
+        number maxX = minX
+        number minY = y:Get(0)
+        number maxY = minY
+        number minZ = z:Get(0)
+        number maxZ = minZ
+        integer i = 1
+        repeat while i < x:GetSize()
+            minX = Min2(minX, x:Get(i))
+            maxX = Max2(maxX, x:Get(i))
+            minY = Min2(minY, y:Get(i))
+            maxY = Max2(maxY, y:Get(i))
+            minZ = Min2(minZ, z:Get(i))
+            maxZ = Max2(maxZ, z:Get(i))
+            i = i + 1
+        end
+        number extent = Max2(maxX - minX, Max2(maxY - minY, maxZ - minZ))
+        output "Model extent in file units: " + extent
+    
+        if extent <= 0
+            return 1.0
+        elseif extent < 1.0
+            output "Model is under 1 unit across, assuming meters (x1000)"
+            return 1000.0
+        elseif extent < 10.0
+            output "Warning: model is only " + extent + " mm across. If it was exported in inches, call SetUnitScale(25.4)"
+        elseif extent > bedSize
+            output "Warning: model is " + extent + " mm, larger than the bed. Check the export units"
+        end
+
+        return 1.0
+    end
+
     private action CollectCrossings(integer f, integer degree, number planeValue,
                                Array<Crossing> result)
         // a degree is a point in our polygons
@@ -371,8 +418,8 @@ class TestSlicer
                 k = 0
             end
             // get the two edge indices
-            integer va = GetCorner(f,j)
-            integer vb = GetCorner(f,k)
+            integer va = mergedIds:Get(GetCorner(f,j))
+            integer vb = mergedIds:Get(GetCorner(f,k))
             // get the two edge z values
             number za = vertZ:Get(va)
             number zb = vertZ:Get(vb)
@@ -437,10 +484,6 @@ class TestSlicer
 
         Crossing from = a
         Crossing to = b
-
-        if from:x = to:x and from:y = to:y
-            return now
-        end
         
         if a:above
             from = b

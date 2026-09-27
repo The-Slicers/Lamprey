@@ -11,10 +11,10 @@ use Libraries.Containers.Number64BitArray
 use Libraries.Containers.HashTable
 use Libraries.Compute.Math
 
-use geometry.Segment
+use geometry.Contour
 
 class LineRender is Game, KeyboardListener
-    Array<Segment> segments
+    Array<Contour> contours
     Array<number> planes
     integer currPlane = 0
     Array<Drawable> draws
@@ -29,9 +29,9 @@ class LineRender is Game, KeyboardListener
     integer pixelSize = 2 
 
     Math math
-    action SetData(Array<number> p, Array<Segment> s)
+    action SetData(Array<number> p, Array<Contour> c)
         planes = p
-        segments = s
+        contours = c
     end    
 
     action LineRender   
@@ -43,22 +43,16 @@ class LineRender is Game, KeyboardListener
         ComputeBounds()
         AddKeyboardListener(me)
         currPlane = planes:GetSize() / 2
-
-        integer q = 0
-        repeat while q < planes:GetSize() 
-            DrawPlaneWinding(q)
-            q = q + 1
-        end
-        DrawPlaneWinding(currPlane)
+        DrawPlane(currPlane)
     end
 
     action PressedKey(KeyboardEvent event)
         if event:keyCode = event:UP and currPlane < planes:GetSize() - 1
             currPlane = currPlane + 1
-            DrawPlaneWinding(currPlane)
+            DrawPlane(currPlane)
         elseif event:keyCode = event:DOWN and currPlane > 0
             currPlane = currPlane - 1
-            DrawPlaneWinding(currPlane)
+            DrawPlane(currPlane)
         end
     end
 
@@ -87,25 +81,38 @@ class LineRender is Game, KeyboardListener
     end
 
     private action ComputeBounds
-        if segments:GetSize() = 0
+        boolean any = false
+    
+        number maxX = 0.0
+        number maxY = 0.0
+        
+        integer c = 0
+        repeat while c < contours:GetSize() 
+            Contour con = contours:Get(c)
+            integer i = 0
+            repeat while i < con:GetSize() 
+                number x = con:xs:Get(i)
+                number y = con:ys:Get(i)
+                if not any
+                    minX = x
+                    minY = y
+                    maxX = x
+                    maxY = y
+                    any = true
+                else
+                    minX = Min2(minX, x)
+                    minY = Min2(minY, y)
+                    maxX = Max2(maxX, x)
+                    maxY = Max2(maxY, y)
+                end
+                i = i + 1
+            end
+            c = c + 1
+        end
+        
+        if not any
             return now
-        end
-        
-        Segment first = segments:Get(0) 
-        minX = first:x0 
-        minY = first:y0 
-        number maxX = minX
-        number maxY = minY
-        
-        integer i = 0
-        repeat while i < segments:GetSize() 
-            Segment s = segments:Get(i)
-            minX = Min2(minX, Min2(s:x0, s:x1))
-            minY = Min2(minY, Min2(s:y0, s:y1))
-            maxX = Max2(maxX, Max2(s:x0, s:x1))
-            maxY = Max2(maxY, Max2(s:y0, s:y1))
-            i = i + 1
-        end
+        end        
 
         number span = Max2(maxX-minX,maxY-minY)
         if span <= 0
@@ -123,14 +130,6 @@ class LineRender is Game, KeyboardListener
         return margin + (y - minY) * scale
     end
      
-    private action FloorToInt(number a) returns integer
-        integer res = cast(integer, a)
-        if a < 0 and cast(number, res) not= a
-            res = res -1
-        end
-        return res
-    end
-
     private action RoundToInt(number a) returns integer
         return cast(integer, a + 0.5)
     end
@@ -184,151 +183,85 @@ class LineRender is Game, KeyboardListener
         end
     end
     
-    private action EdgeKey(integer a, integer b) returns text
-        if a < b
-            return "" + a + "_" + b
-        end
-        return "" + b + "_" + a
+    private action DrawEdge(number x0, number y0, number x1, number y1, Color color)
+        DrawBresenLine(RoundToInt(ToScreenX(x0)), RoundToInt(ToScreenY(y0)),
+                       RoundToInt(ToScreenX(x1)), RoundToInt(ToScreenY(y1)), color)
     end
 
-    private action PointKey(number x, number y) returns text
-        return "" + RoundToInt(x * 1000000.0) + "_" + RoundToInt(y * 1000000.0 + 0.5)
+    private action DrawMarker(number x, number y, Color color)
+        Drawable marker
+        marker:LoadFilledRectangle(8, 8, color)
+        marker:SetPosition(RoundToInt(ToScreenX(x)) - 4, RoundToInt(ToScreenY(y)) - 4)
+        Add(marker)
+        draws:Add(marker)
     end
 
-    private action DrawPlaneWinding(integer p)
+    private action ClearDrawing
         integer d = 0
-        repeat while d < draws:GetSize()
+        repeat while d < draws:GetSize() 
             Remove(draws:Get(d))
             d = d + 1
         end
         draws:Empty() 
-        plotted:Empty() 
-
-        HashTable<text, integer> byEntry
-        HashTable<text, integer> byExit
-        Array<integer> ids
-        integer dupEntry = 0
-        integer dupExit = 0
-        integer i = 0
-        repeat while i < segments:GetSize()
-            Segment s = segments:Get(i)
-            if s:planeIndex = p
-                ids:Add(i)
-                text ek = EdgeKey(s:aLow, s:aHigh)
-                text xk = EdgeKey(s:bLow, s:bHigh)
-                if byEntry:HasKey(ek)
-                    dupEntry = dupEntry + 1
-                end
-                if byExit:HasKey(xk)
-                    dupExit = dupExit + 1
-                end
-                byEntry:Add(ek, i)
-                byExit:Add(xk, i)
-            end
-            i = i + 1
-        end
-        output "segments " + ids:GetSize() + ", duplicate entry keys " + dupEntry + ", duplicate exit keys " + dupExit
-
-        // Heads first: segments whose entry edge is nobody's exit edge
-        Array<integer> order
-        integer heads = 0
-        integer h = 0
-        repeat while h < ids:GetSize()
-            Segment s = segments:Get(ids:Get(h))
-            if not byExit:HasKey(EdgeKey(s:aLow, s:aHigh))
-                order:Add(ids:Get(h))
-                heads = heads + 1
-            end
-            h = h + 1
-        end
-        h = 0
-        repeat while h < ids:GetSize()
-            order:Add(ids:Get(h))
-            h = h + 1
-        end
-        output "chain heads (true breaks): " + heads
+        plotted:Empty()
+    end
+    
+    private action DrawPlane(integer p)
+        ClearDrawing() 
         
-        HashTable<integer, boolean> visited
         integer loopCount = 0
-        integer flipped = 0
-        integer k = 0
-        repeat while k < order:GetSize()
-            integer start = order:Get(k)
-            if not visited:HasKey(start)
-                Array<integer> chain
-                integer cur = start
-                boolean closed = false
-                boolean stop = false
-                text reason = ""
-                repeat until stop
-                    visited:Add(cur, true)
-                    chain:Add(cur)
-                    Segment s = segments:Get(cur)
-                    text exitKey = EdgeKey(s:bLow, s:bHigh)
-                    if byEntry:HasKey(exitKey)
-                        integer nxt = byEntry:GetValue(exitKey)
-                        if nxt = start
-                            closed = true
-                            stop = true
-                        elseif visited:HasKey(nxt)
-                            reason = "ran into visited seg " + nxt
-                            stop = true
-                        else
-                            cur = nxt
-                        end
-                    else
-                        reason = "no segment enters edge " + exitKey
-                        stop = true
-                    end
-                end
-                // existing area / output / drawing code, and add:
-                if not closed
-                    output "   stopped: " + reason
-                end
-
-                // Shoelace: twice the signed area (positive = counterclockwise)
-                number area2 = 0.0
-                integer j = 0
-                repeat while j < chain:GetSize()
-                    Segment s = segments:Get(chain:Get(j))
-                    area2 = area2 + (s:x0 * s:y1 - s:x1 * s:y0)
-                    j = j + 1
-                end
+        integer openCount = 0
+        
+        integer c = 0
+        repeat while c < contours:GetSize() 
+            Contour con = contours:Get(c)
+            integer n = con:GetSize() 
+            if con:planeIndex = p and n >= 2
+                number area2 = con:SignedArea2()
                 text direction = "CCW"
                 if area2 < 0
                     direction = "CW"
                 end
-                output "Loop " + loopCount + ": " + chain:GetSize() + " segments, closed=" + closed
-                    + ", " + direction + ", area=" + (area2 / 2.0)
-
-                // Draw the loop as a gradient: blue at the start -> red at the end
-                integer n = chain:GetSize()
-                j = 0
-                repeat while j < n
-                    Segment s = segments:Get(chain:Get(j))
-                    number t = cast(number, j) / cast(number, n)
-                    Color c
-                    c:SetColor(t, 0.2, 1.0 - t, 1.0)
-                    DrawBresenLine(RoundToInt(ToScreenX(s:x0)), RoundToInt(ToScreenY(s:y0)),
-                                  RoundToInt(ToScreenX(s:x1)), RoundToInt(ToScreenY(s:y1)), c)
-                    j = j + 1
+                text kind = "outer"
+                if con:isHole   
+                    kind = "hole"    
+                end
+                output "Contour " + loopCount + ": " + n + " points, closed = "
+                    + con:closed + ", " + kind + " (depth " + con:depth + "), " + direction + ", area = " + (area2 / 2.0)
+                
+                integer edgeCount = n - 1
+                if con:closed
+                    edgeCount = n
+                end
+                
+                i = 0
+                repeat while i < edgeCount
+                    integer j = i + 1
+                    if j = n
+                        j = 0
+                    end
+                    number t = cast(number, j) / cast(number, edgeCount)
+                    Color col
+                    col:SetColor(t, 0.2, 1.0 - t, 1.0)
+                    DrawEdge(con:xs:Get(i), con:ys:Get(i), con:xs:Get(j), con:ys:Get(j), col)
+                    i = i + 1
                 end
 
-                // Green square at the loop's start point
-                Segment first = segments:Get(start)
                 Color green
-                green:SetColor(0.0, 0.8, 0.0, 1.0)
-                Drawable marker
-                marker:LoadFilledRectangle(8, 8, green)
-                marker:SetPosition(RoundToInt(ToScreenX(first:x0)) - 4, RoundToInt(ToScreenY(first:y0)) - 4)
-                Add(marker)
-                draws:Add(marker)
+                green:SetColor(0.0,0.8,0.0,1.0)
+                DrawMarker(con:HeadX(), con:HeadY(), green)
+
+                if not con:closed
+                    Color yellow
+                    yellow:SetColor(1.0,0.85,0.0,1.0)
+                    DrawMarker(con:TailX(), con:TailY(), yellow)
+                    openCount = openCount + 1
+                end
 
                 loopCount = loopCount + 1
             end
-            k = k + 1
+            c = c + 1
         end
-        output "Plane " + p + ": " + loopCount + " loops, " + flipped + " flipped links"
+        output "Plane " + p + ": " + loopCount + " contours, " + openCount + " still open"
     end
-
 end

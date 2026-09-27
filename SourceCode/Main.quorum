@@ -11,6 +11,8 @@ use Libraries.System.File
 use geometry.TestSlicer
 use geometry.Segment
 use geometry.PlaneMesh
+use geometry.Contour
+use geometry.ContourGenerator
 
 use tool.LineRender
 
@@ -36,11 +38,17 @@ class Main
         PlaneMesh meshData
         meshData:splitCoords(data)
     
+        number nozzle = 0.4
+        number layerHeight = 0.5 * nozzle
+        number maxGap = 0.5 * nozzle
+        number cutAmount = 0.4
+
         TestSlicer slicer
+        slicer:SetUnitScale(25.4)
         slicer:SetTriangles(meshData)
         Array<number> planeRange = slicer:GetSliceRange()         
         output "Plane Low: " + planeRange:Get(0) + " Plane High: " + planeRange:Get(1)
-        Array<number> planes = slicer:BuildPlanes(planeRange:Get(0),planeRange:Get(1),0.1)
+        Array<number> planes = slicer:BuildPlanes(planeRange:Get(0) + cutAmount, planeRange:Get(1), layerHeight)
         output "planes: " + planes:GetSize()
 
         Array<Segment> segments = slicer:Slice(planes)
@@ -49,8 +57,17 @@ class Main
         output "max crossings: " + slicer:GetMaxCrossingsPerFace()
         output "odd faces: " + slicer:GetOddCrossingCount()
 
+        ContourGenerator conGen
+        conGen:SetSimplifyTolerance(0.02)
+        conGen:SetMinArea(0.05) 
+        Array<Contour> contours = conGen:Build(segments, planes:GetSize(), maxGap)
+           
+        output "flipped count: " + conGen:GetFlippedCount()
+        output "specks dropped: " + conGen:GetDroppedCount()
+        output "points: " + conGen:GetPointsBefore() + " -> " + conGen:GetPointsAfter()
+        
         LineRender lr
-        lr:SetData(planes, segments)
+        lr:SetData(planes, contours)
         lr:LineRender()
     end
 
