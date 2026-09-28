@@ -1,0 +1,405 @@
+package geometry
+
+use Libraries.Containers.Array
+
+class OverhangGrid
+    number cellSize = 0.1
+    number originX = 0.0
+    number originY = 0.0
+    integer cols = 0
+    integer rows = 0
+        
+    Array<integer> cells
+    Array<integer> planeStart
+
+    action SetCellSize(number size)
+        if size > 0
+            cellSize = size
+        end
+    end
+
+    action GetCellSize returns number
+        return cellSize
+    end
+    
+    action GetOriginX returns number
+        return originX
+    end
+    
+    action GetOriginY returns number
+        return originY
+    end
+    
+    action GetColumns returns integer
+        return cols
+    end
+    
+    action GetRows returns integer
+        return rows
+    end
+
+    action GetStart(integer plane) returns integer
+        return planeStart:Get(plane)
+    end
+    
+    action GetEnd(integer plane) returns integer
+        return planeStart:Get(plane + 1)
+    end
+
+    action GetCell(integer i) returns integer
+        return cells:Get(i)
+    end
+
+    action GetOverhangArea(integer plane) returns number
+        return cast(number, GetEnd(plane) - GetStart(plane)) * cellSize * cellSize
+    end
+
+    action Build(Array<Contour> contours, integer planeCount, number allowance)
+        cells:Empty()
+        planeStart:Empty()
+        planeStart:Add(0)
+        
+        boolean any = false
+        number minX = 0.0
+        number minY = 0.0
+        number maxX = 0.0
+        number maxY = 0.0
+        integer c = 0
+        repeat while c < contours:GetSize()
+            Contour con = contours:Get(c)
+            if Usable(con, planeCount)
+                integer i = 0
+                repeat while i < con:GetSize()
+                    number x = con:xs:Get(i)
+                    number y = con:ys:Get(i)
+                    if not any
+                        minX = x
+                        minY = y
+                        maxX = x
+                        maxY = y
+                        any = true
+                    else
+                        if x < minX
+                            minX = x
+                        end
+                        if x > maxX
+                            maxX = x
+                        end
+                        if y < minY
+                            minY = y
+                        end
+                        if y > maxY
+                            maxY = y
+                        end
+                    end
+                    i = i + 1
+                end
+            end
+            c = c + 1
+        end
+        
+        if not any
+            integer e = 0
+            repeat while e < planeCount
+                planeStart:Add(0)
+                e = e + 1
+            end
+            return now
+        end
+    
+        SizeGrid(minX, minY, maxX, maxY, allowance)
+        repeat while cols * rows > 4000000
+            cellSize = cellSize * 2.0
+            SizeGrid(minX, minY, maxX, maxY, allowance)
+            output "Overhang grid too large, cell size raised to "
+                + cellSize + " mm"
+        end
+        if allowance < 2.0 * cellSize
+            output "Warning: overhang allowance " + allowance + " mm is under two cells("
+                + cellSize + " mm each). Expect false overhangs on vertical walls"
+        end
+        
+        Array<integer> starts
+        integer p = 0
+        repeat while p <= planeCount
+            starts:Add(0)
+            p = p + 1
+        end
+        
+        c = 0
+        repeat while c < contours:GetSize()
+            Contour con2 = contours:Get(c)
+            if Usable(con2, planeCount)
+                starts:Set(con2:planeIndex + 1, starts:Get(con2:planeIndex + 1) + 1)
+            end
+            c = c + 1
+        end
+
+        p = 1
+        repeat while p <= planeCount
+            starts:Set(p, starts:Get(p) + starts:Get(p - 1))
+            p = p + 1
+        end
+
+        Array<integer> fill
+        Array<integer> order
+        p = 0
+        repeat while p < planeCount
+            fill:Add(starts:Get(p))
+            p = p + 1
+        end
+        c = 0
+        repeat while c < starts:Get(planeCount)
+            order:Add(0)
+            c = c + 1
+        end
+        c = 0
+        repeat while c < contours:GetSize()
+            Contour con3 = contours:Get(c)
+            if Usable(con3, planeCount)
+                integer slot = fill:Get(con3:planeIndex)
+                order:Set(slot, c)
+                fill:Set(con3:planeIndex, slot + 1)
+            end
+            c = c + 1
+        end
+
+        integer total = cols * rows
+        Array<integer> stampA
+        Array<integer> stampB
+        integer t = 0
+        repeat while t < total
+            stampA:Add(0)
+            stampB:Add(0)
+            t = t + 1
+        end
+
+        Array<integer> offX
+        Array<integer> offY
+        integer rc = FloorToInt(allowance / cellSize)
+        number allow2 = allowance * allowance
+        integer dy = -rc
+        repeat while dy <= rc
+            integer dx = -rc
+            repeat while dx <= rc
+                if dx not= 0 or dy not= 0
+                    number d2 = cast(number, dx * dx + dy * dy) * cellSize * cellSize
+                    if d2 <= allow2
+                        offX:Add(dx)
+                        offY:Add(dy)
+                    end
+                end
+                dx = dx + 1
+            end
+            dy = dy + 1
+        end
+
+        Array<integer> spanRow
+        Array<integer> spanA
+        Array<integer> spanB
+        p = 0
+        repeat while p < planeCount
+            Array<integer> curr = stampA
+            Array<integer> prev = stampB
+            if p mod 2 = 1
+                curr = stampB
+                prev = stampA
+            end
+
+            Rasterize(contours, order, starts:Get(p), starts:Get(p + 1),
+                     curr, p + 1, spanRow, spanA, spanB)
+
+            if p > 0
+                integer prevStamp = p
+                integer s = 0
+                repeat while s < spanRow:GetSize()
+                    integer row = spanRow:Get(s)
+                    integer col = spanA:Get(s)
+                    repeat while col <= spanB:Get(s)
+                        integer index = row * cols + col
+                        if prev:Get(index) not= prevStamp
+                            if not Supported(prev, prevStamp, row, col, offX, offY)
+                                cells:Add(index)
+                            end
+                        end
+                        col = col + 1
+                    end
+                    s = s + 1
+                end
+            end
+
+            planeStart:Add(cells:GetSize())
+            p = p + 1
+        end
+    end
+
+    private action Rasterize(Array<Contour> contours, Array<integer> order, integer from, integer to,
+                             Array<integer> grid, integer stamp,
+                             Array<integer> spanRow, Array<integer> spanA, Array<integer> spanB)
+        spanRow:Empty()
+        spanA:Empty()
+        spanB:Empty()
+        if to <= from
+            return now
+        end
+            
+        Contour first = contours:Get(order:Get(from))
+        number lowY = first:ys:Get(0)
+        number highY = lowY
+        integer i = from
+        repeat while i < to
+            Contour con = contours:Get(order:Get(i))
+            integer j = 0
+            repeat while j < con:GetSize()  
+                number y = con:ys:Get(j)
+                if y < lowY
+                    lowY = y
+                end
+                if y > highY
+                    highY = y
+                end
+                j = j + 1
+            end
+            i = i + 1
+        end
+
+        integer rStart = CeilingToInt((lowY - originY) / cellSize - 0.5)
+        integer rEnd = FloorToInt((highY - originY) / cellSize - 0.5) 
+        if rStart < 0
+            rStart = 0
+        end
+        if rEnd > rows - 1
+            rEnd = rows - 1
+        end
+        
+        Array<number> hits
+        integer r = rStart
+        repeat while r <= rEnd
+            number yc = originY + (cast(number, r) + 0.5) * cellSize
+            hits:Empty()
+            
+            i = from
+            repeat while i < to
+                Contour con2 = contours:Get(order:Get(i))
+                integer n = con2:GetSize()
+                integer j = n - 1
+                integer k = 0
+                repeat while k < n
+                    number y0 = con2:ys:Get(j)
+                    number y1 = con2:ys:Get(k)
+                    boolean above0 = y0 > yc
+                    boolean above1 = y1 > yc
+                    if above0 not= above1
+                        number x0 = con2:xs:Get(j)
+                        number x1 = con2:xs:Get(k)
+                        hits:Add(x0 + (yc - y0) * (x1 - x0) / (y1 - y0))
+                    end
+                    j = k
+                    k = k + 1
+                end
+                i = i + 1
+            end
+            
+            SortNumbers(hits)
+            
+            integer q = 0
+            repeat while q + 1 < hits:GetSize()
+                integer cA = CeilingToInt((hits:Get(q) - originX) / cellSize - 0.5)
+                integer cB = FloorToInt((hits:Get(q + 1) - originX) / cellSize - 0.5)
+                if cA < 0
+                    cA = 0
+                end
+                if cB > cols - 1
+                    cB = cols - 1
+                end
+                if cA <= cB
+                    integer col = cA
+                    repeat while col <= cB
+                        grid:Set(r * cols + col, stamp)
+                        col = col + 1
+                    end
+                    spanRow:Add(r)
+                    spanA:Add(cA)   
+                    spanB:Add(cB)
+                end
+                q = q + 2
+            end
+            r = r + 1
+        end
+    end
+
+    private action Usable(Contour con, integer planeCount) returns boolean
+        if not con:closed or con:GetSize() < 3
+            return false
+        end
+        if con:planeIndex < 0 or con:planeIndex >= planeCount
+            return false
+        end
+        return true
+    end
+
+    private action Supported(Array<integer> prev, integer prevStamp, integer row, integer col,
+                             Array<integer> offX, Array<integer> offY) returns boolean
+        integer i = 0
+        repeat while i < offX:GetSize()
+            integer r = row + offY:Get(i)
+            integer c = col + offX:Get(i)
+            if r >= 0 and r < rows
+                if c >= 0 and c < cols
+                    if prev:Get(r * cols + c) = prevStamp
+                        return true
+                    end
+                end
+            end
+            i = i + 1
+        end
+        return false
+    end
+
+    private action SizeGrid(number minX, number minY, number maxX, number maxY,
+                            number allowance)
+        number margin = allowance + 2.0 * cellSize
+        originX = minX - margin
+        originY = minY - margin
+        cols = CeilingToInt((maxX - minX + 2.0 * margin) / cellSize) + 1
+        rows = CeilingToInt((maxY - minY + 2.0 * margin) / cellSize) + 1
+    end
+
+    // insertion sort :D
+    private action SortNumbers(Array<number> a)
+        integer i = 1
+        repeat while i < a:GetSize()
+            number v = a:Get(i) 
+            integer j = i - 1
+            boolean moving = true
+            repeat while moving
+                if j < 0
+                    moving = false
+                elseif a:Get(j) > v
+                    a:Set(j + 1, a:Get(j)) 
+                    j = j - 1
+                else
+                    moving = false
+                end
+            end
+            a:Set(j + 1, v)
+            i = i + 1
+        end
+    end
+    
+    private action FloorToInt(number a) returns integer
+        integer res = cast(integer, a)
+        if a < cast(number, res)
+            res = res - 1
+        end
+        return res
+    end
+
+    private action CeilingToInt(number a) returns integer
+        integer res = cast(integer, a)
+        if a > cast(number, res)
+            res = res + 1
+        end
+        return res
+    end
+end

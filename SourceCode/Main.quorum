@@ -13,6 +13,7 @@ use geometry.Segment
 use geometry.PlaneMesh
 use geometry.Contour
 use geometry.ContourGenerator
+use geometry.OverhangGrid
 
 use tool.LineRender
 
@@ -66,8 +67,13 @@ class Main
         output "specks dropped: " + conGen:GetDroppedCount()
         output "points: " + conGen:GetPointsBefore() + " -> " + conGen:GetPointsAfter()
         
+        OverhangGrid overhangs
+        overhangs:SetCellSize(0.1) 
+        overhangs:Build(contours, planes:GetSize(), layerHeight * 1.43)
+
         LineRender lr
         lr:SetData(planes, contours)
+        lr:SetOverhangs(overhangs)
         lr:LineRender()
     end
 

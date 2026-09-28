@@ -12,6 +12,7 @@ use Libraries.Containers.HashTable
 use Libraries.Compute.Math
 
 use geometry.Contour
+use geometry.OverhangGrid
 
 class LineRender is Game, KeyboardListener
     Array<Contour> contours
@@ -28,11 +29,19 @@ class LineRender is Game, KeyboardListener
     HashTable<integer, boolean> plotted
     integer pixelSize = 2 
 
+    OverhangGrid overhangs
+    boolean hasOverhangs = false
+
     Math math
     action SetData(Array<number> p, Array<Contour> c)
         planes = p
         contours = c
     end    
+
+    action SetOverhangs(OverhangGrid overhang)
+        overhangs = overhang
+        hasOverhangs = true
+    end
 
     action LineRender   
         SetScreenSize(screenSize,screenSize)
@@ -205,9 +214,67 @@ class LineRender is Game, KeyboardListener
         draws:Empty() 
         plotted:Empty()
     end
+
+    private action DrawOverhangs(integer p)
+        if not hasOverhangs
+            return now
+        end
+        
+        Color orange
+        orange:SetColor(1.0, 0.55, 0.0, 1.0)
+        number cell = overhangs:GetCellSize()
+        number ox = overhangs:GetOriginX()
+        number oy = overhangs:GetOriginY()
+        integer cols = overhangs:GetColumns()
+
+        integer i = overhangs:GetStart(p)
+        integer stop = overhangs:GetEnd(p)
+        repeat while i < stop
+            integer index = overhangs:GetCell(i)
+            integer row = index / cols
+            integer colStart = index - row * cols
+            integer colEnd = colStart
+            
+            boolean extending = true
+            repeat while extending
+                if i + 1 < stop
+                    if overhangs:GetCell(i + 1) = row * cols + colEnd + 1
+                        colEnd = colEnd + 1
+                        i = i + 1
+                    else
+                        extending = false
+                    end
+                else
+                    extending = false
+                end
+            end
+
+            integer sx0 = RoundToInt(ToScreenX(ox + cast(number, colStart) * cell))
+            integer sx1 = RoundToInt(ToScreenX(ox + cast(number, colEnd + 1) * cell))
+            integer sy0 = RoundToInt(ToScreenY(oy + cast(number, row) * cell))
+            integer sy1 = RoundToInt(ToScreenY(oy + cast(number, row + 1) * cell))
+            integer w = sx1 - sx0
+            integer h = sy1 - sy0
+            if w < 1
+                w = 1
+            end
+            if h < 1
+                h = 1
+            end
+
+            Drawable rect
+            rect:LoadFilledRectangle(w, h, orange)
+            rect:SetPosition(sx0, sy0)
+            Add(rect)
+            draws:Add(rect)
+
+            i = i + 1       
+        end
+    end
     
     private action DrawPlane(integer p)
         ClearDrawing() 
+        DrawOverhangs(p)
         
         integer loopCount = 0
         integer openCount = 0
@@ -262,6 +329,12 @@ class LineRender is Game, KeyboardListener
             end
             c = c + 1
         end
-        output "Plane " + p + ": " + loopCount + " contours, " + openCount + " still open"
+        
+        text overhangText = ""
+        if hasOverhangs
+            overhangText = ", overhang " + overhangs:GetOverhangArea(p) + " mm^2"
+        end
+
+        output "Plane " + p + ": " + loopCount + " contours, " + openCount + " still open" + overhangText
     end
 end
