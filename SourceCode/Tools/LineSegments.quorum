@@ -1,0 +1,104 @@
+package geometry
+
+use Libraries.Containers.Array
+use Libraries.System.File
+use Libraries.System.FileWriter
+use Libraries.System.FileReader
+class LineSegment
+
+    // How many values each segment writes out. Useful when reading the file
+    // back, since index * VALUES_PER_SEGMENT is the start of each segment.
+    public constant integer VALUES_PER_SEGMENT = 9
+
+    Array<Segment> segments
+    text separator = " "
+
+    /*
+        Adds a segment to the list that will be written out.
+    */
+    action Add(Segment segment)
+        segments:Add(segment)
+    end
+
+    /*
+        Returns how many segments are currently stored.
+    */
+    action GetSize returns integer
+        return segments:GetSize()
+    end
+
+    /*
+        Removes all stored segments.
+    */
+    action Empty
+        segments:Empty()
+    end
+
+    /*
+        Convenience action that builds a Segment from its nine values.
+    */
+    action MakeSegment(integer planeIndex, integer aLow, integer aHigh,
+        integer bLow, integer bHigh, number x0, number y0, number x1,
+        number y1) returns Segment
+
+        Segment segment
+        segment:planeIndex = planeIndex
+        segment:aLow = aLow
+        segment:aHigh = aHigh
+        segment:bLow = bLow
+        segment:bHigh = bHigh
+        segment:x0 = x0
+        segment:y0 = y0
+        segment:x1 = x1
+        segment:y1 = y1
+        return segment
+    end
+
+    /*
+        Returns one segment's nine values separated by spaces.
+    */
+    action GetSegmentText(Segment segment) returns text
+        text result = ""
+        result = result + segment:planeIndex + separator
+        result = result + segment:aLow + separator
+        result = result + segment:aHigh + separator
+        result = result + segment:bLow + separator
+        result = result + segment:bHigh + separator
+        result = result + segment:x0 + separator
+        result = result + segment:y0 + separator
+        result = result + segment:x1 + separator
+        result = result + segment:y1
+        return result
+    end
+
+    /*
+        Returns every stored segment as one long space-separated line.
+    */
+    action GetText returns text
+        text result = ""
+        integer i = 0
+        repeat while i < segments:GetSize()
+            if i > 0
+                result = result + separator
+            end
+            Segment segment = segments:Get(i)
+            result = result + GetSegmentText(segment)
+            i = i + 1
+        end
+        return result
+    end
+
+    /*
+        Writes every stored segment to the given file path. No trailing
+        newline is added, so the file holds nothing but values and spaces.
+    */
+    action WriteToFile(text path)
+        File file
+        file:SetPath(path)
+
+        FileWriter writer
+        writer:OpenForWrite(file)
+        writer:Write(GetText())
+        writer:Close()
+    end
+end

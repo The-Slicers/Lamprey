@@ -1,0 +1,32 @@
+@startuml
+!import carbon-gray.puml
+!theme carbon-gray
+skinparam ranksep 200
+skinparam nodesep 50
+
+title Lamprey Slicing Pipeline
+start
+:Load 3D model (STL / OBJ / 3MF);
+
+partition "Slicing" {
+  :Slice mesh into layer planes;
+  fork
+    :Extract polylines per plane;
+  fork again
+    :Generate skirt plane;
+  fork again
+    :Check for overhang in geometry;
+    :Generate support structures;
+  end fork
+}
+
+partition "Custom G-code generation" {
+  :Load start codes;
+  :Calculating extrusion factor;
+  :Generate respective G instruction for point;
+  :Load end codes;
+}
+
+:Export printable file (.gcode);
+stop
+@enduml

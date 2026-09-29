@@ -3,87 +3,55 @@ use Libraries.Game.Graphics.Models.Data.ModelData
 use Libraries.Game.Graphics.Models.Data.MeshData
 use Libraries.Containers.Array
 use Libraries.Containers.Number32BitArray
+use Libraries.Containers.Number64BitArray
 use Libraries.Containers.Integer32BitArray
 use Libraries.Compute.Vector4
 use Libraries.System.File
 
 use geometry.TestSlicer
 use geometry.Segment
+use geometry.PlaneMesh
+
+use tool.LineRender
 
 class Main
     action Main
-        // Load in model from assets folder 
+        // Load in model from assets folder
         File file
-        file:SetPath("assets/bunny.obj") 
-        
+        file:SetPath("assets/bunny.obj")
+
         // packages model data into a ModelData class
         ModelLoader loader
-        ModelData data = loader:Load(file) 
-        
+        ModelData data = loader:Load(file)
+
         output "File: " + file:GetPath()
-        
+
         // simple program to check data in the model
         PrintMeshStats(data)
-        
+
         SampleRun(data)
     end
 
     action SampleRun(ModelData data)
-        Array<MeshData> meshes = data:GetMeshes()
-        Integer32BitArray corners
-        Number32BitArray vertX        
-        Number32BitArray vertY
-        Number32BitArray vertZ
-        Integer32BitArray indices
-
-        integer indexOffset = 0
-        integer vertOffset = 0
-        integer i = 0
-        repeat while i < meshes:GetSize()
-            MeshData mesh = meshes:Get(i)
-            indices = mesh:GetIndices()
-            Number32BitArray positions = mesh:GetVertices()
-            
-            vertX:SetSize(positions:GetSize()/3+vertOffset)
-            vertY:SetSize(positions:GetSize()/3+vertOffset)
-            vertZ:SetSize(positions:GetSize()/3+vertOffset)
-
-            integer vertCount = positions:GetSize() / 3
-            integer j = 0
-            repeat while j < vertCount
-                vertX:Set(j+indexOffset,positions:Get(3*j))
-                vertY:Set(j+indexOffset,positions:Get(3*j+1))
-                vertZ:Set(j+indexOffset,positions:Get(3*j+2))
-                
-                j = j + 1
-            end
-
-            corners:SetSize(indices:GetSize()+indexOffset)
-            k = 0
-            repeat while k < indices:GetSize()
-                corners:Set(k+indexOffset,indices:Get(k))
-                k = k + 1
-            end
-            output "x: " + vertX:GetSize() + " y: " + vertY:GetSize() + " z: " + vertZ:GetSize()
-        
-            indexOffset = indexOffset + indices:GetSize()
-            vertOffset = vertOffset + vertX:GetSize()
-            i = i + 1
-        end        
-        
-        TestSlicer slicer
-        slicer:SetTriangles(vertX,vertY,vertZ,corners)
+        PlaneMesh meshData
+        meshData:splitCoords(data)
     
-        output "verts: " + vertX:GetSize() + "  corners: " + corners:GetSize()
-      
-        Array<number> planes = slicer:BuildPlanes(-0.5,0.5,0.02)
+        TestSlicer slicer
+        slicer:SetTriangles(meshData)
+        Array<number> planeRange = slicer:GetSliceRange()         
+        output "Plane Low: " + planeRange:Get(0) + " Plane High: " + planeRange:Get(1)
+        Array<number> planes = slicer:BuildPlanes(planeRange:Get(0),planeRange:Get(1),0.1)
         output "planes: " + planes:GetSize()
-        
-        Array<Segment> segments = slicer:Slice(planes) 
-        
+
+        Array<Segment> segments = slicer:Slice(planes)
+
         output "segments: " + segments:GetSize()
         output "max crossings: " + slicer:GetMaxCrossingsPerFace()
         output "odd faces: " + slicer:GetOddCrossingCount()
+
+        LineRender lr
+        lr:SetData(planes, segments)
+        lr:LineRender()
     end
 
     // helper function to check if a resource exists for a model
@@ -93,7 +61,7 @@ class Main
         end
         return "yes :)"
     end
-    
+
     // Outputs mesh data ignoring materials and animations
     action PrintMeshStats(ModelData data)
         Array<MeshData> meshes = data:GetMeshes()
@@ -101,13 +69,13 @@ class Main
         integer totalTriangles = 0
         integer totalIndices = 0
 
-        output "Meshes: " + meshes:GetSize() 
-        
+        output "Meshes: " + meshes:GetSize()
+
         // loops through all meshes
         integer i = 0
         repeat while i < meshes:GetSize()
-            MeshData mesh = meshes:Get(i) 
-            
+            MeshData mesh = meshes:Get(i)
+
             integer vertices = 0
             Number32BitArray positions = mesh:GetVertices()
             // we divide by 3 since positions are given as 3 values, xyz, for a single position
@@ -128,7 +96,7 @@ class Main
             totalVertices = totalVertices + vertices
             totalTriangles = totalTriangles + triangles
             totalIndices = totalIndices + indices
-                
+
             output "Mesh " + i + ":"
             output "Vertices: " + vertices
             output "Indices: " + indices
@@ -136,7 +104,7 @@ class Main
             output "Normals: " + HasData(mesh:GetNormals())
             output "UVs: " + HasData(mesh:GetTextureCoordinates())
             output "Tangents: " + HasData(mesh:GetTangents())
-        
+
             i = i + 1
         end
     end

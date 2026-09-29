@@ -1,3 +1,5 @@
+package tool
+
 use Libraries.System.File
 
 class Shader
