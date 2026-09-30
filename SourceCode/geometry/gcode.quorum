@@ -1,36 +1,54 @@
 use Libraries.Containers.Array
 use Libraries.Compute.Math
+use Libraries.System.File
+use Libraries.System.FileWriter
+use Libraries.System.Blueprints.FileWriterBlueprint
 
 class gcode
-    action generate_gcode(Array<Array<number>> polylines, number layerHeight, number nozzleWidth, number filamentArea, number bedTemp, number nozzleTemp, number travelSpeed) returns Array<text>
-        Iterator<integer> i = polylines:GetIterator()
-        Array<text> gcode
-        gcode:Add("G90")
-        gcode:Add("M83")
-        gcode:Add("M140 S" + cast(text, bedTemp))
-        gcode:Add("M104 S" + cast(text, nozzleTemp))
-        gcode:Add("G28")
-        gcode:Add("M190 S" + cast(text, bedTemp))
-        gcode:Add("M109 S" + cast(text, nozzleTemp))
-        gcode:Add("G1 Z2.0 F" + cast(text, travelSpeed))
-        gcode:Add("G92 E0")
+    action generate_gcode(Array<Array<number>> polylines, number layerHeight, number nozzleWidth, number filamentArea, number bedTemp, number nozzleTemp, number travelSpeed) returns File
+        
+        File gcodeFile
+        gcodeFile:SetPath("model.gcode")
+        FileWriterBlueprint writer = gcodeFile:OpenForWrite()
+        
+        writer:WriteLine("G90")
+        writer:WriteLine("M83")
+        writer:WriteLine("M140 S" + cast(text, bedTemp))
+        writer:WriteLine("M104 S" + cast(text, nozzleTemp))
+        writer:WriteLine("G28")
+        writer:WriteLine("M190 S" + cast(text, bedTemp))
+        writer:WriteLine("M109 S" + cast(text, nozzleTemp))
+        writer:WriteLine("G1 Z2.0 F" + cast(text, travelSpeed))
+        writer:WriteLine("G92 E0")
+        
         integer i = 0
+        Math math
         repeat while i < polylines:GetSize() - 1
-            number distance = math:SquareRoot(math:RaiseToPower(polylines:Get(i):Get(0) - polylines:Get(i+1):Get(0), 2) + math:RaiseToPower(polylines:Get(i):Get(1) - polylines:Get(i+1):Get(1), 2) + math:RaiseToPower(polylines:Get(i):Get(2) - polylines:Get(i+1):Get(2), 2))
+            number x1 = polylines:Get(i):Get(0)
+            number y1 = polylines:Get(i):Get(1)
+            number z1 = polylines:Get(i):Get(2)
+            number x2 = polylines:Get(i+1):Get(0)
+            number y2 = polylines:Get(i+1):Get(1)
+            number z2 = polylines:Get(i+1):Get(2)
+            number distance = math:SquareRoot(math:RaiseToPower((x1-x2), 2) + math:RaiseToPower((y1-y2), 2) + math:RaiseToPower((z1-z2), 2))
             number extrusion = distance * layerHeight * nozzleWidth 
             number filamentLength = extrusion / filamentArea
-            gcode:Add("G1 X" = cast(text, math:Round(polylines:Get(i+1):Get(0), 2)) + " Y" + cast(text, math:Round(polylines:Get(i+1):Get(1), 2)) + " Z" + cast(text, math:Round(polylines:Get(i+1):Get(2), 2)) + " E" + cast(text, math:Round(filamentLength * 10000 / 10000)) + "F1200")
+            writer:WriteLine("G1 X" + cast(text, math:Round(x2, 2, true)) + " Y" + cast(text, math:Round(y2, 2, true)) + " Z" + cast(text, math:Round(z2, 2, true)) + " E" + cast(text, math:Round(((filamentLength * 10000) / 10000), 2, true)) + "F1200")
             i = i + 1
-        end
-        gcode:Add("M104 S0")
-        gcode:Add("M140 S0")
-        gcode:Add("M107")
-        gcode:Add("G91")
-        gcode:Add("G1 E-2 F2700")
-        gcode:Add("G1 Z10 F3000")
-        gcode:Add("G90")
-        gcode:Add("G28 X0 Y0")
-        gcode:Add("M84")
-        return gcode
+        end 
+
+        writer:WriteLine("M104 S0")
+        writer:WriteLine("M140 S0")
+        writer:WriteLine("M107")
+        writer:WriteLine("G91")
+        writer:WriteLine("G1 E-2 F2700")
+        writer:WriteLine("G1 Z10 F3000")
+        writer:WriteLine("G90")
+        writer:WriteLine("G28 X0 Y0")
+        writer:WriteLine("M84")
+
+        writer:Close()
+        
+        return gcodeFile
     end
 end 
