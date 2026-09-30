@@ -1,0 +1,104 @@
+use Libraries.Containers.Array
+use Libraries.Data.Formats.JavaScriptObjectNotation
+use Libraries.System.File
+
+class ProfileManager
+
+    Array<Printer> printers
+
+    action Add(Printer printer)
+        printers:Add(printer)
+    end
+
+    action GetSize returns integer
+        return printers:GetSize()
+    end
+
+    action Get(integer index) returns Printer
+        return printers:Get(index)
+    end
+
+    //returns the file of the given name or undefined if no profile. 
+    action Find(text name) returns Printer
+        integer i = 0
+        repeat printers:GetSize() times
+            Printer current = printers:Get(i)
+            if current:GetName() = name
+                return current
+            end
+            i = i + 1
+        end
+        return undefined
+    end
+
+    //writes every profile to the file on the given path.
+    action Save(text path)
+        JavaScriptObjectNotation root
+
+        integer i = 0
+        repeat printers:GetSize() times
+            Printer p = printers:Get(i)
+
+            JavaScriptObjectNotation entry
+            entry:Add("bedWidth", p:GetBedWidth())
+            entry:Add("bedDepth", p:GetBedDepth())
+            entry:Add("bedHeight", p:GetBedHeight())
+            entry:Add("nozzleDiameter", p:GetNozzleDiameter())
+            entry:Add("nozzleTemperature", p:GetNozzleTemperature())
+            entry:Add("bedTemperature", p:GetBedTemperature())
+            entry:Add("maxNozzleTemperature", p:GetMaxNozzleTemperature())
+            entry:Add("maxBedTemperature", p:GetMaxBedTemperature())
+            entry:Add("printSpeed", p:GetPrintSpeed())
+            entry:Add("travelSpeed", p:GetTravelSpeed())
+            entry:Add("filamentType", p:GetFilamentType())
+
+            root:Add(p:GetName(), entry)
+            i = i + 1
+        end
+
+        root:SetPrettyPrint(true)
+
+        File file
+        file:SetPath(path)
+        file:Write(root:ToText())
+    end
+
+    //read profiles from file on the given path, replace the old profile
+    action Load(text path)
+        printers:Empty()
+
+        File file
+        file:SetPath(path)
+
+        JavaScriptObjectNotation root
+        root:Read(file)
+
+        Array<text> keys = root:GetKeys()
+
+        integer i = 0
+        repeat keys:GetSize() times
+            text key = keys:Get(i)
+
+            // Each value is itself a JSON object, so we cast it back.
+            JavaScriptObjectNotation entry = cast(JavaScriptObjectNotation, root:GetValue(key))
+
+            Printer p
+            p:SetName(key)
+            p:SetBedWidth(cast(number, entry:GetValue("bedWidth")))
+            p:SetBedDepth(cast(number, entry:GetValue("bedDepth")))
+            p:SetBedHeight(cast(number, entry:GetValue("bedHeight")))
+            p:SetNozzleDiameter(cast(number, entry:GetValue("nozzleDiameter")))
+            p:SetNozzleTemperature(cast(integer, entry:GetValue("nozzleTemperature")))
+            p:SetBedTemperature(cast(integer, entry:GetValue("bedTemperature")))
+            p:SetMaxNozzleTemperature(cast(integer, entry:GetValue("maxNozzleTemperature")))
+            p:SetMaxBedTemperature(cast(integer, entry:GetValue("maxBedTemperature")))
+            p:SetPrintSpeed(cast(number, entry:GetValue("printSpeed")))
+            p:SetTravelSpeed(cast(number, entry:GetValue("travelSpeed")))
+            p:SetFilamentType(cast(text, entry:GetValue("filamentType")))
+
+            printers:Add(p)
+            i = i + 1
+        end
+    end
+
+end

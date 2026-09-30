@@ -1,0 +1,122 @@
+class Printer
+
+    text name = ""
+    number bedWidth = 0.0
+    number bedDepth = 0.0
+    number bedHeight = 0.0
+    number nozzleDiameter = 0.4
+    integer nozzleTemperature = 200
+    integer bedTemperature = 60
+    integer maxNozzleTemperature = 260
+    integer maxBedTemperature = 100
+    number printSpeed = 50.0    //mm/s
+    number travelSpeed = 120.0  //mm/s
+    text filamentType = "PLA"
+
+    action GetName returns text
+        return name
+    end
+
+    action SetName(text value)
+        name = value
+    end
+
+    action GetBedWidth returns number
+        return bedWidth
+    end
+
+    action SetBedWidth(number value)
+        bedWidth = value
+    end
+
+    action GetBedDepth returns number
+        return bedDepth
+    end
+
+    action SetBedDepth(number value)
+        bedDepth = value
+    end
+
+    action GetBedHeight returns number
+        return bedHeight
+    end
+
+    action SetBedHeight(number value)
+        bedHeight = value
+    end
+
+    action GetNozzleDiameter returns number
+        return nozzleDiameter
+    end
+
+    action SetNozzleDiameter(number value)
+        nozzleDiameter = value
+    end
+
+    action GetNozzleTemperature returns integer
+        return nozzleTemperature
+    end
+
+    action SetNozzleTemperature(integer value)
+        nozzleTemperature = value
+    end
+
+    action GetBedTemperature returns integer
+        return bedTemperature
+    end
+
+    action SetBedTemperature(integer value)
+        bedTemperature = value
+    end
+
+        action GetMaxNozzleTemperature returns integer
+        return maxNozzleTemperature
+    end
+
+    action SetMaxNozzleTemperature(integer value)
+        maxNozzleTemperature = value
+    end
+
+    action GetMaxBedTemperature returns integer
+        return maxBedTemperature
+    end
+
+    action SetMaxBedTemperature(integer value)
+        maxBedTemperature = value
+    end
+
+    action GetPrintSpeed returns number
+        return printSpeed
+    end
+
+    action SetPrintSpeed(number value)
+        printSpeed = value
+    end
+
+    action GetTravelSpeed returns number
+        return travelSpeed
+    end
+
+    action SetTravelSpeed(number value)
+        travelSpeed = value
+    end
+
+    action GetFilamentType returns text
+        return filamentType
+    end
+
+    action SetFilamentType(text value)
+        filamentType = value
+    end
+
+    /*
+        A convenience action so we can print a profile without
+        writing the same concatenation everywhere.
+    */
+    action Describe returns text
+        return name + ": " + bedWidth + " x " + bedDepth + " x " + bedHeight
+            + " mm, " + nozzleDiameter + " mm nozzle, "
+            + filamentType + " at " + nozzleTemperature + " C"
+    end
+
+end
