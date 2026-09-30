@@ -4,6 +4,8 @@ use Libraries.Containers.Number64BitArray
 use Libraries.Containers.Number32BitArray
 use Libraries.Containers.Integer32BitArray
 use Libraries.Containers.Stack
+use Libraries.Containers.HashTable
+use Libraries.Containers.Array
 
 class BaseArea
     Number64BitArray Xcoords_sorted
@@ -14,30 +16,57 @@ class BaseArea
 
     // using Andrew's Monotone Chain Algorithm to find convex hull
     action ConvexHull (Number64BitArray Xcoords, Number64BitArray Ycoords) 
-        // REMOVING DUPLICATE POINTS BEFORE USING!!!
 
-        // rearrange coordinates according to sorted indices
-        integer size = Xcoords:GetSize()
-        Xcoords_sorted:SetSize(size)
-        Ycoords_sorted:SetSize(size)
-        Integer32BitArray sorted_indices = SortCoords(Xcoords, Ycoords)
-        
-        // integer current = 0
-        // output "index arr has: "
-        // repeat while current <= sorted_indices:GetSize()
-        //     output "index: " + sorted_indices:Get(current) + ", X: " + Xcoords:Get(sorted_indices:Get(current)) + ", Y: " + Ycoords:Get(sorted_indices:Get(current))
-        //     current = current + 1
-        // end
+        // REMOVING DUPLICATE POINTS BEFORE USING!!!---------------------------
+        HashTable <text, boolean> uniqueCoords
+        Array<integer> uniqIndices
+
+        Number64BitArray Xcoords_unique
+        Number64BitArray Ycoords_unique
+
+        // find indices of unique coordinates
+        integer index = 0
+        integer uniq_index = 0
+        repeat while index < Xcoords:GetSize()
+            text coordinate = Xcoords:Get(uniq_index) + "," + Ycoords:Get(uniq_index)
+
+            if not uniqueCoords:HasKey(coordinate)
+                uniqueCoords:Add(coordinate, true)
+                uniqIndices:Add(uniq_index)
+            end
+
+            index = index + 1
+            uniq_index = uniq_index + 1
+        end
+
+        // new array for unique coordinates using gathered indices
+        Xcoords_unique:SetSize(uniqIndices:GetSize())
+        Ycoords_unique:SetSize(uniqIndices:GetSize())
+        integer size = Xcoords_unique:GetSize()
 
         integer i = 0
         repeat while i < size
-            index = sorted_indices:Get(i)
-            Xcoords_sorted:Set(i, Xcoords:Get(index))
-            Ycoords_sorted:Set(i, Ycoords:Get(index))
+            index = uniqIndices:Get(i)
+            Xcoords_unique:Set(i, Xcoords:Get(index))
+            Ycoords_unique:Set(i, Ycoords:Get(index))
+
             i = i + 1
         end
 
-        // actual convex hull algo ----------------------------
+        // rearrange coordinates according to sorted indices
+        Xcoords_sorted:SetSize(size)
+        Ycoords_sorted:SetSize(size)
+        Integer32BitArray sorted_indices = SortCoords(Xcoords_unique, Ycoords_unique)
+
+        i = 0
+        repeat while i < size
+            index = sorted_indices:Get(i)
+            Xcoords_sorted:Set(i, Xcoords_unique:Get(index))
+            Ycoords_sorted:Set(i, Ycoords_unique:Get(index))
+            i = i + 1
+        end
+
+        // actual convex hull algo --------------------------------------------
         Stack<integer> upperhull
         Stack<integer> lowerhull
         boolean break = false
@@ -46,7 +75,6 @@ class BaseArea
         i = 0
         repeat while i < size
             break = false
-            curr_index = sorted_indices:Get(i)
 
             repeat while lowerhull:GetSize() >= 2 and break = false
                 // get 2 points indices from stack
@@ -55,13 +83,13 @@ class BaseArea
                 second = lowerhull:Peek()
 
                 // stop popping if 3 points make cw rotation + add popped value back
-                if clockwise(second, first, curr_index)
+                if clockwise(second, first, i)
                     lowerhull:Push(first)
                     break = true
                 end
             end
 
-            lowerhull:Push(curr_index)
+            lowerhull:Push(i)
             i = i + 1
         end
 
@@ -69,7 +97,6 @@ class BaseArea
         i = size - 1
         repeat while i >= 0
             break = false
-            curr_index = sorted_indices:Get(i)
 
             repeat while upperhull:GetSize() >= 2 and break = false
                 // get 2 points indices from stack
@@ -78,13 +105,13 @@ class BaseArea
                 second = upperhull:Peek()
 
                 // stop popping if 3 points make cw rotation + add popped value back
-                if clockwise(second, first, curr_index)
+                if clockwise(second, first, i)
                     upperhull:Push(first)
                     break = true
                 end
             end
 
-            upperhull:Push(curr_index)
+            upperhull:Push(i)
             i = i - 1
         end
 
@@ -95,7 +122,7 @@ class BaseArea
 
         // store upperhull stack values
         i = 0
-        repeat while upperhull:GetSize() > 1
+        repeat while upperhull:GetSize() > 0
             index = upperhull:Pop()
             number x_val = Xcoords_sorted:Get(index)
             Xcoords_convex:Set(i, x_val)
@@ -117,16 +144,6 @@ class BaseArea
 
             i = i + 1
         end
-
-        integer current = 0
-        output "hull points are: "
-        repeat while current < hull_size
-            output "index: " + current + ", X: " + Xcoords_convex:Get(current) + ", Y: " + Ycoords_convex:Get(current)
-            current = current + 1
-        end
-
-        // calculate padding for stability?
-
     end
 
     // lexicographically sorting the (x,y) coordinates; mergesort
@@ -218,7 +235,7 @@ class BaseArea
         if x1 = x2
             number y1 = Ycoords:Get(index1)
             number y2 = Ycoords:Get(index2)
-            return y1 <= y2
+            return y1 < y2
         end
 
         return x1 < x2
