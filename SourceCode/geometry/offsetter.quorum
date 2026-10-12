@@ -11,6 +11,7 @@ class Offsetter
     number stepCos = 0.9612616959383189
     number stepSin = 0.27563735581699916
 
+    // all loops are assumed to be on the same layer as the first one
     action Offset(Array<Contour> loops, number distance) returns Array<Contour>
         Array<Contour> result
         if loops:GetSize() = 0
@@ -45,17 +46,20 @@ class Offsetter
                 qx:Empty()
                 qy:Empty()
                 RawLoop(con, distance, qx, qy)
-                ops:AddPoints(qx, qy, 0, false)
+                ops:AddPoints(qx, qy, false)
             end
             i = i + 1
         end
         return ops:Resolve(1, planeIndex)
     end
 
+    // offsets every corner of the loop by d and writes
+    // result into qx / qy
     private action RawLoop(Contour con, number d, Array<number> qx, Array<number> qy)
         integer n = con:GetSize()
         integer i = 0
         repeat while i < n
+            // corner B with its neighbors A (before) and C (after)
             integer ia = i - 1
             if ia < 0
                 ia = n - 1
@@ -79,6 +83,7 @@ class Offsetter
             number l2 = math:SquareRoot(u2x * u2x + u2y * u2y)
 
             if l1 > 0 and l2 > 0
+                // unit directions of two edges
                 u1x = u1x / l1
                 u1y = u1y / l1
                 u2x = u2x / l2
@@ -94,6 +99,7 @@ class Offsetter
                 if turn >= 0
                     // turns into the material: offset edges converge
                     if dot > -0.5
+                        // the point where both offset edges meet
                         number f = d / (1.0 + dot)
                         qx:Add(bx + (n1x + n2x) * f)
                         qy:Add(by + (n1y + n2y) * f)

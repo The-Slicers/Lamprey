@@ -53,6 +53,18 @@ class Contour
         end
     end    
 
+    action Copy returns Contour
+        Contour copy
+        copy:AppendAll(me)
+        copy:planeIndex = planeIndex
+        copy:closed = closed
+        copy:depth = depth
+        copy:isHole = isHole
+        copy:wallIndex = wallIndex
+        copy:role = role
+        return copy
+    end
+
     action DropClosingDuplicate
         integer n = xs:GetSize() 
         if n > 1
@@ -62,7 +74,8 @@ class Contour
             end
         end
     end
-
+    
+    // twice signed area, if positive then counter clockwise
     action SignedArea2 returns number
         number area2 = 0.0
         integer n = xs:GetSize() 
@@ -76,6 +89,15 @@ class Contour
             i = i + 1
         end
         return area2
+    end
+
+    // unsigned area
+    action Area returns number
+        number area = SignedArea2() / 2.0
+        if area < 0
+            return -area
+        end
+        return area
     end
 
     action Reverse
@@ -122,6 +144,35 @@ class Contour
         return inside       
     end
     
+    // index of the vertex closest to (x, y), returns 0 for an empty contour
+    action NearestVertexIndex(number x, number y) returns integer
+        integer best = 0
+        number bestD2 = 0.0
+        integer i = 0
+        repeat while i < xs:GetSize()
+            number dx = xs:Get(i) - x
+            number dy = ys:Get(i) - y
+            number d2 = dx * dx + dy * dy
+            if i = 0 or d2 < bestD2
+                best = i
+                bestD2 = d2
+            end
+            i = i + 1
+        end
+        return best
+    end
+    
+    // squared distance from (x, y) to the closest vertex
+    action NearestVertexDistance2(number x, number y) returns number
+        if xs:GetSize() = 0
+            return 0.0
+        end
+        integer i = NearestVertexIndex(x, y)
+        number dx = xs:Get(i) - x
+        number dy = ys:Get(i) - y
+        return dx * dx + dy * dy
+    end
+
     // Douglas-Peucker simplification
     action Simplify(number tolerance)
         integer n = xs:GetSize() 

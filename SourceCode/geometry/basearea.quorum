@@ -65,20 +65,6 @@ class BaseArea
             i = i + 1
         end
 
-        integer distinct = 1
-integer outOfOrder = 0
-integer k = 1
-repeat while k < size
-    if Xcoords_sorted:Get(k) < Xcoords_sorted:Get(k - 1)
-        outOfOrder = outOfOrder + 1
-    end
-    if Xcoords_sorted:Get(k) not= Xcoords_sorted:Get(k - 1) or Ycoords_sorted:Get(k) not= Ycoords_sorted:Get(k - 1)
-        distinct = distinct + 1
-    end
-    k = k + 1
-end
-output "sorted: " + distinct + " distinct points, " + outOfOrder + " out of order"
-
         // actual convex hull algo --------------------------------------------
         Array<integer> upperhull
         Array<integer> lowerhull

@@ -1,7 +1,6 @@
 package geometry
 
 use Libraries.Containers.Array
-use Libraries.Compute.Math
 
 class PathOrderer
     number seamX = 0.0
@@ -17,7 +16,7 @@ class PathOrderer
     number nozzleY = 0.0
     Array<Contour> ordered
 
-    Math math
+    GeometryUtilities util
 
     action SetSeamPoint(number x, number y)
         seamX = x
@@ -47,16 +46,16 @@ class PathOrderer
 
         Array<integer> contourStart
         Array<integer> contourOrder
-        Bucket(contours, planeCount, contourStart, contourOrder)
+        util:BucketContours(contours, planeCount, contourStart, contourOrder)
         Array<integer> wallStart
         Array<integer> wallOrder
-        Bucket(walls, planeCount, wallStart, wallOrder)
+        util:BucketContours(walls, planeCount, wallStart, wallOrder)
         Array<integer> skinStart
         Array<integer> skinOrder
-        Bucket(skin, planeCount, skinStart, skinOrder)
+        util:BucketContours(skin, planeCount, skinStart, skinOrder)
         Array<integer> infillStart
         Array<integer> infillOrder
-        Bucket(infill, planeCount, infillStart, infillOrder)
+        util:BucketContours(infill, planeCount, infillStart, infillOrder)
 
         integer p = 0
         repeat while p < planeCount
@@ -95,7 +94,8 @@ class PathOrderer
                 i = 0
                 repeat while i < islands:GetSize()
                     if not done:Get(i) 
-                        number d2 = NearestVertexDistance2(islands:Get(i), nozzleX, nozzleY)
+                        Contour island = islands:Get(i) 
+                        number d2 = island:NearestVertexDistance2(nozzleX, nozzleY)
                         if best = -1 or d2 < bestD2
                             best = i
                             bestD2 = d2
@@ -145,26 +145,20 @@ class PathOrderer
             OrderLoops(loops, role)
             w = w - 1
         end
+        OrderLines(OfIsland(layerSkin, skinIsland, island), 2)
+        OrderLines(OfIsland(layerInfill, infillIsland, island), 3)
+    end
 
-        Array<Contour> lines
-        i = 0
-        repeat while i < layerSkin:GetSize()
-            if skinIsland:Get(i) = island
-                lines:Add(layerSkin:Get(i))
+    private action OfIsland(Array<Contour> paths, Array<integer> islandOf, integer island) returns Array<Contour>
+        Array<Contour> picked
+        integer i = 0
+        repeat while i < paths:GetSize()
+            if islandOf:Get(i) = island
+                picked:Add(paths:Get(i))
             end
             i = i + 1
         end
-        OrderLines(lines, 2)
-
-        Array<Contour> fill
-        i = 0
-        repeat while i < layerInfill:GetSize()
-            if infillIsland:Get(i) = island
-                fill:Add(layerInfill:Get(i))
-            end
-            i = i + 1
-        end
-        OrderLines(fill, 3)
+        return picked
     end
 
     private action OrderLoops(Array<Contour> loops, integer role)
@@ -172,7 +166,8 @@ class PathOrderer
         Array<boolean> used
         integer i = 0
         repeat while i < loops:GetSize()
-            seams:Add(SeamIndex(loops:Get(i)))
+            Contour loop = loops:Get(i)
+            seams:Add(loop:NearestVertexIndex(seamX, seamY))
             used:Add(false)
             i = i + 1
         end
@@ -184,9 +179,9 @@ class PathOrderer
             i = 0
             repeat while i < loops:GetSize()
                 if not used:Get(i) 
-                    Contour loop = loops:Get(i) 
-                    number dx = loop:xs:Get(seams:Get(i)) - nozzleX
-                    number dy = loop:ys:Get(seams:Get(i)) - nozzleY
+                    Contour cand = loops:Get(i) 
+                    number dx = cand:xs:Get(seams:Get(i)) - nozzleX
+                    number dy = cand:ys:Get(seams:Get(i)) - nozzleY
                     number d2 = dx * dx + dy * dy
                     if best = -1 or d2 < bestD2
                         best = i
@@ -198,24 +193,16 @@ class PathOrderer
             used:Set(best, true)
             
             Contour src = loops:Get(best) 
-            integer n = src:GetSize()
-            integer start = seams:Get(best) 
-            Contour path
-            i = 0
-            repeat while i < n
-                integer v = (start + i) mod n
-                AddSpaced(path, src:xs:Get(v), src:ys:Get(v), false)
-                i = i + 1
-            end
+            Contour path = RotatedLoop(src, seams:Get(best))
             if path:GetSize() > 3
                 number cx = path:TailX() - path:HeadX()
-                number cy = path:TailY() - path:HeadY() 
+                number cy = path:TailY() - path:HeadY()
                 if cx * cx + cy * cy < minSegmentLength * minSegmentLength
                     path:xs:RemoveAt(path:xs:GetSize() - 1)
                     path:ys:RemoveAt(path:ys:GetSize() - 1)
                 end
-            end
-            path:closed = true
+            end 
+            
             path:planeIndex = src:planeIndex
             path:wallIndex = src:wallIndex
             path:role = role
@@ -228,6 +215,19 @@ class PathOrderer
             nozzleY = path:HeadY()
             count = count + 1
         end
+    end
+
+    private action RotatedLoop(Contour src, integer start) returns Contour
+        Contour path
+        integer n = src:GetSize()
+        integer i = 0
+        repeat while i < n
+            integer v = (start + i) mod n
+            AddSpaced(path, src:xs:Get(v), src:ys:Get(v), false)
+            i = i + 1
+        end
+        path:closed = true
+        return path
     end
 
     private action OrderLines(Array<Contour> lines, integer role)
@@ -301,10 +301,7 @@ class PathOrderer
         repeat while i < skirt:GetSize()
             Contour loop = skirt:Get(i) 
             if loop:planeIndex = p and loop:GetSize() >= 3
-                number a = loop:SignedArea2()
-                if a < 0
-                    a = -a
-                end
+                number a = loop:Area()
                 integer at = 0
                 repeat while at < areas:GetSize() and areas:Get(at) >= a
                     at = at + 1
@@ -318,28 +315,7 @@ class PathOrderer
         i = 0
         repeat while i < loops:GetSize() 
             Contour src = loops:Get(i)
-            integer n = src:GetSize()
-            integer start = 0
-            number bestD2 = 0.0
-            integer v = 0
-            repeat while v < n
-                number dx = src:xs:Get(v) - nozzleX
-                number dy = src:ys:Get(v) - nozzleY
-                number d2 = dx * dx + dy * dy
-                if v = 0 or d2 < bestD2
-                    start = v
-                    bestD2 = d2
-                end
-                v = v + 1
-            end
-            Contour path
-            integer j = 0
-            repeat while j < n
-                integer w = (start + j) mod n
-                AddSpaced(path, src:xs:Get(w), src:ys:Get(w), false)
-                j = j + 1
-            end
-            path:closed = true
+            Contour path = RotatedLoop(src, src:NearestVertexIndex(nozzleX, nozzleY))
             path:planeIndex = p
             path:role = 4
             if path:GetSize() >= 3
@@ -349,23 +325,6 @@ class PathOrderer
             end
             i = i + 1
         end
-    end
-
-    private action SeamIndex(Contour loop) returns integer
-        integer best = 0
-        number bestD2 = 0.0
-        integer i = 0
-        repeat while i < loop:GetSize()
-            number dx = loop:xs:Get(i) - seamX
-            number dy = loop:ys:Get(i) - seamY
-            number d2 = dx * dx + dy * dy
-            if i = 0 or d2 < bestD2
-                best = i
-                bestD2 = d2
-            end
-            i = i + 1
-        end
-        return best
     end
 
     private action AddSpaced(Contour path, number x, number y, boolean isLast)
@@ -386,21 +345,6 @@ class PathOrderer
         end 
     end
 
-    private action NearestVertexDistance2(Contour loop, number x, number y) returns number
-        number best = 0.0
-        integer i = 0
-        repeat while i < loop:GetSize()
-            number dx = loop:xs:Get(i) - x
-            number dy = loop:ys:Get(i) - y
-            number d2 = dx * dx + dy * dy
-            if i = 0 or d2 < best
-                best = d2
-            end
-            i = i + 1
-        end
-        return best
-    end
-
     private action CollectLayer(Array<Contour> all, Array<integer> starts, Array<integer> order,
                                 integer p, Array<Contour> islands,
                                 Array<Contour> layerPaths, Array<integer> islandOf)
@@ -412,7 +356,7 @@ class PathOrderer
                 if path:closed
                     shortest = minLoopLength
                 end
-                if PathLength(path) >= shortest
+                if util:PathLength(path) >= shortest
                     layerPaths:Add(path) 
                     islandOf:Add(IslandOf(path, islands))
                 else
@@ -421,27 +365,6 @@ class PathOrderer
             end
             i = i + 1
         end
-    end
-
-    private action PathLength(Contour path) returns number
-        number total = 0.0
-        integer n = path:GetSize()
-        integer segments = n - 1
-        if path:closed
-            segments = n
-        end
-        integer i = 0
-        repeat while i < segments
-            integer k = i + 1
-            if k = n
-                k = 0
-            end
-            number dx = path:xs:Get(k) - path:xs:Get(i)
-            number dy = path:ys:Get(k) - path:ys:Get(i)
-            total = total + math:SquareRoot(dx * dx + dy * dy)
-            i = i + 1
-        end
-        return total
     end
 
     private action IslandOf(Contour path, Array<Contour> islands) returns integer
@@ -471,51 +394,5 @@ class PathOrderer
         end
 
         return best
-    end
-
-    private action Bucket(Array<Contour> list, integer planeCount, Array<integer> starts, Array<integer> order)
-        starts:Empty()
-        order:Empty()
-        integer p = 0
-        repeat while p <= planeCount
-            starts:Add(0) 
-            p = p + 1
-        end
-
-        integer c = 0
-        repeat while c < list:GetSize()
-            Contour con = list:Get(c) 
-            if con:planeIndex >= 0 and con:planeIndex < planeCount
-                starts:Set(con:planeIndex + 1, starts:Get(con:planeIndex + 1) + 1)
-            end
-            c = c + 1
-        end
-        p = 1
-        repeat while p <= planeCount
-            starts:Set(p, starts:Get(p) + starts:Get(p - 1))
-            p = p + 1
-        end
-
-        c = 0
-        repeat while c < starts:Get(planeCount) 
-            order:Add(0) 
-            c = c + 1
-        end
-        Array<integer> cursor
-        p = 0
-        repeat while p < planeCount
-            cursor:Add(starts:Get(p))
-            p = p + 1
-        end
-        c = 0
-        repeat while c < list:GetSize()
-            Contour con2 = list:Get(c) 
-            if con2:planeIndex >= 0 and con2:planeIndex < planeCount
-                integer slot = cursor:Get(con2:planeIndex)
-                order:Set(slot, c)
-                cursor:Set(con2:planeIndex, slot + 1)
-            end
-            c = c + 1
-        end
     end
 end

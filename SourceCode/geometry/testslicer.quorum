@@ -26,86 +26,99 @@ class TestSlicer
     number forcedUnitScale = 0.0
     number bedSize = 220.0
 
+    number minX = 0.0
+    number maxX = 0.0
+    number minY = 0.0
+    number maxY = 0.0
+    number minZ = 0.0
+    number maxZ = 0.0
+
     Math math
+    GeometryUtilities util
 
     action SetUnitScale(number scale)
         forcedUnitScale = scale
     end
 
     action SetTriangles(PlaneMesh meshData)
-        vertX = meshData:GetVertexX()
-        vertY = meshData:GetVertexY()
-        vertZ = meshData:GetVertexZ()
-        faceCorners = meshData:GetCorners()
-     
         Number64BitArray srcX = meshData:GetVertexX()
-        Number64BitArray srcY = meshData:GetVertexY()      
+        Number64BitArray srcY = meshData:GetVertexY()
         Number64BitArray srcZ = meshData:GetVertexZ()
-        
-        // find the direction that currently points up for model
+        faceCorners = meshData:GetCorners()
+        integer count = srcX:GetSize()
+        if count = 0
+            output "The mesh has no vertices"
+            return now
+        end
+
+        ComputeBounds(srcX, srcY, srcZ)
         integer base = FindBaseDirection(srcX, srcY, srcZ)
         output "Detected base direction: " + base
-        unitScale = DetectUnitScale(srcX, srcY, srcZ)
-        
-        // rotate the model so that Z points up
+        unitScale = DetectUnitScale()
+
+        // copy into our own arrays, rotated so the base faces -Z
+        Number64BitArray newX
+        Number64BitArray newY
+        Number64BitArray newZ
+        newX:SetSize(count)
+        newY:SetSize(count)
+        newZ:SetSize(count)
+        vertX = newX
+        vertY = newY
+        vertZ = newZ
+
         integer i = 0
-        repeat while i < srcX:GetSize() 
+        repeat while i < count
             number x = srcX:Get(i) * unitScale
             number y = srcY:Get(i) * unitScale
             number z = srcZ:Get(i) * unitScale
-        
-            if base = 4 // -z, z is already up
+
+            if base = 4         // base faces -Z: already upright
                 vertX:Set(i, x)
                 vertY:Set(i, y)
                 vertZ:Set(i, z)
-            elseif base = 5 // +z, z is upside down
+            elseif base = 5     // base faces +Z: upside down
                 vertX:Set(i, x)
                 vertY:Set(i, -y)
                 vertZ:Set(i, -z)
-            elseif base = 2 // -y, y is up
+            elseif base = 2     // base faces -Y: Y is up
                 vertX:Set(i, x)
                 vertY:Set(i, -z)
                 vertZ:Set(i, y)
-            elseif base = 3 // +y, y is upside down
+            elseif base = 3     // base faces +Y
                 vertX:Set(i, x)
                 vertY:Set(i, z)
                 vertZ:Set(i, -y)
-            elseif base = 0 // -x, x is up
+            elseif base = 0     // base faces -X: X is up
                 vertX:Set(i, -z)
                 vertY:Set(i, y)
                 vertZ:Set(i, x)
-            elseif base = 1 // +x, x is upside down
+            else                // base = 1, base faces +X
                 vertX:Set(i, z)
                 vertY:Set(i, y)
                 vertZ:Set(i, -x)
-            else
-                output "unable to find a suitable base :("
-                return now
             end
             i = i + 1
         end
-        
-        // offset Z so the lowest is 0
-        number lowZ = vertZ:Get(0) 
+
+        // shift so the lowest point is at Z = 0
+        number lowZ = vertZ:Get(0)
         i = 1
-        repeat while i < vertZ:GetSize()
-            if vertZ:Get(i) < lowZ
-                lowZ = vertZ:Get(i) 
-            end
+        repeat while i < count
+            lowZ = util:Min2(lowZ, vertZ:Get(i))
             i = i + 1
         end
-    
         i = 0
-        repeat while i < vertZ:GetSize() 
+        repeat while i < count
             vertZ:Set(i, vertZ:Get(i) - lowZ)
             i = i + 1
         end
-        
-        // remove duplicate edges
+
+        // merge vertices that sit at exactly the same position
         HashTable<text, integer> seen
         mergedIds:Empty()
         integer v = 0
-        repeat while v < vertX:GetSize()
+        repeat while v < count
             text key = "" + vertX:Get(v) + "_" + vertY:Get(v) + "_" + vertZ:Get(v)
             if seen:HasKey(key)
                 mergedIds:Add(seen:GetValue(key))
@@ -115,7 +128,7 @@ class TestSlicer
             end
             v = v + 1
         end
-        output "merged vertices: " + seen:GetSize() + " unique of " + vertX:GetSize()
+        output "merged vertices: " + seen:GetSize() + " unique of " + count
     end
 
     action GetSliceRange returns Array<number>
@@ -125,12 +138,8 @@ class TestSlicer
         number high = low
         integer i = 1
         repeat while i < vertZ:GetSize()
-            if vertZ:Get(i) < low
-                low = vertZ:Get(i) 
-            end 
-            if vertZ:Get(i) > high
-                high = vertZ:Get(i) 
-            end
+            low = util:Min2(low, vertZ:Get(i))
+            high = util:Max2(high, vertZ:Get(i))
             i = i + 1
         end
         // returns the min and max Z
@@ -168,56 +177,33 @@ class TestSlicer
         return faceCorners:Get(3*f+j)
     end
 
-    private action FloorToInt(number v) returns integer
-        integer res = cast(integer,v)
-        if v < 0 and cast(number, res) not= v
-            res = res - 1
-        end
-        return res
-    end
-
-    private action CeilingToInt(number v) returns integer
-        integer res = cast(integer,v)
-        if v > 0 and cast(number, res) not= v
-            res = res + 1
-        end
-        return res
-    end
-
+    // cuts every triangle with every plane it planes.
     action Slice(Array<number> planeZ) returns Array<Segment>
         Array<Segment> result
         Array<Crossing> crossings
-
         maxCrossingsPerFace = 0
         oddCount = 0
 
+        integer cornersPerFace = 3
         integer faceCount = GetFaceCount()
         integer planeCount = planeZ:GetSize()
 
-        // for every face we find zMin and zMax
         integer f = 0
         repeat while f < faceCount
-            integer degree = 3 // this should be a function but all faces are currently triangles
-
-            number zMin = vertZ:Get(GetCorner(f,0))
+            number zMin = vertZ:Get(GetCorner(f, 0))
             number zMax = zMin
-
             integer c = 1
-            repeat while c < degree
-                number z = vertZ:Get(GetCorner(f,c))
-                if z < zMin
-                    zMin = z
-                end
-                if z > zMax
-                    zMax = z
-                end
+            repeat while c < cornersPerFace
+                number z = vertZ:Get(GetCorner(f, c))
+                zMin = util:Min2(zMin, z)
+                zMax = util:Max2(zMax, z)
                 c = c + 1
             end
 
-            // optimization ! :D
-            integer idStart = CeilingToInt((zMin - firstPlaneZ) / planeDelta) - 1
-            integer idEnd = FloorToInt((zMax - firstPlaneZ) / planeDelta) + 1
-            
+            // only the planes between the triangle's lowest and highest
+            // corner can cut it (padded by one on each side for rounding)
+            integer idStart = util:CeilingToInt((zMin - firstPlaneZ) / planeDelta) - 1
+            integer idEnd = util:FloorToInt((zMax - firstPlaneZ) / planeDelta) + 1
             if idStart < 0
                 idStart = 0
             end
@@ -227,88 +213,39 @@ class TestSlicer
 
             integer i = idStart
             repeat while i <= idEnd
-                number planeValue = planeZ:Get(i)
-
                 crossings:Empty()
-                CollectCrossings(f,degree,planeValue,crossings)
+                CollectCrossings(f, cornersPerFace, planeZ:Get(i), crossings)
 
                 integer n = crossings:GetSize()
                 if n > maxCrossingsPerFace
                     maxCrossingsPerFace = n
                 end
-
-                // if even then z-montonic else not
+                // a closed triangle is crossed 0 or 2 times; odd means bad data
                 if n mod 2 not= 0
                     oddCount = oddCount + 1
                 elseif n = 2
-                    EmitPairs(crossings,i,result)
+                    EmitSegment(crossings, i, result)
                 end
-
                 i = i + 1
             end
             f = f + 1
         end
-        // returns all line segment array
         return result
     end
     
-    private action Max2(number a, number b) returns number
-        if a > b
-            return a
-        end
-        return b
-    end
-
-    private action Min2(number a, number b) returns number
-        if a < b
-            return a
-        end
-        return b
-    end 
-
+    // adds up each of the six sides of the bounding box, then takes areas
+    // of triangles from the model and select the base with the highest area
+    // coverage
     private action FindBaseDirection(Number64BitArray x, Number64BitArray y, Number64BitArray z) returns integer
-        integer base = 4
-        
-        // making a bounding box
-        number minX = x:Get(0)
-        number maxX = minX
-        number minY = y:Get(0)
-        number maxY = minX
-        number minZ = z:Get(0)
-        number maxZ = minX
-        
-        integer i = 1
-        repeat while i < x:GetSize()
-            if x:Get(i) < minX
-                minX = x:Get(i)
-            end
-            if x:Get(i) > maxX
-                maxX = x:Get(i)
-            end
-            if y:Get(i) < minY
-                minY = y:Get(i)
-            end
-            if y:Get(i) > maxY
-                maxY = y:Get(i)
-            end
-            if z:Get(i) < minZ
-                minZ = z:Get(i)
-            end
-            if z:Get(i) > maxZ
-                maxZ = z:Get(i)
-            end
+        number eps = 0.002 * util:Max2(maxX - minX, util:Max2(maxY - minY, maxZ - minZ))
+
+        Array<number> area
+        integer i = 0
+        repeat while i < 6
+            area:Add(0.0)
             i = i + 1
         end
-        
-        number eps = 0.002 * Max2(maxX - minX, Max2(maxY - minY, maxZ - minZ))
-        
-        Array<number> area
-        i = 0
-        repeat while i < 6
-            area:Add(0.0) 
-            i = i + 1
-        end        
-    
+
         integer f = 0
         repeat while f < GetFaceCount()
             integer i0 = GetCorner(f, 0)
@@ -321,6 +258,7 @@ class TestSlicer
             number by = y:Get(i2) - y:Get(i0)
             number bz = z:Get(i2) - z:Get(i0)
 
+            // face normal = cross product of two edges; its length is twice the area
             number nx = ay * bz - az * by
             number ny = az * bx - ax * bz
             number nz = ax * by - ay * bx
@@ -331,65 +269,76 @@ class TestSlicer
                 nx = nx / len
                 ny = ny / len
                 nz = nz / len
+                number loX = util:Min2(x:Get(i0), util:Min2(x:Get(i1), x:Get(i2)))
+                number hiX = util:Max2(x:Get(i0), util:Max2(x:Get(i1), x:Get(i2)))
+                number loY = util:Min2(y:Get(i0), util:Min2(y:Get(i1), y:Get(i2)))
+                number hiY = util:Max2(y:Get(i0), util:Max2(y:Get(i1), y:Get(i2)))
+                number loZ = util:Min2(z:Get(i0), util:Min2(z:Get(i1), z:Get(i2)))
+                number hiZ = util:Max2(z:Get(i0), util:Max2(z:Get(i1), z:Get(i2)))
 
-                if nx < -0.99 and Max2(x:Get(i0), Max2(x:Get(i1), x:Get(i2))) <= minX + eps
+                if nx < -0.99 and hiX <= minX + eps
                     area:Set(0, area:Get(0) + faceArea)
                 end
-                if nx > 0.99 and Min2(x:Get(i0), Min2(x:Get(i1), x:Get(i2))) >= maxX - eps
+                if nx > 0.99 and loX >= maxX - eps
                     area:Set(1, area:Get(1) + faceArea)
                 end
-                if ny < -0.99 and Max2(y:Get(i0), Max2(y:Get(i1), y:Get(i2))) <= minY + eps
+                if ny < -0.99 and hiY <= minY + eps
                     area:Set(2, area:Get(2) + faceArea)
                 end
-                if ny > 0.99 and Min2(y:Get(i0), Min2(y:Get(i1), y:Get(i2))) >= maxY - eps
+                if ny > 0.99 and loY >= maxY - eps
                     area:Set(3, area:Get(3) + faceArea)
                 end
-                if nz < -0.99 and Max2(z:Get(i0), Max2(z:Get(i1), z:Get(i2))) <= minZ + eps
+                if nz < -0.99 and hiZ <= minZ + eps
                     area:Set(4, area:Get(4) + faceArea)
                 end
-                if nz > 0.99 and Min2(z:Get(i0), Min2(z:Get(i1), z:Get(i2))) >= maxZ - eps
+                if nz > 0.99 and loZ >= maxZ - eps
                     area:Set(5, area:Get(5) + faceArea)
                 end
             end
             f = f + 1
         end
-        
+
+        integer base = 4
         i = 0
         repeat while i < 6
-            output "Base area toward direction " + i + ": " + area:Get(i) 
+            output "Base area toward direction " + i + ": " + area:Get(i)
             if area:Get(i) > area:Get(base) * 1.2
                 base = i
             end
             i = i + 1
         end
-
         return base
     end
 
-    private action DetectUnitScale(Number64BitArray x, Number64BitArray y, Number64BitArray z) returns number
+    private action ComputeBounds(Number64BitArray x, Number64BitArray y, Number64BitArray z)
+        minX = x:Get(0)
+        maxX = minX
+        minY = y:Get(0)
+        maxY = minY
+        minZ = z:Get(0)
+        maxZ = minZ
+        integer i = 1
+        repeat while i < x:GetSize()
+            minX = util:Min2(minX, x:Get(i))
+            maxX = util:Max2(maxX, x:Get(i))
+            minY = util:Min2(minY, y:Get(i))
+            maxY = util:Max2(maxY, y:Get(i))
+            minZ = util:Min2(minZ, z:Get(i))
+            maxZ = util:Max2(maxZ, z:Get(i))
+            i = i + 1
+        end
+    end
+    
+
+    // guesses the file's units based on the model's size
+    private action DetectUnitScale() returns number
         if forcedUnitScale > 0
             return forcedUnitScale
         end
-            
-        number minX = x:Get(0)
-        number maxX = minX
-        number minY = y:Get(0)
-        number maxY = minY
-        number minZ = z:Get(0)
-        number maxZ = minZ
-        integer i = 1
-        repeat while i < x:GetSize()
-            minX = Min2(minX, x:Get(i))
-            maxX = Max2(maxX, x:Get(i))
-            minY = Min2(minY, y:Get(i))
-            maxY = Max2(maxY, y:Get(i))
-            minZ = Min2(minZ, z:Get(i))
-            maxZ = Max2(maxZ, z:Get(i))
-            i = i + 1
-        end
-        number extent = Max2(maxX - minX, Max2(maxY - minY, maxZ - minZ))
+      
+        number extent = util:Max2(maxX - minX, util:Max2(maxY - minY, maxZ - minZ))
         output "Model extent in file units: " + extent
-    
+
         if extent <= 0
             return 1.0
         elseif extent < 1.0
@@ -400,94 +349,60 @@ class TestSlicer
         elseif extent > bedSize
             output "Warning: model is " + extent + " mm, larger than the bed. Check the export units"
         end
-
         return 1.0
     end
-
-    private action CollectCrossings(integer f, integer degree, number planeValue,
+    
+    // walks the edges of triangle f and records every edge that has
+    // one end below the plane and the other at or above it
+    private action CollectCrossings(integer f, integer cornersPerFace, number planeValue,
                                Array<Crossing> result)
-        // a degree is a point in our polygons
-        // so we want to go from edge to edge
-        // traveling from point to point finding
-        // every intersection in between that our
-        // planeValue causes
         integer j = 0
-        repeat while j < degree
-            integer k = j+1
-            if k = degree
+        repeat while j < cornersPerFace
+            integer k = j + 1
+            if k = cornersPerFace
                 k = 0
             end
-            // get the two edge indices
-            integer va = mergedIds:Get(GetCorner(f,j))
-            integer vb = mergedIds:Get(GetCorner(f,k))
-            // get the two edge z values
-            number za = vertZ:Get(va)
-            number zb = vertZ:Get(vb)
+            integer va = mergedIds:Get(GetCorner(f, j))
+            integer vb = mergedIds:Get(GetCorner(f, k))
+            boolean aBelow = vertZ:Get(va) < planeValue
+            boolean bBelow = vertZ:Get(vb) < planeValue
 
-            // want to see if one of edges is
-            // above the plane whilst the other is
-            // below the plane
-            boolean aBelow = za < planeValue
-            boolean bBelow = zb < planeValue
-
-            // if both edges are aboce or below a plane
-            // it is clear that there will be no intersection
-            // however if one is above and one is below, ie they're
-            // different booleans then we have an intersection
             if aBelow not= bBelow
-                // calculate percentage distance along the edge
-                // the numerator is how far above point A is the plane measured in z
-                // the denominator is the total z difference between A and B
-                // the ratio returns a value between 0 and 1 that express how far
-                // we have to travel between endpoints to reach where the plane is
-                // on the z axis
-
+                // Always interpolate from the lower vertex id to the higher
+                // one. The neighbouring triangle walks this edge the other
+                // way, and this makes both get bit-identical coordinates.
                 integer low = va
                 integer high = vb
                 if vb < va
                     low = vb
-                    high = va          
+                    high = va
                 end
 
+                // t = how far along the edge (0..1) the plane sits
                 number t = (planeValue - vertZ:Get(low)) / (vertZ:Get(high) - vertZ:Get(low))
 
-                // https://en.wikipedia.org/wiki/Linear_interpolation
                 Crossing point
                 point:x = vertX:Get(low) + t * (vertX:Get(high) - vertX:Get(low))
                 point:y = vertY:Get(low) + t * (vertY:Get(high) - vertY:Get(low))
-
-                // store the endpoint bounds that produced the crossing
-                integer ca = mergedIds:Get(va) 
-                integer cb = mergedIds:Get(vb) 
-                point:edgeHigh = ca
-                point:edgeLow = cb
-                
-                if cb < ca
-                    point:edgeLow = cb
-                    point:edgeHigh = ca
-                else
-                    point:edgeLow = ca
-                    point:edgeHigh = cb
-                end
-
-                point:above = aBelow
+                point:edgeLow = low
+                point:edgeHigh = high
+                point:rising = aBelow
                 result:Add(point)
             end
-
             j = j + 1
         end
     end
     
-    private action EmitPairs(Array<Crossing> points, integer planeIndex, Array<Segment> result)
-        Crossing a = points:Get(0)
-        Crossing b = points:Get(1)
-
-        Crossing from = a
-        Crossing to = b
-        
-        if a:above
-            from = b
-            to = a
+    // turns a triangle's two crossings into a segment,
+    // the rising crossing is always the end. Every segment
+    // runs the same way around the solid and orientation
+    // is consistent after chaining
+    private action EmitSegment(Array<Crossing> points, integer planeIndex, Array<Segment> result)
+        Crossing from = points:Get(0)
+        Crossing to = points:Get(1)
+        if from:rising
+            from = points:Get(1)
+            to = points:Get(0)
         end
 
         Segment s
@@ -500,7 +415,6 @@ class TestSlicer
         s:aHigh = from:edgeHigh
         s:bLow = to:edgeLow
         s:bHigh = to:edgeHigh
-
         result:Add(s)
     end
 end

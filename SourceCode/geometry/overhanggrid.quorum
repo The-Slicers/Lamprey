@@ -12,6 +12,8 @@ class OverhangGrid
     Array<integer> cells
     Array<integer> planeStart
 
+    GeometryUtilities util
+
     action SetCellSize(number size)
         if size > 0
             cellSize = size
@@ -59,6 +61,7 @@ class OverhangGrid
         planeStart:Empty()
         planeStart:Add(0)
         
+        // bounding box of every usable loop
         boolean any = false
         number minX = 0.0
         number minY = 0.0
@@ -67,7 +70,7 @@ class OverhangGrid
         integer c = 0
         repeat while c < contours:GetSize()
             Contour con = contours:Get(c)
-            if Usable(con, planeCount)
+            if util:IsUsableLoop(con, planeCount)
                 integer i = 0
                 repeat while i < con:GetSize()
                     number x = con:xs:Get(i)
@@ -79,18 +82,10 @@ class OverhangGrid
                         maxY = y
                         any = true
                     else
-                        if x < minX
-                            minX = x
-                        end
-                        if x > maxX
-                            maxX = x
-                        end
-                        if y < minY
-                            minY = y
-                        end
-                        if y > maxY
-                            maxY = y
-                        end
+                        minX = util:Min2(minX, x)
+                        maxX = util:Max2(maxX, x)
+                        minY = util:Min2(minY, y)
+                        maxY = util:Max2(maxY, y)
                     end
                     i = i + 1
                 end
@@ -106,7 +101,8 @@ class OverhangGrid
             end
             return now
         end
-    
+        
+        // keep grid under 4 million cells
         SizeGrid(minX, minY, maxX, maxY, allowance)
         repeat while cols * rows > 4000000
             cellSize = cellSize * 2.0
@@ -120,50 +116,10 @@ class OverhangGrid
         end
         
         Array<integer> starts
-        integer p = 0
-        repeat while p <= planeCount
-            starts:Add(0)
-            p = p + 1
-        end
-        
-        c = 0
-        repeat while c < contours:GetSize()
-            Contour con2 = contours:Get(c)
-            if Usable(con2, planeCount)
-                starts:Set(con2:planeIndex + 1, starts:Get(con2:planeIndex + 1) + 1)
-            end
-            c = c + 1
-        end
-
-        p = 1
-        repeat while p <= planeCount
-            starts:Set(p, starts:Get(p) + starts:Get(p - 1))
-            p = p + 1
-        end
-
-        Array<integer> fill
         Array<integer> order
-        p = 0
-        repeat while p < planeCount
-            fill:Add(starts:Get(p))
-            p = p + 1
-        end
-        c = 0
-        repeat while c < starts:Get(planeCount)
-            order:Add(0)
-            c = c + 1
-        end
-        c = 0
-        repeat while c < contours:GetSize()
-            Contour con3 = contours:Get(c)
-            if Usable(con3, planeCount)
-                integer slot = fill:Get(con3:planeIndex)
-                order:Set(slot, c)
-                fill:Set(con3:planeIndex, slot + 1)
-            end
-            c = c + 1
-        end
+        util:BucketUsableLoops(contours, planeCount, starts, order)
 
+        // two stamp grids, swapped every layer
         integer total = cols * rows
         Array<integer> stampA
         Array<integer> stampB
@@ -173,10 +129,11 @@ class OverhangGrid
             stampB:Add(0)
             t = t + 1
         end
-
+    
+        // every cell offset within the allowance circle
         Array<integer> offX
         Array<integer> offY
-        integer rc = FloorToInt(allowance / cellSize)
+        integer rc = util:FloorToInt(allowance / cellSize)
         number allow2 = allowance * allowance
         integer dy = -rc
         repeat while dy <= rc
@@ -205,7 +162,8 @@ class OverhangGrid
                 curr = stampB
                 prev = stampA
             end
-
+            
+            // stamps start at 1 so fresh = empty
             Rasterize(contours, order, starts:Get(p), starts:Get(p + 1),
                      curr, p + 1, spanRow, spanA, spanB)
 
@@ -233,6 +191,9 @@ class OverhangGrid
         end
     end
 
+    // fills the cells whose centres lie inside the layer's loops
+    // with stamp. every filled run of a row is also recorded in
+    // spanRow / spanA / spanB (row, first col, last col)
     private action Rasterize(Array<Contour> contours, Array<integer> order, integer from, integer to,
                              Array<integer> grid, integer stamp,
                              Array<integer> spanRow, Array<integer> spanA, Array<integer> spanB)
@@ -252,19 +213,16 @@ class OverhangGrid
             integer j = 0
             repeat while j < con:GetSize()  
                 number y = con:ys:Get(j)
-                if y < lowY
-                    lowY = y
-                end
-                if y > highY
-                    highY = y
-                end
+                lowY = util:Min2(lowY, con:ys:Get(j))
+                highY = util:Max2(highY, con:ys:Get(j))
                 j = j + 1
             end
             i = i + 1
         end
-
-        integer rStart = CeilingToInt((lowY - originY) / cellSize - 0.5)
-        integer rEnd = FloorToInt((highY - originY) / cellSize - 0.5) 
+        
+        // rows whose center line falls inside the layer's Y range
+        integer rStart = util:CeilingToInt((lowY - originY) / cellSize - 0.5)
+        integer rEnd = util:FloorToInt((highY - originY) / cellSize - 0.5) 
         if rStart < 0
             rStart = 0
         end
@@ -278,6 +236,7 @@ class OverhangGrid
             number yc = originY + (cast(number, r) + 0.5) * cellSize
             hits:Empty()
             
+            // where the row's center line crosses each loop edge
             i = from
             repeat while i < to
                 Contour con2 = contours:Get(order:Get(i))
@@ -300,12 +259,13 @@ class OverhangGrid
                 i = i + 1
             end
             
-            SortNumbers(hits)
+            util:SortNumbers(hits)
             
+            // crossings come in pairs
             integer q = 0
             repeat while q + 1 < hits:GetSize()
-                integer cA = CeilingToInt((hits:Get(q) - originX) / cellSize - 0.5)
-                integer cB = FloorToInt((hits:Get(q + 1) - originX) / cellSize - 0.5)
+                integer cA = util:CeilingToInt((hits:Get(q) - originX) / cellSize - 0.5)
+                integer cB = util:FloorToInt((hits:Get(q + 1) - originX) / cellSize - 0.5)
                 if cA < 0
                     cA = 0
                 end
@@ -328,16 +288,8 @@ class OverhangGrid
         end
     end
 
-    private action Usable(Contour con, integer planeCount) returns boolean
-        if not con:closed or con:GetSize() < 3
-            return false
-        end
-        if con:planeIndex < 0 or con:planeIndex >= planeCount
-            return false
-        end
-        return true
-    end
-
+    // true if any cell within the allowance of (row, col) was filled
+    // on the previous layer
     private action Supported(Array<integer> prev, integer prevStamp, integer row, integer col,
                              Array<integer> offX, Array<integer> offY) returns boolean
         integer i = 0
@@ -356,50 +308,14 @@ class OverhangGrid
         return false
     end
 
+    // places the grid over the bounding box with a margin
+    // of allowance plus two cells on every side
     private action SizeGrid(number minX, number minY, number maxX, number maxY,
                             number allowance)
         number margin = allowance + 2.0 * cellSize
         originX = minX - margin
         originY = minY - margin
-        cols = CeilingToInt((maxX - minX + 2.0 * margin) / cellSize) + 1
-        rows = CeilingToInt((maxY - minY + 2.0 * margin) / cellSize) + 1
-    end
-
-    // insertion sort :D
-    private action SortNumbers(Array<number> a)
-        integer i = 1
-        repeat while i < a:GetSize()
-            number v = a:Get(i) 
-            integer j = i - 1
-            boolean moving = true
-            repeat while moving
-                if j < 0
-                    moving = false
-                elseif a:Get(j) > v
-                    a:Set(j + 1, a:Get(j)) 
-                    j = j - 1
-                else
-                    moving = false
-                end
-            end
-            a:Set(j + 1, v)
-            i = i + 1
-        end
-    end
-    
-    private action FloorToInt(number a) returns integer
-        integer res = cast(integer, a)
-        if a < cast(number, res)
-            res = res - 1
-        end
-        return res
-    end
-
-    private action CeilingToInt(number a) returns integer
-        integer res = cast(integer, a)
-        if a > cast(number, res)
-            res = res + 1
-        end
-        return res
+        cols = util:CeilingToInt((maxX - minX + 2.0 * margin) / cellSize) + 1
+        rows = util:CeilingToInt((maxY - minY + 2.0 * margin) / cellSize) + 1
     end
 end

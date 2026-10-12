@@ -50,7 +50,7 @@ class SkirtGenerator
         c = 0
         repeat while c < contours:GetSize() 
             Contour con = contours:Get(c) 
-            if con:planeIndex < hullLayers and con:closed 
+            if UsedForHull(con)
                 integer i = 0
                 repeat while i < con:GetSize()
                     xs:Set(slot, con:xs:Get(i))
@@ -91,7 +91,7 @@ class SkirtGenerator
         repeat while i < loops
             Array<Contour> ring = offsetter:Offset(base, -(distance + lineWidth * (cast(number, i) + 0.5)))
             integer r = 0
-            repeat while r < rings:GetSize()
+            repeat while r < ring:GetSize()
                 rings:Add(ring:Get(r))
                 r = r + 1   
             end
@@ -103,8 +103,7 @@ class SkirtGenerator
             i = 0
             repeat while i < rings:GetSize() 
                 Contour src = rings:Get(i) 
-                Contour copy
-                copy:AppendAll(src)
+                Contour copy = src:Copy()
                 copy:closed = true
                 copy:planeIndex = layer
                 result:Add(copy)
@@ -113,5 +112,9 @@ class SkirtGenerator
             layer = layer + 1
         end
         return result
+    end
+
+    private action UsedForHull(Contour con) returns boolean
+        return con:closed and con:planeIndex >= 0 and con:planeIndex < hullLayers
     end
 end

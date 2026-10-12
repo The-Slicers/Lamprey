@@ -12,6 +12,8 @@ class ContourGenerator
     integer pointsAfter = 0
     integer droppedCount = 0
     
+    GeometryUtilities util
+
     action SetSimplifyTolerance(number tolerance)
         simplifyTolerance = tolerance
     end
@@ -38,70 +40,34 @@ class ContourGenerator
 
     action Build(Array<Segment> segments, integer planeCount, number maxGap) returns Array<Contour>
         Array<Contour> result
+        pointsBefore = 0
+        pointsAfter = 0
+        droppedCount = 0
         flippedCount = 0
 
         Array<integer> starts
-        integer p = 0
-        repeat while p <= planeCount
-            starts:Add(0) 
-            p = p + 1
-        end
-        
-        integer s = 0
-        repeat while s < segments:GetSize() 
-            Segment seg = segments:Get(s) 
-            starts:Set(seg:planeIndex + 1, starts:Get(seg:planeIndex + 1) + 1)
-            s = s + 1
-        end
-
-        p = 1
-        repeat while p <= planeCount
-            starts:Set(p, starts:Get(p) + starts:Get(p - 1))
-            p = p + 1
-        end
-
-        Array<integer> fill
         Array<integer> order
-        p = 0 
-        repeat while p < planeCount
-            fill:Add(starts:Get(p))
-            p = p + 1
-        end
-        
-        s = 0
-        repeat while s < segments:GetSize()
-            order:Add(0) 
-            s = s + 1
-        end
+        util:BucketSegments(segments, planeCount, starts, order)
 
-        s = 0
-        repeat while s < segments:GetSize() 
-            Segment seg2 = segments:Get(s) 
-            integer slot = fill:Get(seg2:planeIndex)
-            order:Set(slot, s)
-            fill:Set(seg2:planeIndex, slot + 1)
-            s = s + 1
-        end 
-        
-        p = 0
+        integer p = 0
         repeat while p < planeCount
-            if starts:Get(p + 1) > starts:Get(p) 
+            if starts:Get(p + 1) > starts:Get(p)
                 ChainPlane(segments, order, starts:Get(p), starts:Get(p + 1), p, maxGap, result)
             end
             p = p + 1
         end
-
         return result
     end
 
+    // builds the contours of one layer from segment order[from ... to]
     private action ChainPlane(Array<Segment> segments, Array<integer> order, integer from, integer to,
                               integer planeIndex, number maxGap, Array<Contour> result)
         integer n = to - from
         Array<boolean> used
         Array<Contour> open
         Array<Contour> planeResult
-        HashTable<text, integer> startMap
-        HashTable<text, integer> endMap
+        HashTable<text, integer> startMap // edge key -> segment starting it
+        HashTable<text, integer> endMap // edge key -> segment ending it
     
         integer i = 0
         repeat while i < n
@@ -117,7 +83,9 @@ class ContourGenerator
             end
             i = i + 1
         end
-    
+        
+        // pass 0: start only from segments no other segment leads into
+        // pass 1: whatever segments are left
         integer pass = 0
         repeat while pass < 2
             i = 0
@@ -140,7 +108,8 @@ class ContourGenerator
         end
         
         BridgeGaps(open, maxGap, planeResult)
-    
+        
+        // simplify contours, and drop small loops
         Array<Contour> cleaned
         i = 0
         repeat while i < planeResult:GetSize() 
@@ -151,19 +120,10 @@ class ContourGenerator
             end
             pointsAfter = pointsAfter + cand:GetSize() 
             
-            boolean keep = true
-            if cand:closed and minArea > 0
-                number area = cand:SignedArea2() / 2.0
-                if area < 0
-                    area = -area
-                end
-                if area < minArea
-                    keep = false
-                    droppedCount = droppedCount + 1
-                end
-            end
-            if keep
-                cleaned:Add(cand) 
+            if cand:closed and minArea > 0 and cand:Area() < minArea
+                droppedCount = droppedCount + 1
+            else
+                cleaned:Add(cand)
             end
             i = i + 1
         end
@@ -176,7 +136,10 @@ class ContourGenerator
             i = i + 1
         end
     end
-
+    
+    // sets depth and or isHole for each loop by counting the
+    // loops around it, then reversing any loops that run
+    // the wrong way
     private action OrientPlane(Array<Contour> contours)
         integer m = contours:GetSize() 
         integer i = 0
@@ -214,7 +177,9 @@ class ContourGenerator
             i = i + 1
         end
     end
-
+    
+    // follows segments from the seed until chain closes, runs out,
+    // or reaches a segment that is already in use
     private action WalkChain(Array<Segment> segments, Array<integer> order, integer from, integer seedLocal,
                              HashTable<text, integer> startMap, Array<boolean> used) returns Contour
         Contour c
@@ -250,6 +215,8 @@ class ContourGenerator
         return c
     end
 
+    // repeatedly joins the closest tail-to-head pair of open chains
+    // chains that are not able to be closed are marked as open
     private action BridgeGaps(Array<Contour> open, number maxGap, Array<Contour> result)
         Array<boolean> alive
         integer i = 0

@@ -6,14 +6,14 @@ use Libraries.Compute.Math
 
 class PolygonOps
     Math math
+    GeometryUtilities util
     number snap = 0.000001
+    number edgeTol = 0.000000001
 
     Array<number> ex0
     Array<number> ey0
     Array<number> ex1
     Array<number> ey1
-    Array<integer> edgeOp
-    integer operandCount = 0
 
     integer bandCount = 1
     number bandMin = 0.0
@@ -36,7 +36,6 @@ class PolygonOps
     Array<number> py1
     Array<integer> pieceFrom
     Array<integer> pieceTo
-    Array<integer> pieceOp
 
     HashTable<text, integer> nodeIds
     integer nodeCount = 0
@@ -48,22 +47,22 @@ class PolygonOps
 
     action Union(Array<Contour> a, Array<Contour> b, integer planeIndex) returns Array<Contour>
         Clear()
-        AddContours(a, 0, false)
-        AddContours(b, 1, false)
+        AddContours(a, false)
+        AddContours(b, false)
         return Resolve(1, planeIndex)
     end
 
     action Intersect(Array<Contour> a, Array<Contour> b, integer planeIndex) returns Array<Contour>
         Clear()
-        AddContours(a, 0, false)
-        AddContours(b, 1, false)
+        AddContours(a, false)
+        AddContours(b, false)
         return Resolve(2, planeIndex)
     end
 
     action Difference(Array<Contour> a, Array<Contour> b, integer planeIndex) returns Array<Contour>
         Clear()
-        AddContours(a, 0, false)
-        AddContours(b, 1, true)
+        AddContours(a, false)
+        AddContours(b, true)
         return Resolve(1, planeIndex)
     end
 
@@ -72,23 +71,10 @@ class PolygonOps
         ey0:Empty()
         ex1:Empty()
         ey1:Empty()
-        edgeOp:Empty()
-        operandCount = 0
-    end
-
-    action AddContours(Array<Contour> loops, integer operand, boolean reversed)
-        integer c = 0
-        repeat while c < loops:GetSize()
-            Contour con = loops:Get(c)
-            if con:closed
-                AddPoints(con:xs, con:ys, operand, reversed)
-            end
-            c = c + 1
-        end
     end
 
     // Adds one closed loop given as point lists (last point connects to first).
-    action AddPoints(Array<number> xs, Array<number> ys, integer operand, boolean reversed)
+    action AddPoints(Array<number> xs, Array<number> ys, boolean reversed)
         Array<number> lx
         Array<number> ly
         integer n = xs:GetSize()
@@ -140,11 +126,18 @@ class PolygonOps
             ey0:Add(ly:Get(i))
             ex1:Add(lx:Get(k))
             ey1:Add(ly:Get(k))
-            edgeOp:Add(operand)
             i = i + 1
         end
-        if operand + 1 > operandCount
-            operandCount = operand + 1
+    end
+
+    action AddContours(Array<Contour> loops, boolean reversed)
+        integer c = 0
+        repeat while c < loops:GetSize()
+            Contour con = loops:Get(c)
+            if con:closed
+                AddPoints(con:xs, con:ys, reversed)
+            end
+            c = c + 1
         end
     end
 
@@ -162,13 +155,13 @@ class PolygonOps
         number highY = lowY
         integer e = 0
         repeat while e < edgeCount
-            lowX = Min2(lowX, ex0:Get(e))
-            highX = Max2(highX, ex0:Get(e))
-            lowY = Min2(lowY, ey0:Get(e))
-            highY = Max2(highY, ey0:Get(e))
+            lowX = util:Min2(lowX, ex0:Get(e))
+            highX = util:Max2(highX, ex0:Get(e))
+            lowY = util:Min2(lowY, ey0:Get(e))
+            highY = util:Max2(highY, ey0:Get(e))
             e = e + 1
         end
-        span = Max2(highX - lowX, highY - lowY)
+        span = util:Max2(highX - lowX, highY - lowY)
         if span <= 0
             span = 1.0
         end
@@ -235,8 +228,8 @@ class PolygonOps
         number hi = lo
         integer e = 0
         repeat while e < edgeCount
-            lo = Min2(lo, Min2(ey0:Get(e), ey1:Get(e)))
-            hi = Max2(hi, Max2(ey0:Get(e), ey1:Get(e)))
+            lo = util:Min2(lo, util:Min2(ey0:Get(e), ey1:Get(e)))
+            hi = util:Max2(hi, util:Max2(ey0:Get(e), ey1:Get(e)))
             e = e + 1
         end
 
@@ -264,8 +257,8 @@ class PolygonOps
 
         e = 0
         repeat while e < edgeCount
-            integer first = BandOf(Min2(ey0:Get(e), ey1:Get(e)))
-            integer last = BandOf(Max2(ey0:Get(e), ey1:Get(e)))
+            integer first = BandOf(util:Min2(ey0:Get(e), ey1:Get(e)))
+            integer last = BandOf(util:Max2(ey0:Get(e), ey1:Get(e)))
             edgeFirstBand:Add(first)
             edgeLastBand:Add(last)
             integer k = first
@@ -306,7 +299,7 @@ class PolygonOps
     end
 
     private action BandOf(number y) returns integer
-        integer b = FloorToInt((y - bandMin) / bandHeight)
+        integer b = util:FloorToInt((y - bandMin) / bandHeight)
         if b < 0
             return 0
         end
@@ -348,10 +341,10 @@ class PolygonOps
     end
 
     private action TestPair(integer a, integer b)
-        if Max2(ex0:Get(a), ex1:Get(a)) < Min2(ex0:Get(b), ex1:Get(b))
+        if util:Max2(ex0:Get(a), ex1:Get(a)) < util:Min2(ex0:Get(b), ex1:Get(b))
             return now
         end
-        if Max2(ex0:Get(b), ex1:Get(b)) < Min2(ex0:Get(a), ex1:Get(a))
+        if util:Max2(ex0:Get(b), ex1:Get(b)) < util:Min2(ex0:Get(a), ex1:Get(a))
             return now
         end
 
@@ -366,12 +359,12 @@ class PolygonOps
         if lenA = 0 or lenB = 0
             return now
         end
-        number tol = 0.000000001
+        number tol = edgeTol
         number den = rx * sy - ry * sx
 
-        if AbsNum(den) <= 0.000000000001 * lenA * lenB
+        if util:AbsNum(den) <= 0.000000000001 * lenA * lenB
             // parallel: only matters if they lie on the same line
-            if AbsNum(wx * ry - wy * rx) > tol * lenA * Max2(lenA, lenB)
+            if util:AbsNum(wx * ry - wy * rx) > tol * lenA * util:Max2(lenA, lenB)
                 return now
             end
             // overlapping: cut each edge where the other one starts or ends
@@ -416,7 +409,7 @@ class PolygonOps
         number ry = ey1:Get(edge) - ey0:Get(edge)
         number len2 = rx * rx + ry * ry
         number t = ((x - ex0:Get(edge)) * rx + (y - ey0:Get(edge)) * ry) / len2
-        number tol = 0.000000001
+        number tol = edgeTol
         if t > tol and t < 1 - tol
             AddSplit(edge, t, x, y)
         end
@@ -507,7 +500,6 @@ class PolygonOps
         py1:Empty()
         pieceFrom:Empty()
         pieceTo:Empty()
-        pieceOp:Empty()
         nodeIds:Empty()
         nodeCount = 0
 
@@ -521,27 +513,26 @@ class PolygonOps
                 number sx = splitX:Get(s)
                 number sy = splitY:Get(s)
                 if sx not= x or sy not= y
-                    AddPiece(x, y, sx, sy, edgeOp:Get(e))
+                    AddPiece(x, y, sx, sy)
                     x = sx
                     y = sy
                 end
                 q = q + 1
             end
             if ex1:Get(e) not= x or ey1:Get(e) not= y
-                AddPiece(x, y, ex1:Get(e), ey1:Get(e), edgeOp:Get(e))
+                AddPiece(x, y, ex1:Get(e), ey1:Get(e))
             end
             e = e + 1
         end
     end
 
-    private action AddPiece(number x0, number y0, number x1, number y1, integer operand)
+    private action AddPiece(number x0, number y0, number x1, number y1)
         px0:Add(x0)
         py0:Add(y0)
         px1:Add(x1)
         py1:Add(y1)
         pieceFrom:Add(NodeId(x0, y0))
         pieceTo:Add(NodeId(x1, y1))
-        pieceOp:Add(operand)
     end
 
     private action NodeId(number x, number y) returns integer
@@ -579,7 +570,7 @@ class PolygonOps
         number my = (y0 + y1) / 2.0
 
         // pass 1: shrink the test distance below the gap to nearby edges
-        number d = Min2(delta, 0.0001 * len)
+        number d = util:Min2(delta, 0.0001 * len)
         number onLine = 0.000000000001 * span
         integer b0 = BandOf(my - delta)
         integer b1 = BandOf(my + delta)
@@ -590,7 +581,7 @@ class PolygonOps
                 integer e = bandEdges:Get(k)
                 if FirstBandIn(e, b0) = b
                     if NearBox(e, mx, my, d)
-                        number gap = math:SquareRoot(SegmentDistance2(mx, my, e))
+                        number gap = math:SquareRoot(EdgeDistance2(mx, my, e))
                         if gap > onLine and 0.25 * gap < d
                             d = 0.25 * gap
                         end
@@ -632,57 +623,27 @@ class PolygonOps
     end
 
     private action NearBox(integer e, number x, number y, number r) returns boolean
-        if Min2(ex0:Get(e), ex1:Get(e)) > x + r or Max2(ex0:Get(e), ex1:Get(e)) < x - r
+        if util:Min2(ex0:Get(e), ex1:Get(e)) > x + r or util:Max2(ex0:Get(e), ex1:Get(e)) < x - r
             return false
         end
-        if Min2(ey0:Get(e), ey1:Get(e)) > y + r or Max2(ey0:Get(e), ey1:Get(e)) < y - r
+        if util:Min2(ey0:Get(e), ey1:Get(e)) > y + r or util:Max2(ey0:Get(e), ey1:Get(e)) < y - r
             return false
         end
         return true
     end
 
-    // Squared distance from (px, py) to edge e.
+    
     // Points closer than snap (mm) on both axes count as the same point.
     // Without this an offset corner that lands 0.000000000000003 mm from
     // its neighbour makes an edge too short to test, and the whole loop
     // is lost (cube layer 93: walls but no skin or infill).
     private action SamePoint(number ax, number ay, number bx, number by) returns boolean
-        number dx = ax - bx
-        number dy = ay - by
-        if dx < 0
-            dx = -dx
-        end
-        if dy < 0
-            dy = -dy
-        end
-        if dx <= snap
-            if dy <= snap
-                return true
-            end
-        end
-        return false
+        return util:AbsNum(ax - bx) <= snap and util:AbsNum(ay - by) <= snap
     end
-
-    private action SegmentDistance2(number px, number py, integer e) returns number
-        number ax = ex0:Get(e)
-        number ay = ey0:Get(e)
-        number vx = ex1:Get(e) - ax
-        number vy = ey1:Get(e) - ay
-        number wx = px - ax
-        number wy = py - ay
-        number len2 = vx * vx + vy * vy
-        number t = 0.0
-        if len2 > 0
-            t = (wx * vx + wy * vy) / len2
-            if t < 0
-                t = 0.0
-            elseif t > 1
-                t = 1.0
-            end
-        end
-        number dx = wx - t * vx
-        number dy = wy - t * vy
-        return dx * dx + dy * dy
+    
+    // Squared distance from (px, py) to edge e.
+    private action EdgeDistance2(number px, number py, integer e) returns number
+        return util:SegmentDistance2(px, py, ex0:Get(e), ey0:Get(e), ex1:Get(e), ey1:Get(e))
     end
 
     private action Contribution(integer e, number px, number py) returns integer
@@ -797,7 +758,7 @@ class PolygonOps
             return now
         end
         number area2 = loop:SignedArea2()
-        if AbsNum(area2) < 0.000000001 * span * span
+        if util:AbsNum(area2) < 0.000000001 * span * span
             return now
         end
         loop:closed = true
@@ -809,34 +770,5 @@ class PolygonOps
             loop:depth = 1
         end
         result:Add(loop)
-    end
-
-    private action AbsNum(number a) returns number
-        if a < 0
-            return -a
-        end
-        return a
-    end
-
-    private action Min2(number a, number b) returns number
-        if a < b
-            return a
-        end
-        return b
-    end
-
-    private action Max2(number a, number b) returns number
-        if a > b
-            return a
-        end
-        return b
-    end
-
-    private action FloorToInt(number v) returns integer
-        integer res = cast(integer, v)
-        if v < cast(number, res)
-            res = res - 1
-        end
-        return res
     end
 end

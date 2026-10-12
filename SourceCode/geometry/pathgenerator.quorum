@@ -16,10 +16,12 @@ class PathGenerator
     Array<Contour> skin
     Array<Contour> infill
 
+    // the outlines being processed, grouped by plane
     Array<Contour> source
     Array<integer> layerStart
     Array<integer> layerOrder
 
+    // area left inside the walls on each plane (inner[innerStart[p] ... inner[innerStart[p + 1]]])
     Array<Contour> inner
     Array<integer> innerStart
 
@@ -28,6 +30,7 @@ class PathGenerator
     Math math
     Offsetter offsetter
     PolygonOps ops
+    GeometryUtilities util
 
     action SetLineWidth(number width)
         lineWidth = width
@@ -79,7 +82,7 @@ class PathGenerator
         innerStart:Empty()
         source = contours
         planeTotal = planeCount
-        GroupByPlane(contours, planeCount)
+        util:BucketUsableLoops(contours, planeCount, layerStart, layerOrder)
 
         // pass 1: walls and inner areas for every plane
         integer p = 0
@@ -87,6 +90,8 @@ class PathGenerator
             innerStart:Add(inner:GetSize())
             Array<Contour> layer = LayerContours(p)
             if layer:GetSize() > 0
+                // the center line of wall sits (w + 0.5)
+                // line widths inside the outline
                 integer w = 0
                 repeat while w < wallCount
                     Array<Contour> ring = offsetter:Offset(layer, lineWidth * (cast(number, w) + 0.5))
@@ -112,24 +117,29 @@ class PathGenerator
         innerStart:Add(inner:GetSize())
 
         // pass 2: skin and infill (needs the inner areas of neighbours)
+        number sparseSpacing = lineWidth
+        if infillDensity > 0
+            sparseSpacing = lineWidth / util:Min2(infillDensity, 1.0)
+        end
         p = 0
         repeat while p < planeCount
             Array<Contour> layer2 = LayerContours(p)
             Array<Contour> innerArea = InnerContours(p)
             if layer2:GetSize() > 0 and innerArea:GetSize() > 0
+                // fill area = inner area grown back into the last wall by the overlap
                 number inset = lineWidth * (cast(number, wallCount) + 0.5 - infillOverlap)
                 Array<Contour> fillArea = offsetter:Offset(layer2, inset)
                 if fillArea:GetSize() > 0
                     Array<Contour> skinArea = FindSkin(p, innerArea)
                     if skinArea:GetSize() > 0
                         Array<Contour> solid = ops:Intersect(fillArea, skinArea, p)
-                        Array<Contour> sparse = ops:Difference(fillArea, skinArea, p)
                         AddLines(solid, p, lineWidth, skin)
                         if infillDensity > 0
-                            AddLines(sparse, p, lineWidth / MinNum(infillDensity, 1.0), infill)
+                            Array<Contour> sparse = ops:Difference(fillArea, skinArea, p)
+                            AddLines(sparse, p, lineWidth / util:Min2(infillDensity, 1.0), infill)
                         end
                     elseif infillDensity > 0
-                        AddLines(fillArea, p, lineWidth / MinNum(infillDensity, 1.0), infill)
+                        AddLines(fillArea, p, lineWidth / util:Min2(infillDensity, 1.0), infill)
                     end
                 end
             end
@@ -222,18 +232,14 @@ class PathGenerator
         number highY = lowY
         integer v = 0
         repeat while v < ry:GetSize()
-            if ry:Get(v) < lowY
-                lowY = ry:Get(v)
-            end
-            if ry:Get(v) > highY
-                highY = ry:Get(v)
-            end
+            lowY = util:Min2(lowY, ry:Get(v))
+            highY = util:Max2(highY, ry:Get(v))
             v = v + 1
         end
 
         Array<number> hits
         integer lineCount = 0
-        integer line = CeilingToInt(lowY / spacing)
+        integer line = util:CeilingToInt(lowY / spacing)
         repeat while cast(number, line) * spacing <= highY
             number scanY = cast(number, line) * spacing
             hits:Empty()
@@ -260,7 +266,7 @@ class PathGenerator
                 L = L + 1
             end
 
-            SortNumbers(hits)
+            util:SortNumbers(hits)
 
             integer q = 0
             repeat while q + 1 < hits:GetSize()
@@ -273,6 +279,7 @@ class PathGenerator
                         a = b
                         b = swap
                     end
+                    // rotate the two ends by +angle
                     Contour seg
                     seg:AddPoint(a * cs - scanY * sn, a * sn + scanY * cs)
                     seg:AddPoint(b * cs - scanY * sn, b * sn + scanY * cs)
@@ -284,50 +291,6 @@ class PathGenerator
             end
             lineCount = lineCount + 1
             line = line + 1
-        end
-    end
-
-    private action GroupByPlane(Array<Contour> contours, integer planeCount)
-        layerStart:Empty()
-        layerOrder:Empty()
-        integer p = 0
-        repeat while p <= planeCount
-            layerStart:Add(0)
-            p = p + 1
-        end
-        integer c = 0
-        repeat while c < contours:GetSize()
-            Contour con = contours:Get(c)
-            if Usable(con, planeCount)
-                layerStart:Set(con:planeIndex + 1, layerStart:Get(con:planeIndex + 1) + 1)
-            end
-            c = c + 1
-        end
-        p = 1
-        repeat while p <= planeCount
-            layerStart:Set(p, layerStart:Get(p) + layerStart:Get(p - 1))
-            p = p + 1
-        end
-        c = 0
-        repeat while c < layerStart:Get(planeCount)
-            layerOrder:Add(0)
-            c = c + 1
-        end
-        Array<integer> cursor
-        p = 0
-        repeat while p < planeCount
-            cursor:Add(layerStart:Get(p))
-            p = p + 1
-        end
-        c = 0
-        repeat while c < contours:GetSize()
-            Contour con2 = contours:Get(c)
-            if Usable(con2, planeCount)
-                integer slot = cursor:Get(con2:planeIndex)
-                layerOrder:Set(slot, c)
-                cursor:Set(con2:planeIndex, slot + 1)
-            end
-            c = c + 1
         end
     end
 
@@ -349,51 +312,5 @@ class PathGenerator
             k = k + 1
         end
         return area
-    end
-
-    private action Usable(Contour con, integer planeCount) returns boolean
-        if not con:closed or con:GetSize() < 3
-            return false
-        end
-        if con:planeIndex < 0 or con:planeIndex >= planeCount
-            return false
-        end
-        return true
-    end
-
-    private action SortNumbers(Array<number> a)
-        integer i = 1
-        repeat while i < a:GetSize()
-            number value = a:Get(i)
-            integer j = i - 1
-            boolean moving = true
-            repeat while moving
-                if j < 0
-                    moving = false
-                elseif a:Get(j) > value
-                    a:Set(j + 1, a:Get(j))
-                    j = j - 1
-                else
-                    moving = false
-                end
-            end
-            a:Set(j + 1, value)
-            i = i + 1
-        end
-    end
-
-    private action MinNum(number a, number b) returns number
-        if a < b
-            return a
-        end
-        return b
-    end
-
-    private action CeilingToInt(number v) returns integer
-        integer res = cast(integer, v)
-        if v > cast(number, res)
-            res = res + 1
-        end
-        return res
     end
 end

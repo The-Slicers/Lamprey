@@ -18,7 +18,8 @@ class Gcode
 
     integer nozzleTemp = 210
     integer bedTemp = 60
-
+    
+    // mm/s
     number travelSpeed = 80.0
     number outerWallSpeed = 35.0
     number innerWallSpeed = 35.0
@@ -32,6 +33,13 @@ class Gcode
     integer maxRetracts = 10
     number retractWindow = 1.0
 
+    number minLayerTime = 10.0
+    number minPrintSpeed = 10.0
+
+    boolean dryRun = false
+    number dryRunLift = 20.0
+    
+    // state while writing
     number posX = 0.0
     number posY = 0.0
     boolean retracted = false
@@ -41,22 +49,17 @@ class Gcode
     number totalFilament = 0.0
     number totalSeconds = 0.0
     integer lastSpeed = -1
-    Array<number> retractHistory
+    Array<number> retractHistory // total filament at each recent retract
     integer skippedRetracts = 0
-    Array<number> layerFactor
+    Array<number> layerFactor // speed multiplier per layer
     integer slowedLayers = 0
-
-    number minLayerTime = 10.0
-    number minPrintSpeed = 10.0
-
-    boolean dryRun = false
-    number dryRunLift = 20.0
 
     text startFile = "start.gcode"
     text endFile = "end.gcode"
 
     Math math
     FileWriter writer
+    GeometryUtilities util
     
     action SetLayerHeight(number height)
         layerHeight = height
@@ -114,7 +117,8 @@ class Gcode
     action SetEndGCodeFile(text path)
         endFile = path
     end
-
+    
+    // write all paths, in order and grouped by layer, to filePath
     action Write(Array<Contour> paths, text filePath)
         filamentArea = 3.141592653589793 * (filamentDiameter / 2.0) * (filamentDiameter / 2.0)
         totalFilament = 0.0
@@ -176,21 +180,13 @@ class Gcode
         if speed < minPrintSpeed
             speed = minPrintSpeed
         end
-        text feature = "FILL"
-        if path:role = 0
-            feature = "WALL-OUTER"
-        elseif path:role = 1
-            feature = "WALL-INNER"
-        elseif path:role = 2
-            feature = "SKIN"
-        elseif path:role = 4
-            feature = "SKIRT"
-        end
+        text feature = FeatureName(path:role)
         Line(";TYPE:" + feature)
 
         TravelTo(path:HeadX() + offsetX, path:HeadY() + offsetY)
         Unretract()
-
+    
+        // mm of filament per mm of path
         number e = lineWidth * layerHeight / filamentArea * flow
         integer segments = n - 1
         if path:closed 
@@ -214,6 +210,7 @@ class Gcode
                 if not dryRun
                     move = move + " E" + Fixed(amount, 5)
                 end
+                // F is modal, so it only writes it when it changes
                 integer feed = Feed(speed)
                 if feed not= lastSpeed
                     move = move + " F" + feed
@@ -300,6 +297,7 @@ class Gcode
         end
     end
     
+    // creates a start or end g-code template if file doesn't exist
     private action EnsureTemplate(text path, boolean isStart)
         File file
         file:SetPath(path) 
@@ -416,7 +414,9 @@ class Gcode
         posX = x
         posY = y
     end
-
+    
+    // sets offsetX and Y so that the middle of the model's
+    // footprint lands on the middle of the bed
     private action CenterOnBed(Array<Contour> paths)
         boolean any = false
         number lowX = 0.0
@@ -437,18 +437,10 @@ class Gcode
                     highY = y
                     any = true
                 else
-                    if x < lowX
-                        lowX = x
-                    end
-                    if x > highX
-                        highX = x
-                    end
-                    if y < lowY
-                        lowY = y
-                    end
-                    if y > highY
-                        highY = y
-                    end
+                    lowX = util:Min2(lowX, x)
+                    highX = util:Max2(highX, x)
+                    lowY = util:Min2(lowY, y)
+                    highY = util:Max2(highY, y)
                 end
                 j = j + 1
             end
@@ -462,6 +454,9 @@ class Gcode
         end
     end
 
+    // estimates each layers print time at full speed and
+    // for layers under minLayerTime, stores factors that
+    // causes it
     private action PlanLayerSpeeds(Array<Contour> paths)
         layerFactor:Empty()
         slowedLayers = 0
@@ -484,7 +479,7 @@ class Gcode
         repeat while i < paths:GetSize()
             Contour path2 = paths:Get(i)
             if path2:planeIndex >= 0
-                number t = seconds:Get(path2:planeIndex) + PathLength(path2) / SpeedFor(path2, path2:planeIndex)
+                number t = seconds:Get(path2:planeIndex) + util:PathLength(path2) / SpeedFor(path2, path2:planeIndex)
                 seconds:Set(path2:planeIndex, t)
             end
             i = i + 1
@@ -501,28 +496,8 @@ class Gcode
             i = i + 1
         end
     end
-
-    private action PathLength(Contour path) returns number
-        number total = 0.0
-        integer n = path:GetSize()
-        integer segments = n - 1
-        if path:closed
-            segments = n
-        end
-        integer i = 0
-        repeat while i < segments
-            integer j = i + 1
-            if j = n
-                j = 0
-            end
-            number dx = path:xs:Get(j) - path:xs:Get(i)
-            number dy = path:ys:Get(j) - path:ys:Get(i)
-            total = total + math:SquareRoot(dx * dx + dy * dy)
-            i = i + 1
-        end
-        return total
-    end
-
+    
+    // selects print speed based on role
     private action SpeedFor(Contour path, integer layer) returns number
         if layer = 0
             return firstLayerSpeed
@@ -537,6 +512,20 @@ class Gcode
             return firstLayerSpeed
         end    
         return infillSpeed
+    end
+    
+    // cura feature naming convention
+    private action FeatureName(integer role) returns text
+        if role = 0
+            return "WALL-OUTER"
+        elseif role = 1
+            return "WALL-INNER"
+        elseif role = 2
+            return "SKIN"
+        elseif role = 4
+            return "SKIRT"
+        end
+        return "FILL"
     end
 
     private action LayerFactor(integer layer) returns number
@@ -557,41 +546,48 @@ class Gcode
         end
     end
 
+    // retracts unless maxRetracts already happened within
+    // the last retractWindow mm of filament
     private action Retract
         if dryRun
             return now
         end
-        if not retracted
-            integer recent = 0
-            integer h = retractHistory:GetSize() - 1
-            boolean inWindow = true
-            repeat while h >= 0 and inWindow
-                if totalFilament - retractHistory:Get(h) < retractWindow
-                    recent = recent + 1
-                    h = h - 1
-                else
-                    inWindow = false
-                end
-            end
-            if recent >= maxRetracts
-                skippedRetracts = skippedRetracts + 1
-                return now
-            end
-            retractHistory:Add(totalFilament)
-            Line("G1 E-" + Fixed(retractLength, 3) + " F" + Feed(retractSpeed))
-            retracted = true
-            lastSpeed = -1
+        if retracted
+            return now
         end
+
+        integer recent = 0
+        integer h = retractHistory:GetSize() - 1
+        boolean inWindow = true
+        repeat while h >= 0 and inWindow
+            if totalFilament - retractHistory:Get(h) < retractWindow
+                recent = recent + 1
+                h = h - 1
+            else
+                inWindow = false
+            end
+        end
+        if recent >= maxRetracts
+            skippedRetracts = skippedRetracts + 1
+            return now
+        end
+
+        retractHistory:Add(totalFilament)
+        Line("G1 E-" + Fixed(retractLength, 3) + " F" + Feed(retractSpeed))
+        retracted = true
+        lastSpeed = -1
     end
     
     private action Line(text val)
         writer:WriteLine(val)
     end
-
+    
+    // mm/s to the mm/min G-code expects
     private action Feed(number mmPerSecond) returns integer
         return cast(integer, mmPerSecond * 60.0 + 0.5)
     end
     
+    // ensures that all numbers are decimal and not exponent notation
     private action Fixed(number val, integer decimals) returns text
         integer scale = 1
         integer d = 0

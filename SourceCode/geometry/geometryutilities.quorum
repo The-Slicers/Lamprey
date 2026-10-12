@@ -1,0 +1,217 @@
+package geometry
+
+use Libraries.Containers.Array
+use Libraries.Compute.Math 
+
+class GeometryUtilities
+    Math math
+
+    action Min2(number a, number b) returns number
+        if a < b
+            return a
+        end
+        return b
+    end
+
+    action Max2(number a, number b) returns number
+        if a > b
+            return a
+        end
+        return b
+    end
+
+    action AbsNum(number a) returns number
+        if a < 0
+            return -a
+        end
+        return a
+    end
+
+    action FloorToInt(number v) returns integer
+        integer res = cast(integer, v)
+        if v < cast(number, res)
+            res = res - 1
+        end
+        return res
+    end
+
+    action CeilingToInt(number v) returns integer
+        integer res = cast(integer, v)
+        if v < cast(number, res)
+            res = res + 1
+        end
+        return res
+    end
+    
+    // insertion sort
+    action SortNumbers(Array<number> a)
+        integer i = 1
+        repeat while i < a:GetSize() 
+            number val = a:Get(i) 
+            integer j = i - 1
+            boolean moving = true
+            repeat while moving
+                if j < 0
+                    moving = false
+                elseif a:Get(j) > val
+                    a:Set(j + 1, a:Get(j)) 
+                    j = j - 1
+                else
+                    moving = false
+                end
+            end
+            a:Set(j + 1, val)
+            i = i + 1
+        end
+    end
+    
+    // squared distance from point p to the segment A - B
+    action SegmentDistance2(number px, number py, number ax, number ay, number bx, number by) returns number
+        number vx = bx - ax
+        number vy = by - ay
+        number wx = px - ax
+        number wy = py - ay
+        number len2 = vx * vx + vy * vy
+        number t = 0.0
+        if len2 > 0.0
+            t = (wx * vx + wy * vy) / len2
+            if t < 0
+                t = 0.0
+            elseif t > 1
+                t = 1.0 
+            end
+        end
+        number dx = wx - t * vx
+        number dy = wy - t * vy
+        return dx * dx + dy * dy
+    end
+
+    // total length of a path in mm, including the closing edge of a loop
+    action PathLength(Contour path) returns number
+        number total = 0.0
+        integer n = path:GetSize()
+        integer segments = n - 1
+        if path:closed
+
+        end
+        integer i = 0
+        repeat while i < segments
+            integer j = i + 1
+            if j = n
+                j = 0
+            end
+            number dx = path:xs:Get(j) - path:xs:Get(i) 
+            number dy = path:ys:Get(j) - path:ys:Get(i)
+            total = total + math:SquareRoot(dx * dx + dy * dy)
+            i = i + 1
+        end
+        return total
+    end
+    
+    // determines if input is a closed loop with an area on a plane that exists
+    action IsUsableLoop(Contour con, integer planeCount) returns boolean
+        if not con:closed or con:GetSize() < 3
+            return false
+        end
+        return InPlaneRange(con:planeIndex, planeCount)
+    end
+
+    action InPlaneRange(integer planeIndex, integer planeCount) returns boolean
+        return planeIndex >= 0 and planeIndex < planeCount
+    end
+
+    // starts = planeCount + 1 entries, plane p owns order[starts[p] ... starts[p + 1]]
+    // order = indices in original list, grouped by plane original order kept in each plane
+
+    // every contour on a valid plane
+    action BucketContours(Array<Contour> list, integer planeCount,
+                          Array<integer> starts, Array<integer> order)
+        Array<integer> planeOf
+        integer c = 0
+        repeat while c < list:GetSize()
+            Contour con = list:Get(c) 
+            planeOf:Add(con:planeIndex)
+            c = c + 1
+        end
+        BucketIndices(planeOf, planeCount, starts, order)
+    end
+
+    // only closed loops with at least 3 points
+    action BucketUsableLoops(Array<Contour> list, integer planeCount,
+                             Array<integer> starts, Array<integer> order)
+        Array<integer> planeOf
+        integer c = 0
+        repeat while c < list:GetSize() 
+            Contour con = list:Get(c) 
+            if IsUsableLoop(con, planeCount)
+                planeOf:Add(con:planeIndex)
+            else
+                planeOf:Add(-1)
+            end
+            c = c + 1   
+        end
+        BucketIndices(planeOf, planeCount, starts, order)
+    end
+
+    action BucketSegments(Array<Segment> list, integer planeCount,
+                          Array<integer> starts, Array<integer> order)
+        Array<integer> planeOf
+        integer s = 0
+        repeat while s < list:GetSize()
+            Segment seg = list:Get(s) 
+            planeOf:Add(seg:planeIndex)
+            s = s + 1
+        end
+        BucketIndices(planeOf, planeCount, starts, order)
+    end
+    
+    // counting sort of item indices by their plane number
+    private action BucketIndices(Array<integer> planeOf, integer planeCount,
+                          Array<integer> starts, Array<integer> order)
+        starts:Empty()
+        order:Empty()
+        integer p = 0
+        repeat while p <= planeCount
+            starts:Add(0) 
+            p = p + 1
+        end
+        
+        // count items per plane, shifted by 1 so prefix sum gives starts
+        integer i = 0
+        repeat while i < planeOf:GetSize()
+            integer plane = planeOf:Get(i) 
+            if InPlaneRange(plane, planeCount)
+                starts:Set(plane + 1, starts:Get(plane + 1) + 1)
+            end
+            i = i + 1
+        end
+        p = 1
+        repeat while p <= planeCount
+            starts:Set(p, starts:Get(p) + starts:Get(p - 1))
+            p = p + 1
+        end
+
+        // drop each index into the next free slot of its plane
+        i = 0
+        repeat while i < starts:Get(planeCount) 
+            order:Add(0) 
+            i = i + 1
+        end
+        Array<integer> cursor
+        p = 0
+        repeat while p < planeCount
+            cursor:Add(starts:Get(p))
+            p = p + 1
+        end
+        i = 0
+        repeat while i < planeOf:GetSize()
+            integer plane2 = planeOf:Get(i) 
+            if InPlaneRange(plane2, planeCount)
+                integer slot = cursor:Get(plane2) 
+                order:Set(slot, i)
+                cursor:Set(plane2, slot + 1)
+            end     
+            i = i + 1
+        end
+    end
+end
