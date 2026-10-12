@@ -3,7 +3,6 @@ package geometry
 use Libraries.Containers.Number64BitArray
 use Libraries.Containers.Number32BitArray
 use Libraries.Containers.Integer32BitArray
-use Libraries.Containers.Stack
 use Libraries.Containers.HashTable
 use Libraries.Containers.Array
 
@@ -11,8 +10,8 @@ class BaseArea
     Number64BitArray Xcoords_sorted
     Number64BitArray Ycoords_sorted
 
-    Number32BitArray Xcoords_convex
-    Number32BitArray Ycoords_convex
+    Number64BitArray Xcoords_convex
+    Number64BitArray Ycoords_convex
 
     // using Andrew's Monotone Chain Algorithm to find convex hull
     action ConvexHull (Number64BitArray Xcoords, Number64BitArray Ycoords) 
@@ -43,7 +42,7 @@ class BaseArea
         Xcoords_unique:SetSize(uniqIndices:GetSize())
         Ycoords_unique:SetSize(uniqIndices:GetSize())
         integer size = Xcoords_unique:GetSize()
-
+        output "hull input: " + Xcoords:GetSize() + " points, " + size + " unique"
         integer i = 0
         repeat while i < size
             index = uniqIndices:Get(i)
@@ -66,30 +65,41 @@ class BaseArea
             i = i + 1
         end
 
+        integer distinct = 1
+integer outOfOrder = 0
+integer k = 1
+repeat while k < size
+    if Xcoords_sorted:Get(k) < Xcoords_sorted:Get(k - 1)
+        outOfOrder = outOfOrder + 1
+    end
+    if Xcoords_sorted:Get(k) not= Xcoords_sorted:Get(k - 1) or Ycoords_sorted:Get(k) not= Ycoords_sorted:Get(k - 1)
+        distinct = distinct + 1
+    end
+    k = k + 1
+end
+output "sorted: " + distinct + " distinct points, " + outOfOrder + " out of order"
+
         // actual convex hull algo --------------------------------------------
-        Stack<integer> upperhull
-        Stack<integer> lowerhull
+        Array<integer> upperhull
+        Array<integer> lowerhull
         boolean break = false
+        integer first = 0
+        integer second = 0
 
         // lowerhull
         i = 0
         repeat while i < size
             break = false
-
             repeat while lowerhull:GetSize() >= 2 and break = false
-                // get 2 points indices from stack
-                first = lowerhull:Peek()
-                lowerhull:Pop()
-                second = lowerhull:Peek()
-
-                // stop popping if 3 points make cw rotation + add popped value back
+                first = lowerhull:Get(lowerhull:GetSize() - 1)
+                lowerhull:RemoveAt(lowerhull:GetSize() - 1)
+                second = lowerhull:Get(lowerhull:GetSize() - 1)
                 if clockwise(second, first, i)
-                    lowerhull:Push(first)
+                    lowerhull:Add(first)
                     break = true
                 end
             end
-
-            lowerhull:Push(i)
+            lowerhull:Add(i)
             i = i + 1
         end
 
@@ -97,51 +107,48 @@ class BaseArea
         i = size - 1
         repeat while i >= 0
             break = false
-
             repeat while upperhull:GetSize() >= 2 and break = false
-                // get 2 points indices from stack
-                first = upperhull:Peek()
-                upperhull:Pop()
-                second = upperhull:Peek()
-
-                // stop popping if 3 points make cw rotation + add popped value back
+                first = upperhull:Get(upperhull:GetSize() - 1)
+                upperhull:RemoveAt(upperhull:GetSize() - 1)
+                second = upperhull:Get(upperhull:GetSize() - 1)
                 if clockwise(second, first, i)
-                    upperhull:Push(first)
+                    upperhull:Add(first)
                     break = true
                 end
             end
-
-            upperhull:Push(i)
+            upperhull:Add(i)
             i = i - 1
         end
 
         // store lowerhull stack values
-        hull_size = lowerhull:GetSize() + upperhull:GetSize() - 1
+        integer hull_size = lowerhull:GetSize() + upperhull:GetSize() - 2
         Xcoords_convex:SetSize(hull_size)
         Ycoords_convex:SetSize(hull_size)
 
         // store upperhull stack values
         i = 0
-        repeat while upperhull:GetSize() > 0
-            index = upperhull:Pop()
-            number x_val = Xcoords_sorted:Get(index)
-            Xcoords_convex:Set(i, x_val)
+        index = 0
+        repeat while i < lowerhull:GetSize() - 1
+            number x_val = Xcoords_sorted:Get(lowerhull:Get(i))
+            Xcoords_convex:Set(index, x_val)
 
-            number y_val = Ycoords_sorted:Get(index)
-            Ycoords_convex:Set(i, y_val)
-
+            number y_val = Ycoords_sorted:Get(lowerhull:Get(i))
+            Ycoords_convex:Set(index, y_val)
+            
+            index = index + 1
             i = i + 1
         end
 
         // store lowerhull stack values
-        repeat while lowerhull:GetSize() > 1
-            index = lowerhull:Pop()
-            number x_val = Xcoords_sorted:Get(index)
-            Xcoords_convex:Set(i, x_val)
+        i = 0
+        repeat while i < upperhull:GetSize() - 1
+            number x_val = Xcoords_sorted:Get(upperhull:Get(i))
+            Xcoords_convex:Set(index, x_val)
 
-            number y_val = Ycoords_sorted:Get(index)
-            Ycoords_convex:Set(i, y_val)
-
+            number y_val = Ycoords_sorted:Get(upperhull:Get(i))
+            Ycoords_convex:Set(index, y_val)
+            
+            index = index + 1
             i = i + 1
         end
     end
@@ -264,11 +271,11 @@ class BaseArea
         return Ycoords_sorted
     end
 
-    action GetConvexX returns Number32BitArray
+    action GetConvexX returns Number64BitArray
         return Xcoords_convex
     end
 
-    action GetConvexY returns Number32BitArray
+    action GetConvexY returns Number64BitArray
         return Ycoords_convex
     end
 end

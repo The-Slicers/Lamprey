@@ -3,6 +3,8 @@ Run/
 
 ## ignore model types
 assets/*.obj
-
+Outputs/*.obj
 
 *.png
+*.gcode
+*.3mf

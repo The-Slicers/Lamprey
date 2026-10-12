@@ -1,54 +1,624 @@
+package geometry
+
 use Libraries.Containers.Array
 use Libraries.Compute.Math
 use Libraries.System.File
 use Libraries.System.FileWriter
-use Libraries.System.Blueprints.FileWriterBlueprint
 
-class gcode
-    action generate_gcode(Array<Array<number>> polylines, number layerHeight, number nozzleWidth, number filamentArea, number bedTemp, number nozzleTemp, number travelSpeed) returns File
+class Gcode
+    number layerHeight = 0.2
+    number lineWidth = 0.4
+    number filamentDiameter = 1.75
+    number flow = 1.0
+
+    number bedCenterX = 110.0
+    number bedCenterY = 110.0
+    number bedSizeX = 220.0
+    number bedSizeY = 220.0
+
+    integer nozzleTemp = 210
+    integer bedTemp = 60
+
+    number travelSpeed = 80.0
+    number outerWallSpeed = 35.0
+    number innerWallSpeed = 35.0
+    number skinSpeed = 56.0
+    number infillSpeed = 40.0
+    number firstLayerSpeed = 25.0
+
+    number retractLength = 1.0
+    number retractSpeed = 35.0
+    number minTravelForRetract = 1.5
+    integer maxRetracts = 10
+    number retractWindow = 1.0
+
+    number posX = 0.0
+    number posY = 0.0
+    boolean retracted = false
+    number offsetX = 0.0
+    number offsetY = 0.0
+    number filamentArea = 1.0
+    number totalFilament = 0.0
+    number totalSeconds = 0.0
+    integer lastSpeed = -1
+    Array<number> retractHistory
+    integer skippedRetracts = 0
+    Array<number> layerFactor
+    integer slowedLayers = 0
+
+    number minLayerTime = 10.0
+    number minPrintSpeed = 10.0
+
+    boolean dryRun = false
+    number dryRunLift = 20.0
+
+    text startFile = "start.gcode"
+    text endFile = "end.gcode"
+
+    Math math
+    FileWriter writer
+    
+    action SetLayerHeight(number height)
+        layerHeight = height
+    end
+
+    action SetLineWidth(number width)
+        lineWidth = width
+    end
+
+    action SetFilamentDiameter(number diameter)
+        filamentDiameter = diameter
+    end
+
+    action SetTemperature(integer nozzle, integer bed)
+        nozzleTemp = nozzle
+        bedTemp = bed
+    end
+    
+    action SetBed(number sizeX, number sizeY)
+        bedSizeX = sizeX
+        bedSizeY = sizeY
+        bedCenterX = sizeX / 2.0
+        bedCenterY = sizeY / 2.0
+    end
+
+    action SetRetraction(number length, number speed)
+        retractLength = length
+        retractSpeed = speed
+        retractWindow = length
+    end
+
+    action SetRetractionLimit(integer count, number window)
+        maxRetracts = count
+        retractWindow = window
+    end
+
+    action SetMinLayerTime(number seconds, number slowestSpeed)
+        minLayerTime = seconds
+        minPrintSpeed = slowestSpeed
+    end
+    
+    action SetFlow(number ratio)
+        flow = ratio
+    end
+
+    action SetDryRun(boolean dryRunOn, number lift)
+        dryRun = dryRunOn
+        dryRunLift = lift
+    end
+
+    action SetStartGCodeFile(text path)
+        startFile = path
+    end
+
+    action SetEndGCodeFile(text path)
+        endFile = path
+    end
+
+    action Write(Array<Contour> paths, text filePath)
+        filamentArea = 3.141592653589793 * (filamentDiameter / 2.0) * (filamentDiameter / 2.0)
+        totalFilament = 0.0
+        totalSeconds = 0.0
+        retracted = false
+        lastSpeed = -1
+        retractHistory:Empty()
+        skippedRetracts = 0
+        CenterOnBed(paths)
+        PlanLayerSpeeds(paths)
+
+        if not dryRun
+            EnsureTemplate(startFile, true)
+            EnsureTemplate(endFile, false)
+        end
         
-        File gcodeFile
-        gcodeFile:SetPath("model.gcode")
-        FileWriterBlueprint writer = gcodeFile:OpenForWrite()
+        File file
+        file:SetPath(filePath) 
+        File folder = file:GetParentDirectory()
+        if not folder:Exists()
+            folder:CreateDirectories()
+        end
+        writer:OpenForWrite(file)
+
+        WriteStart()
+
+        integer layer = -1
+        integer i = 0
+        repeat while i < paths:GetSize() 
+            Contour path = paths:Get(i) 
+            if path:planeIndex not= layer
+                layer = path:planeIndex
+                ChangeLayer(layer)
+            end
+            WritePath(path, layer)
+            i = i + 1
+        end
+
+        WriteEnd()
+        writer:Close() 
         
-        writer:WriteLine("G90")
-        writer:WriteLine("M83")
-        writer:WriteLine("M140 S" + cast(text, bedTemp))
-        writer:WriteLine("M104 S" + cast(text, nozzleTemp))
-        writer:WriteLine("G28")
-        writer:WriteLine("M190 S" + cast(text, bedTemp))
-        writer:WriteLine("M109 S" + cast(text, nozzleTemp))
-        writer:WriteLine("G1 Z2.0 F" + cast(text, travelSpeed))
-        writer:WriteLine("G92 E0")
+        integer minutes = cast(integer, totalSeconds / 60.0)
+        output "Wrote " + filePath + ": " + Fixed(totalFilament / 1000.0, 2) + " m of filament, about "
+            + minutes + " min of moves (real prints run slower: acceleration isn't counted)"
+        if slowedLayers > 0
+            output "  " + slowedLayers + " small layers slowed down to get at least " + Fixed(minLayerTime, 0) + " s to cool"
+        end
+        if skippedRetracts > 0
+            output "  " + skippedRetracts + " retracts skipped to avoid grinding the filament"
+        end
+    end
+    
+    private action WritePath(Contour path, integer layer)
+        integer n = path:GetSize()
+        if n < 2
+            return now
+        end
+        number speed = SpeedFor(path, layer) * LayerFactor(layer)
+        if speed < minPrintSpeed
+            speed = minPrintSpeed
+        end
+        text feature = "FILL"
+        if path:role = 0
+            feature = "WALL-OUTER"
+        elseif path:role = 1
+            feature = "WALL-INNER"
+        elseif path:role = 2
+            feature = "SKIN"
+        elseif path:role = 4
+            feature = "SKIRT"
+        end
+        Line(";TYPE:" + feature)
+
+        TravelTo(path:HeadX() + offsetX, path:HeadY() + offsetY)
+        Unretract()
+
+        number e = lineWidth * layerHeight / filamentArea * flow
+        integer segments = n - 1
+        if path:closed 
+            segments = n
+        end
         
         integer i = 0
-        Math math
-        repeat while i < polylines:GetSize() - 1
-            number x1 = polylines:Get(i):Get(0)
-            number y1 = polylines:Get(i):Get(1)
-            number z1 = polylines:Get(i):Get(2)
-            number x2 = polylines:Get(i+1):Get(0)
-            number y2 = polylines:Get(i+1):Get(1)
-            number z2 = polylines:Get(i+1):Get(2)
-            number distance = math:SquareRoot(math:RaiseToPower((x1-x2), 2) + math:RaiseToPower((y1-y2), 2) + math:RaiseToPower((z1-z2), 2))
-            number extrusion = distance * layerHeight * nozzleWidth 
-            number filamentLength = extrusion / filamentArea
-            writer:WriteLine("G1 X" + cast(text, math:Round(x2, 2, true)) + " Y" + cast(text, math:Round(y2, 2, true)) + " Z" + cast(text, math:Round(z2, 2, true)) + " E" + cast(text, math:Round(((filamentLength * 10000) / 10000), 2, true)) + "F1200")
+        repeat while i < segments
+            integer j = i + 1
+            if j = n
+                j = 0
+            end
+            number x = path:xs:Get(j) + offsetX
+            number y = path:ys:Get(j) + offsetY
+            number dx = x - posX
+            number dy = y - posY
+            number len = math:SquareRoot(dx * dx + dy * dy)
+            if len > 0.0001
+                number amount = len * e
+                text move = "G1 X" + Fixed(x, 3) + " Y" + Fixed(y, 3)
+                if not dryRun
+                    move = move + " E" + Fixed(amount, 5)
+                end
+                integer feed = Feed(speed)
+                if feed not= lastSpeed
+                    move = move + " F" + feed
+                    lastSpeed = feed
+                end
+                Line(move)
+                totalFilament = totalFilament + amount
+                totalSeconds = totalSeconds + len / speed
+                posX = x
+                posY = y
+            end
             i = i + 1
-        end 
+        end
+    end 
 
-        writer:WriteLine("M104 S0")
-        writer:WriteLine("M140 S0")
-        writer:WriteLine("M107")
-        writer:WriteLine("G91")
-        writer:WriteLine("G1 E-2 F2700")
-        writer:WriteLine("G1 Z10 F3000")
-        writer:WriteLine("G90")
-        writer:WriteLine("G28 X0 Y0")
-        writer:WriteLine("M84")
-
-        writer:Close()
-        
-        return gcodeFile
+    private action WriteStart
+        if dryRun
+            Line(";DRY RUN generated by the Lamprey slicer")
+            Line(";No heating, no extrusion. Every move is lifted " + Fixed(dryRunLift, 1) + " mm above the bed.")
+            Line("M104 S0")
+            Line("M140 S0")
+            Line("M107")
+            Line("G28 ;home all axes")
+            Line("G90 ;absolute XYZ")
+            Line("M83 ;relative extrusion")
+            Line("G1 Z" + Fixed(dryRunLift + 5.0, 3) + " F600")
+            retracted = false
+            posX = -1000.0
+            posY = -1000.0
+            lastSpeed = -1
+            return now
+        end
+        Line(";Generated by the Lamprey Slicer :D")
+        Line(";Layer height: " + Fixed(layerHeight, 3) + " mm, line width: "
+            + Fixed(lineWidth, 3) + " mm")
+        Line(";######### START G-CODE (from " + startFile + ") #########")
+        CopyCustom(startFile)
+        Line(";######### END OF START G-CODE #########")
+        Line("G90 ;absolute XYZ")
+        Line("M83 ;relative extrustion")
+        Line("G92 E0")
+        Line("M107 ;fan off for first layer")
+        retracted = false
+        posX = -1000.0
+        posY = -1000.0
+        lastSpeed = -1
     end
+
+    private action WriteEnd
+        if dryRun
+            Line(";END OF DRY RUN")
+            Line("G91")
+            Line("G1 Z10 F600 ;lift away")
+            Line("G90")
+            Line("M84 ;motors off")
+            return now
+        end
+        Retract()
+        Line(";###### END G-CODE (from " + endFile + ") #####")
+        CopyCustom(endFile)
+    end 
+
+    private action CopyCustom(text path)
+        File file
+        file:SetPath(path) 
+        text contents = file:Read() 
+        text lineFeed = ""
+        lineFeed = lineFeed:GetLineFeed()
+        text carriageReturn = ""
+        carriageReturn = carriageReturn:GetCarriageReturn() 
+        Array<text> lines = contents:Split(lineFeed) 
+        integer i = 0
+        repeat while i < lines:GetSize()
+            text raw = lines:Get(i) 
+            text value = Substitute(raw:Replace(carriageReturn, ""))
+            if not value:StartsWith(";")
+                if value:Contains("{") or value:Contains("[")
+                    output "Warning: " + path + " line " + (i + 1) + " still has a placeholder the slicer doesn't know: "
+                        + value + "   (the printer can't read it; replace it with a number or one of the {...} names listed at the top of the file)"
+                end
+            end
+            Line(value)
+            i = i + 1
+        end
+    end
+    
+    private action EnsureTemplate(text path, boolean isStart)
+        File file
+        file:SetPath(path) 
+        if file:Exists()
+            return now
+        end
+
+        FileWriter template
+        template:OpenForWrite(file)
+        text which = "END"
+        text when = "AFTER the last layer"
+        text cura = "Machine Settings > End G-code"
+        text prusa = "Custom G-code > End G-code"
+        if isStart
+            which = "START"
+            when = "BEFORE the first layer"
+            cura = "Machine Settings > Start G-code"
+            prusa = "Custom G-code > Start G-code"
+        end
+        template:WriteLine("; ##################")
+        template:WriteLine("; " + which + " G-CODE for the Lamprey slicer")
+        template:WriteLine("; Runs once, " + when + ".")
+        template:WriteLine(";")
+        template:WriteLine("")
+        if isStart
+            template:WriteLine(";")
+            template:WriteLine("; After this block the slicer itself sets G90 (absolute XYZ) and M83")
+            template:WriteLine("; (relative extrusion), so pasted code may use either extrusion mode.")
+        end
+        template:WriteLine("; Lines starting with ; are comments; the printer ignores them.")
+        template:WriteLine("; #######################")
+        template:WriteLine("; ------ PASTE BELOW THIS LINE ------")
+        if isStart
+            template:WriteLine("M140 S{BED_TEMP} ;start heating the bed")
+            template:WriteLine("M104 S{NOZZLE_TEMP} ;start heating the nozzle")
+            template:WriteLine("G28 ;home all axes")
+            template:WriteLine("M190 S{BED_TEMP} ;wait for the bed")
+            template:WriteLine("M109 S{NOZZLE_TEMP} ;wait for the nozzle")
+            template:WriteLine("G90")
+            template:WriteLine("M83")
+            template:WriteLine("G1 Z2.0 F3000")
+            template:WriteLine("G1 X5 Y20 Z0.3 F5000")
+            template:WriteLine("G1 X5 Y120 E12 F1500 ;prime line")
+            template:WriteLine("G1 X5.4 Y120 F5000")
+            template:WriteLine("G1 X5.4 Y20 E12 F1500 ;prime line")
+            template:WriteLine("G1 Z2.0 F3000")
+        else
+            template:WriteLine("G91 ;relative positioning")
+            template:WriteLine("G1 Z10 F600 ;lift away from the print")
+            template:WriteLine("G90")
+            template:WriteLine("G1 X0 Y{PARK_Y} F6000 ;present the print")
+            template:WriteLine("M104 S0 ;nozzle heater off")
+            template:WriteLine("M140 S0 ;bed heater off")
+            template:WriteLine("M107 ;fan off")
+            template:WriteLine("M84 ;motors off")
+        end
+        template:Close() 
+        output "Created " + path + " with a generic template. Open it and paste your printer's own "
+            + which + " G-code below the 'PASTE BELOW' line before printing."
+    end
+
+    private action Substitute(text value) returns text
+        text nozzle = "" + nozzleTemp
+        text bed = "" + bedTemp
+        text result = value
+        result = result:Replace("{NOZZLE_TEMP}", nozzle)
+        result = result:Replace("{BED_TEMP}", bed)
+        result = result:Replace("{BED_X}", Fixed(bedSizeX, 1))
+        result = result:Replace("{BED_Y}", Fixed(bedSizeY, 1))
+        result = result:Replace("{PARK_Y}", Fixed(bedSizeY - 10.0, 1))
+        result = result:Replace("{LAYER_HEIGHT}", Fixed(layerHeight, 3))
+        result = result:Replace("{RETRACT}", Fixed(retractLength, 3))
+        result = result:Replace("{material_print_temperature_layer_0}", nozzle)
+        result = result:Replace("{material_print_temperature}", nozzle)
+        result = result:Replace("{material_bed_temperature_layer_0}", bed)
+        result = result:Replace("{material_bed_temperature}", bed)
+        result = result:Replace("{machine_width}", Fixed(bedSizeX, 1))
+        result = result:Replace("{machine_depth}", Fixed(bedSizeY, 1))
+        result = result:Replace("[first_layer_temperature]", nozzle)
+        result = result:Replace("[temperature]", nozzle)
+        result = result:Replace("[first_layer_bed_temperature]", bed)
+        result = result:Replace("[bed_temperature]", bed)
+        return result
+    end
+
+    private action ChangeLayer(integer layer)
+        Retract()
+        number z = cast(number, layer + 1) * layerHeight
+        if dryRun
+            z = z + dryRunLift
+        end
+        Line(";LAYER:" + layer)
+        if layer = 1
+            Line("M106 S255 ;fan on from the second layer")
+        end
+        Line("G1 Z" + Fixed(z, 3) + " F600")
+        lastSpeed = -1
+    end
+
+    private action TravelTo(number x, number y)
+        number dx = x - posX
+        number dy = y - posY
+        number len = math:SquareRoot(dx * dx + dy * dy)
+        if len < 0.0001
+            return now
+        end
+        if len > minTravelForRetract
+            Retract()
+        end
+        integer feed = Feed(travelSpeed)
+        Line("G0 X" + Fixed(x, 3) + " Y" + Fixed(y, 3) + " F" + feed)
+        lastSpeed = feed
+        totalSeconds = totalSeconds + len / travelSpeed
+        posX = x
+        posY = y
+    end
+
+    private action CenterOnBed(Array<Contour> paths)
+        boolean any = false
+        number lowX = 0.0
+        number highX = 0.0
+        number lowY = 0.0
+        number highY = 0.0
+        integer i = 0
+        repeat while i < paths:GetSize() 
+            Contour path = paths:Get(i) 
+            integer j = 0
+            repeat while j < path:GetSize()
+                number x = path:xs:Get(j) 
+                number y = path:ys:Get(j) 
+                if not any
+                    lowX = x
+                    highX = x
+                    lowY = y
+                    highY = y
+                    any = true
+                else
+                    if x < lowX
+                        lowX = x
+                    end
+                    if x > highX
+                        highX = x
+                    end
+                    if y < lowY
+                        lowY = y
+                    end
+                    if y > highY
+                        highY = y
+                    end
+                end
+                j = j + 1
+            end
+            i = i + 1
+        end
+        offsetX = bedCenterX - (lowX + highX) / 2.0
+        offsetY = bedCenterY - (lowY + highY) / 2.0
+        if highX - lowX > bedSizeX - 10.0 or highY - lowY > bedSizeY - 10.0
+            output "Warning: the model (" + Fixed(highX - lowX, 1) + " x "
+            + Fixed(highY - lowY, 1) + " mm) doesn't fit on the bed with a margin"
+        end
+    end
+
+    private action PlanLayerSpeeds(Array<Contour> paths)
+        layerFactor:Empty()
+        slowedLayers = 0
+        integer top = -1
+        integer i = 0
+        repeat while i < paths:GetSize()
+            Contour path = paths:Get(i)
+            if path:planeIndex > top
+                top = path:planeIndex
+            end
+            i = i + 1
+        end
+        Array<number> seconds
+        i = 0
+        repeat while i <= top
+            seconds:Add(0.0)
+            i = i + 1
+        end
+        i = 0
+        repeat while i < paths:GetSize()
+            Contour path2 = paths:Get(i)
+            if path2:planeIndex >= 0
+                number t = seconds:Get(path2:planeIndex) + PathLength(path2) / SpeedFor(path2, path2:planeIndex)
+                seconds:Set(path2:planeIndex, t)
+            end
+            i = i + 1
+        end
+        i = 0
+        repeat while i <= top
+            number layerSeconds = seconds:Get(i)
+            if layerSeconds > 0 and layerSeconds < minLayerTime
+                layerFactor:Add(layerSeconds / minLayerTime)
+                slowedLayers = slowedLayers + 1
+            else
+                layerFactor:Add(1.0)
+            end
+            i = i + 1
+        end
+    end
+
+    private action PathLength(Contour path) returns number
+        number total = 0.0
+        integer n = path:GetSize()
+        integer segments = n - 1
+        if path:closed
+            segments = n
+        end
+        integer i = 0
+        repeat while i < segments
+            integer j = i + 1
+            if j = n
+                j = 0
+            end
+            number dx = path:xs:Get(j) - path:xs:Get(i)
+            number dy = path:ys:Get(j) - path:ys:Get(i)
+            total = total + math:SquareRoot(dx * dx + dy * dy)
+            i = i + 1
+        end
+        return total
+    end
+
+    private action SpeedFor(Contour path, integer layer) returns number
+        if layer = 0
+            return firstLayerSpeed
+        end
+        if path:role = 0
+            return outerWallSpeed
+        elseif path:role = 1
+            return innerWallSpeed
+        elseif path:role = 2
+            return skinSpeed
+        elseif path:role = 4
+            return firstLayerSpeed
+        end    
+        return infillSpeed
+    end
+
+    private action LayerFactor(integer layer) returns number
+        if layer < 0 or layer >= layerFactor:GetSize() 
+            return 1.0
+        end
+        return layerFactor:Get(layer) 
+    end
+
+    private action Unretract
+        if dryRun
+            return now
+        end
+        if retracted
+            Line("G1 E" + Fixed(retractLength, 3) + " F" + Feed(retractSpeed))
+            retracted = false
+            lastSpeed = -1
+        end
+    end
+
+    private action Retract
+        if dryRun
+            return now
+        end
+        if not retracted
+            integer recent = 0
+            integer h = retractHistory:GetSize() - 1
+            boolean inWindow = true
+            repeat while h >= 0 and inWindow
+                if totalFilament - retractHistory:Get(h) < retractWindow
+                    recent = recent + 1
+                    h = h - 1
+                else
+                    inWindow = false
+                end
+            end
+            if recent >= maxRetracts
+                skippedRetracts = skippedRetracts + 1
+                return now
+            end
+            retractHistory:Add(totalFilament)
+            Line("G1 E-" + Fixed(retractLength, 3) + " F" + Feed(retractSpeed))
+            retracted = true
+            lastSpeed = -1
+        end
+    end
+    
+    private action Line(text val)
+        writer:WriteLine(val)
+    end
+
+    private action Feed(number mmPerSecond) returns integer
+        return cast(integer, mmPerSecond * 60.0 + 0.5)
+    end
+    
+    private action Fixed(number val, integer decimals) returns text
+        integer scale = 1
+        integer d = 0
+        repeat while d < decimals
+            scale = scale * 10
+            d = d + 1
+        end
+        boolean negative = val < 0
+        number magnitude = val
+        if negative
+            magnitude = -val
+        end
+        integer scaled = cast(integer, magnitude * cast(number, scale) + 0.5)
+        integer whole = scaled / scale
+        integer fraction = scaled - whole * scale
+        text digits = "" + fraction
+        repeat while digits:GetSize() < decimals
+            digits = "0" + digits
+        end
+        text result = "" + whole
+        if decimals > 0
+            result = result + "." + digits
+        end
+        if negative and scaled not= 0
+            result = "-" + result
+        end
+        return result
+    end
+    
 end 

@@ -1,0 +1,117 @@
+package geometry
+
+use Libraries.Containers.Array
+use Libraries.Containers.Number64BitArray
+
+class SkirtGenerator
+    number lineWidth = 0.4
+    number distance = 3.0
+    integer loops = 2
+    integer height = 1
+    integer hullLayers = 50
+
+    Offsetter offsetter
+
+    action SetLineWidth(number width)
+        lineWidth = width
+    end
+
+    action SetSkirt(integer count, number gap, integer layers)
+        loops = count
+        distance = gap
+        height = layers
+    end
+
+    action Generate(Array<Contour> contours) returns Array<Contour>
+        Array<Contour> result
+        if loops <= 0 or height <= 0
+            return result
+        end
+    
+        Number64BitArray xs
+        Number64BitArray ys
+        integer totalSize = 0
+        integer c = 0
+        repeat while c < contours:GetSize() 
+            Contour con = contours:Get(c) 
+            if con:planeIndex < hullLayers and con:closed 
+                totalSize = totalSize + con:GetSize()
+            end
+            c = c + 1
+        end
+        xs:SetSize(totalSize)
+        ys:SetSize(totalSize) 
+
+        if xs:GetSize() < 3
+            output "Skirt: layer 0 has no contours, no skirt generated"
+            return result
+        end        
+        integer slot = 0
+        c = 0
+        repeat while c < contours:GetSize() 
+            Contour con = contours:Get(c) 
+            if con:planeIndex < hullLayers and con:closed 
+                integer i = 0
+                repeat while i < con:GetSize()
+                    xs:Set(slot, con:xs:Get(i))
+                    ys:Set(slot, con:ys:Get(i))
+                    slot = slot + 1
+                    i = i + 1
+                end
+            end
+            c = c + 1
+        end
+    
+        BaseArea area
+        area:ConvexHull(xs, ys)
+        Number64BitArray hx = area:GetConvexX()
+        Number64BitArray hy = area:GetConvexY()
+        Contour hull
+        integer h = 0
+        output "" + hx:GetSize()
+        repeat while h < hx:GetSize()
+            hull:AddPoint(hx:Get(h), hy:Get(h)) 
+            h = h + 1
+        end
+        hull:DropClosingDuplicate()
+        hull:closed = true
+        hull:planeIndex = 0
+        if hull:GetSize() < 3
+            output "Skirt: the first layer is too small for a skirt"
+            return result
+        end
+        if hull:SignedArea2() < 0
+            hull:Reverse()
+        end
+
+        Array<Contour> base
+        base:Add(hull) 
+        Array<Contour> rings
+        integer i = 0
+        repeat while i < loops
+            Array<Contour> ring = offsetter:Offset(base, -(distance + lineWidth * (cast(number, i) + 0.5)))
+            integer r = 0
+            repeat while r < rings:GetSize()
+                rings:Add(ring:Get(r))
+                r = r + 1   
+            end
+            i = i + 1
+        end
+
+        integer layer = 0
+        repeat while layer < height
+            i = 0
+            repeat while i < rings:GetSize() 
+                Contour src = rings:Get(i) 
+                Contour copy
+                copy:AppendAll(src)
+                copy:closed = true
+                copy:planeIndex = layer
+                result:Add(copy)
+                i = i + 1
+            end
+            layer = layer + 1
+        end
+        return result
+    end
+end

@@ -11,6 +11,9 @@ class Contour
     public integer depth = 0
     public boolean isHole = false
 
+    public integer wallIndex = -1
+    public integer role = -1
+
     action GetSize returns integer
         return xs:GetSize()
     end
@@ -237,7 +240,7 @@ class Contour
         number len2 = vx * vx + vy * vy
         number t = 0.0
         if len2 > 0.0
-            t = (wx * vx + wy * wy) / len2
+            t = (wx * vx + wy * vy) / len2
             if t < 0
                 t = 0.0
             elseif t > 1

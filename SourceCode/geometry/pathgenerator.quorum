@@ -1,0 +1,399 @@
+package geometry
+
+use Libraries.Containers.Array
+use Libraries.Compute.Math
+
+class PathGenerator
+    number lineWidth = 0.4
+    integer wallCount = 2
+    number infillDensity = 0.2
+    number infillOverlap = 0.25
+    number minInfillLength = 0.4
+    integer topLayers = 4
+    integer bottomLayers = 4
+
+    Array<Contour> walls
+    Array<Contour> skin
+    Array<Contour> infill
+
+    Array<Contour> source
+    Array<integer> layerStart
+    Array<integer> layerOrder
+
+    Array<Contour> inner
+    Array<integer> innerStart
+
+    integer planeTotal = 0
+
+    Math math
+    Offsetter offsetter
+    PolygonOps ops
+
+    action SetLineWidth(number width)
+        lineWidth = width
+        minInfillLength = width
+    end
+
+    action SetWallCount(integer count)
+        wallCount = count
+    end
+
+    // 0 = no infill, 1 = solid (lines touching side by side)
+    action SetInfillDensity(number density)
+        infillDensity = density
+    end
+
+    // How far fill lines reach into the innermost wall, as a fraction of
+    // the line width.
+    action SetInfillOverlap(number overlap)
+        infillOverlap = overlap
+    end
+
+    // Solid layers under top surfaces and over bottom surfaces. Typical is
+    // 0.6-1.0 mm worth: 3-5 layers at 0.2 mm. 0 turns that side off.
+    action SetTopLayers(integer count)
+        topLayers = count
+    end
+
+    action SetBottomLayers(integer count)
+        bottomLayers = count
+    end
+
+    action GetWalls returns Array<Contour>
+        return walls
+    end
+
+    action GetSkin returns Array<Contour>
+        return skin
+    end
+
+    action GetInfill returns Array<Contour>
+        return infill
+    end
+
+    action Generate(Array<Contour> contours, integer planeCount)
+        walls:Empty()
+        skin:Empty()
+        infill:Empty()
+        inner:Empty()
+        innerStart:Empty()
+        source = contours
+        planeTotal = planeCount
+        GroupByPlane(contours, planeCount)
+
+        // pass 1: walls and inner areas for every plane
+        integer p = 0
+        repeat while p < planeCount
+            innerStart:Add(inner:GetSize())
+            Array<Contour> layer = LayerContours(p)
+            if layer:GetSize() > 0
+                integer w = 0
+                repeat while w < wallCount
+                    Array<Contour> ring = offsetter:Offset(layer, lineWidth * (cast(number, w) + 0.5))
+                    integer r = 0
+                    repeat while r < ring:GetSize()
+                        Contour wall = ring:Get(r)
+                        wall:wallIndex = w
+                        walls:Add(wall)
+                        r = r + 1
+                    end
+                    w = w + 1
+                end
+
+                Array<Contour> area = offsetter:Offset(layer, lineWidth * cast(number, wallCount))
+                integer a = 0
+                repeat while a < area:GetSize()
+                    inner:Add(area:Get(a))
+                    a = a + 1
+                end
+            end
+            p = p + 1
+        end
+        innerStart:Add(inner:GetSize())
+
+        // pass 2: skin and infill (needs the inner areas of neighbours)
+        p = 0
+        repeat while p < planeCount
+            Array<Contour> layer2 = LayerContours(p)
+            Array<Contour> innerArea = InnerContours(p)
+            if layer2:GetSize() > 0 and innerArea:GetSize() > 0
+                number inset = lineWidth * (cast(number, wallCount) + 0.5 - infillOverlap)
+                Array<Contour> fillArea = offsetter:Offset(layer2, inset)
+                if fillArea:GetSize() > 0
+                    Array<Contour> skinArea = FindSkin(p, innerArea)
+                    if skinArea:GetSize() > 0
+                        Array<Contour> solid = ops:Intersect(fillArea, skinArea, p)
+                        Array<Contour> sparse = ops:Difference(fillArea, skinArea, p)
+                        AddLines(solid, p, lineWidth, skin)
+                        if infillDensity > 0
+                            AddLines(sparse, p, lineWidth / MinNum(infillDensity, 1.0), infill)
+                        end
+                    elseif infillDensity > 0
+                        AddLines(fillArea, p, lineWidth / MinNum(infillDensity, 1.0), infill)
+                    end
+                end
+            end
+            p = p + 1
+        end
+    end
+
+    private action FindSkin(integer p, Array<Contour> innerArea) returns Array<Contour>
+        Array<Contour> top = Uncovered(p, innerArea, 1, topLayers)
+        Array<Contour> bottom = Uncovered(p, innerArea, -1, bottomLayers)
+        if top:GetSize() = 0
+            return bottom
+        end
+        if bottom:GetSize() = 0
+            return top
+        end
+        return ops:Union(top, bottom, p)
+    end
+
+    // The part of innerArea not covered by every one of the next `count`
+    // layers in `direction` (+1 = up, -1 = down).
+    private action Uncovered(integer p, Array<Contour> innerArea, integer direction, integer count) returns Array<Contour>
+        Array<Contour> nothing
+        if count <= 0
+            return nothing
+        end
+
+        Array<Contour> covered
+        integer j = 1
+        repeat while j <= count
+            integer q = p + direction * j
+            if q < 0 or q >= planeTotal
+                return innerArea // runs off the model: all of it is surface
+            end
+            Array<Contour> neighbour = InnerContours(q)
+            if neighbour:GetSize() = 0
+                return innerArea
+            end
+            if j = 1
+                covered = neighbour
+            else
+                covered = ops:Intersect(covered, neighbour, p)
+                if covered:GetSize() = 0
+                    return innerArea
+                end
+            end
+            j = j + 1
+        end
+        return ops:Difference(innerArea, covered, p)
+    end
+
+    // Scanline fill of a region with parallel lines `spacing` apart.
+    private action AddLines(Array<Contour> region, integer planeIndex, number spacing, Array<Contour> target)
+        if region:GetSize() = 0
+            return now
+        end
+
+        // 45 degrees on even layers, 135 on odd ones
+        number half = math:SquareRoot(0.5)
+        number cs = half
+        number sn = half
+        if planeIndex mod 2 = 1
+            cs = -half
+        end
+
+        // rotate the region by -angle so the lines become horizontal
+        Array<number> rx
+        Array<number> ry
+        Array<integer> loopStart
+        integer c = 0
+        repeat while c < region:GetSize()
+            Contour con = region:Get(c)
+            loopStart:Add(rx:GetSize())
+            integer i = 0
+            repeat while i < con:GetSize()
+                number x = con:xs:Get(i)
+                number y = con:ys:Get(i)
+                rx:Add(x * cs + y * sn)
+                ry:Add(-x * sn + y * cs)
+                i = i + 1
+            end
+            c = c + 1
+        end
+        loopStart:Add(rx:GetSize())
+        if ry:GetSize() = 0
+            return now
+        end
+
+        number lowY = ry:Get(0)
+        number highY = lowY
+        integer v = 0
+        repeat while v < ry:GetSize()
+            if ry:Get(v) < lowY
+                lowY = ry:Get(v)
+            end
+            if ry:Get(v) > highY
+                highY = ry:Get(v)
+            end
+            v = v + 1
+        end
+
+        Array<number> hits
+        integer lineCount = 0
+        integer line = CeilingToInt(lowY / spacing)
+        repeat while cast(number, line) * spacing <= highY
+            number scanY = cast(number, line) * spacing
+            hits:Empty()
+
+            integer L = 0
+            repeat while L < region:GetSize()
+                integer s = loopStart:Get(L)
+                integer n = loopStart:Get(L + 1) - s
+                integer j = n - 1
+                integer k = 0
+                repeat while k < n
+                    number y0 = ry:Get(s + j)
+                    number y1 = ry:Get(s + k)
+                    boolean above0 = y0 > scanY
+                    boolean above1 = y1 > scanY
+                    if above0 not= above1
+                        number x0 = rx:Get(s + j)
+                        number x1 = rx:Get(s + k)
+                        hits:Add(x0 + (scanY - y0) * (x1 - x0) / (y1 - y0))
+                    end
+                    j = k
+                    k = k + 1
+                end
+                L = L + 1
+            end
+
+            SortNumbers(hits)
+
+            integer q = 0
+            repeat while q + 1 < hits:GetSize()
+                number a = hits:Get(q)
+                number b = hits:Get(q + 1)
+                if b - a >= minInfillLength
+                    // every other line runs backwards, so the nozzle zigzags
+                    if lineCount mod 2 = 1
+                        number swap = a
+                        a = b
+                        b = swap
+                    end
+                    Contour seg
+                    seg:AddPoint(a * cs - scanY * sn, a * sn + scanY * cs)
+                    seg:AddPoint(b * cs - scanY * sn, b * sn + scanY * cs)
+                    seg:closed = false
+                    seg:planeIndex = planeIndex
+                    target:Add(seg)
+                end
+                q = q + 2
+            end
+            lineCount = lineCount + 1
+            line = line + 1
+        end
+    end
+
+    private action GroupByPlane(Array<Contour> contours, integer planeCount)
+        layerStart:Empty()
+        layerOrder:Empty()
+        integer p = 0
+        repeat while p <= planeCount
+            layerStart:Add(0)
+            p = p + 1
+        end
+        integer c = 0
+        repeat while c < contours:GetSize()
+            Contour con = contours:Get(c)
+            if Usable(con, planeCount)
+                layerStart:Set(con:planeIndex + 1, layerStart:Get(con:planeIndex + 1) + 1)
+            end
+            c = c + 1
+        end
+        p = 1
+        repeat while p <= planeCount
+            layerStart:Set(p, layerStart:Get(p) + layerStart:Get(p - 1))
+            p = p + 1
+        end
+        c = 0
+        repeat while c < layerStart:Get(planeCount)
+            layerOrder:Add(0)
+            c = c + 1
+        end
+        Array<integer> cursor
+        p = 0
+        repeat while p < planeCount
+            cursor:Add(layerStart:Get(p))
+            p = p + 1
+        end
+        c = 0
+        repeat while c < contours:GetSize()
+            Contour con2 = contours:Get(c)
+            if Usable(con2, planeCount)
+                integer slot = cursor:Get(con2:planeIndex)
+                layerOrder:Set(slot, c)
+                cursor:Set(con2:planeIndex, slot + 1)
+            end
+            c = c + 1
+        end
+    end
+
+    private action LayerContours(integer p) returns Array<Contour>
+        Array<Contour> layer
+        integer k = layerStart:Get(p)
+        repeat while k < layerStart:Get(p + 1)
+            layer:Add(source:Get(layerOrder:Get(k)))
+            k = k + 1
+        end
+        return layer
+    end
+
+    private action InnerContours(integer p) returns Array<Contour>
+        Array<Contour> area
+        integer k = innerStart:Get(p)
+        repeat while k < innerStart:Get(p + 1)
+            area:Add(inner:Get(k))
+            k = k + 1
+        end
+        return area
+    end
+
+    private action Usable(Contour con, integer planeCount) returns boolean
+        if not con:closed or con:GetSize() < 3
+            return false
+        end
+        if con:planeIndex < 0 or con:planeIndex >= planeCount
+            return false
+        end
+        return true
+    end
+
+    private action SortNumbers(Array<number> a)
+        integer i = 1
+        repeat while i < a:GetSize()
+            number value = a:Get(i)
+            integer j = i - 1
+            boolean moving = true
+            repeat while moving
+                if j < 0
+                    moving = false
+                elseif a:Get(j) > value
+                    a:Set(j + 1, a:Get(j))
+                    j = j - 1
+                else
+                    moving = false
+                end
+            end
+            a:Set(j + 1, value)
+            i = i + 1
+        end
+    end
+
+    private action MinNum(number a, number b) returns number
+        if a < b
+            return a
+        end
+        return b
+    end
+
+    private action CeilingToInt(number v) returns integer
+        integer res = cast(integer, v)
+        if v > cast(number, res)
+            res = res + 1
+        end
+        return res
+    end
+end

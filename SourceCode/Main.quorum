@@ -14,6 +14,10 @@ use geometry.PlaneMesh
 use geometry.Contour
 use geometry.ContourGenerator
 use geometry.OverhangGrid
+use geometry.PathGenerator
+use geometry.PathOrderer
+use geometry.Gcode
+use geometry.SkirtGenerator
 
 use tool.LineRender
 
@@ -21,7 +25,7 @@ class Main
     action Main
         // Load in model from assets folder
         File file
-        file:SetPath("assets/bunny.obj")
+        file:SetPath("assets/cube.obj")
 
         // packages model data into a ModelData class
         ModelLoader loader
@@ -40,12 +44,12 @@ class Main
         meshData:splitCoords(data)
     
         number nozzle = 0.4
-        number layerHeight = 0.5 * nozzle
+        number layerHeight = 0.2
         number maxGap = 0.5 * nozzle
-        number cutAmount = 0.4
+        number cutAmount = 0.0 // 1.6
 
         TestSlicer slicer
-        slicer:SetUnitScale(25.4)
+        slicer:SetUnitScale(20.0) // 25.4
         slicer:SetTriangles(meshData)
         Array<number> planeRange = slicer:GetSliceRange()         
         output "Plane Low: " + planeRange:Get(0) + " Plane High: " + planeRange:Get(1)
@@ -70,11 +74,51 @@ class Main
         OverhangGrid overhangs
         overhangs:SetCellSize(0.1) 
         overhangs:Build(contours, planes:GetSize(), layerHeight * 1.43)
+        
+        PathGenerator paths
+        paths:SetLineWidth(0.4) // nozzle diameter
+        paths:SetWallCount(3)
+        paths:SetInfillDensity(0.15) // 70%
+        paths:SetTopLayers(12) 
+        paths:SetBottomLayers(12) 
+        paths:Generate(contours, planes:GetSize()) 
+        
+        Contour c = contours:Get(50)
+output "contour, plane 50: " + c:GetSize() + " points, area " + (c:SignedArea2() / 2.0)
+Array<Contour> walls = paths:GetWalls()
+Contour outer = walls:Get(99)       // plane 50, wall 0
+Contour inner = walls:Get(101)       // plane 50, wall 1
+output "outer wall: " + outer:GetSize() + " points, area " + (outer:SignedArea2() / 2.0)
+output "inner wall: " + inner:GetSize() + " points, area " + (inner:SignedArea2() / 2.0)
+        SkirtGenerator skirtGen
+        skirtGen:SetLineWidth(0.4)
+        skirtGen:SetSkirt(2, 3.0, 1)
+        Array<Contour> skirt = skirtGen:Generate(contours)
+    
 
-        LineRender lr
-        lr:SetData(planes, contours)
-        lr:SetOverhangs(overhangs)
-        lr:LineRender()
+//        LineRender lr
+//        lr:SetData(planes, contours)
+//        lr:SetPaths(paths:GetWalls(), paths:GetInfill())
+//        lr:SetSkin(paths:GetSkin())
+//        lr:SetOverhangs(overhangs)
+//        lr:LineRender()
+        
+        PathOrderer orderer
+        orderer:SetSkirt(skirt)
+        Array<Contour> ordered = orderer:Order(contours, paths:GetWalls(), paths:GetSkin(), paths:GetInfill(), planes:GetSize())
+        
+        Gcode gcode
+        gcode:SetLayerHeight(layerHeight)
+        gcode:SetLineWidth(0.4)
+        gcode:SetFilamentDiameter(1.75)
+        gcode:SetFlow(1.0)
+        gcode:SetTemperature(200, 55)
+        gcode:SetBed(160.0, 160.0)
+        gcode:SetRetraction(6.0, 40.0)
+        gcode:SetRetractionLimit(25, 6.0)
+        gcode:SetMinLayerTime(15.0, 10.0)
+        //gcode:SetDryRun(true, 20.0)
+        gcode:Write(ordered, "Outputs/dry_cube.gcode")
     end
 
     // helper function to check if a resource exists for a model

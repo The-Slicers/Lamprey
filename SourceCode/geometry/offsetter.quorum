@@ -1,0 +1,140 @@
+package geometry
+
+use Libraries.Containers.Array
+use Libraries.Compute.Math
+
+class Offsetter
+    Math math
+    PolygonOps ops
+
+    // 16 degree arc step for rounded corners (max sag ~1% of the distance)
+    number stepCos = 0.9612616959383189
+    number stepSin = 0.27563735581699916
+
+    action Offset(Array<Contour> loops, number distance) returns Array<Contour>
+        Array<Contour> result
+        if loops:GetSize() = 0
+            return result
+        end
+        Contour firstLoop = loops:Get(0)
+        integer planeIndex = firstLoop:planeIndex
+
+        if distance = 0
+            integer c = 0
+            repeat while c < loops:GetSize()
+                Contour src = loops:Get(c)
+                Contour copy
+                copy:AppendAll(src)
+                copy:closed = src:closed
+                copy:planeIndex = src:planeIndex
+                copy:isHole = src:isHole
+                copy:depth = src:depth
+                result:Add(copy)
+                c = c + 1
+            end
+            return result
+        end
+
+        ops:Clear()
+        Array<number> qx
+        Array<number> qy
+        integer i = 0
+        repeat while i < loops:GetSize()
+            Contour con = loops:Get(i)
+            if con:closed and con:GetSize() >= 3
+                qx:Empty()
+                qy:Empty()
+                RawLoop(con, distance, qx, qy)
+                ops:AddPoints(qx, qy, 0, false)
+            end
+            i = i + 1
+        end
+        return ops:Resolve(1, planeIndex)
+    end
+
+    private action RawLoop(Contour con, number d, Array<number> qx, Array<number> qy)
+        integer n = con:GetSize()
+        integer i = 0
+        repeat while i < n
+            integer ia = i - 1
+            if ia < 0
+                ia = n - 1
+            end
+            integer ic = i + 1
+            if ic = n
+                ic = 0
+            end
+            number ax = con:xs:Get(ia)
+            number ay = con:ys:Get(ia)
+            number bx = con:xs:Get(i)
+            number by = con:ys:Get(i)
+            number cx = con:xs:Get(ic)
+            number cy = con:ys:Get(ic)
+
+            number u1x = bx - ax
+            number u1y = by - ay
+            number l1 = math:SquareRoot(u1x * u1x + u1y * u1y)
+            number u2x = cx - bx
+            number u2y = cy - by
+            number l2 = math:SquareRoot(u2x * u2x + u2y * u2y)
+
+            if l1 > 0 and l2 > 0
+                u1x = u1x / l1
+                u1y = u1y / l1
+                u2x = u2x / l2
+                u2y = u2y / l2
+                // left normals
+                number n1x = -u1y
+                number n1y = u1x
+                number n2x = -u2y
+                number n2y = u2x
+                number turn = u1x * u2y - u1y * u2x
+                number dot = u1x * u2x + u1y * u2y
+
+                if turn >= 0
+                    // turns into the material: offset edges converge
+                    if dot > -0.5
+                        number f = d / (1.0 + dot)
+                        qx:Add(bx + (n1x + n2x) * f)
+                        qy:Add(by + (n1y + n2y) * f)
+                    else
+                        // very sharp: plain link, the tangle gets trimmed later
+                        qx:Add(bx + d * n1x)
+                        qy:Add(by + d * n1y)
+                        qx:Add(bx + d * n2x)
+                        qy:Add(by + d * n2y)
+                    end
+                else
+                    // turns away from the material: offset edges diverge
+                    if dot > stepCos
+                        number f2 = d / (1.0 + dot)
+                        qx:Add(bx + (n1x + n2x) * f2)
+                        qy:Add(by + (n1y + n2y) * f2)
+                    else
+                        // rounded corner: rotate n1 clockwise toward n2
+                        number vx = n1x
+                        number vy = n1y
+                        qx:Add(bx + d * vx)
+                        qy:Add(by + d * vy)
+                        boolean going = true
+                        repeat while going
+                            number wx = vx * stepCos + vy * stepSin
+                            number wy = -vx * stepSin + vy * stepCos
+                            if wx * n2y - wy * n2x < 0
+                                qx:Add(bx + d * wx)
+                                qy:Add(by + d * wy)
+                                vx = wx
+                                vy = wy
+                            else
+                                going = false
+                            end
+                        end
+                        qx:Add(bx + d * n2x)
+                        qy:Add(by + d * n2y)
+                    end
+                end
+            end
+            i = i + 1
+        end
+    end
+end

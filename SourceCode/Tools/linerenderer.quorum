@@ -1,13 +1,11 @@
 package tool
 
-use Libraries.Game.Game 
+use Libraries.Game.Game
 use Libraries.Game.Graphics.Drawable
 use Libraries.Game.Graphics.Color
-use Libraries.Interface.Item2D
 use Libraries.Interface.Events.KeyboardListener
 use Libraries.Interface.Events.KeyboardEvent
 use Libraries.Containers.Array
-use Libraries.Containers.Number64BitArray
 use Libraries.Containers.HashTable
 use Libraries.Compute.Math
 
@@ -19,32 +17,51 @@ class LineRender is Game, KeyboardListener
     Array<number> planes
     integer currPlane = 0
     Array<Drawable> draws
-    
+
     integer screenSize = 800
     number margin = 40.0
     number minX = 0.0
     number minY = 0.0
     number scale = 1.0
-    
+
+    Math math
     HashTable<integer, boolean> plotted
-    integer pixelSize = 2 
+    integer pixelSize = 2
 
     OverhangGrid overhangs
     boolean hasOverhangs = false
 
-    Math math
+    Array<Contour> walls
+    Array<Contour> infill
+    boolean hasPaths = false
+    Array<Contour> skinLines
+
     action SetData(Array<number> p, Array<Contour> c)
         planes = p
         contours = c
-    end    
+    end
 
-    action SetOverhangs(OverhangGrid overhang)
-        overhangs = overhang
+    // Optional: draw toolpaths instead of the raw contours. The outer wall is
+    // red, inner walls blue, infill green, the sliced outline light gray.
+    action SetPaths(Array<Contour> w, Array<Contour> i)
+        walls = w
+        infill = i
+        hasPaths = true
+    end
+
+    // Optional: solid skin lines, drawn in purple.
+    action SetSkin(Array<Contour> s)
+        skinLines = s
+    end
+
+    // Optional: overhang cells are drawn in orange under the contour lines.
+    action SetOverhangs(OverhangGrid grid)
+        overhangs = grid
         hasOverhangs = true
     end
 
-    action LineRender   
-        SetScreenSize(screenSize,screenSize)
+    action LineRender
+        SetScreenSize(screenSize, screenSize)
         StartGame()
     end
 
@@ -67,21 +84,21 @@ class LineRender is Game, KeyboardListener
 
     action ReleasedKey(KeyboardEvent event)
     end
-    
+
     private action Min2(number a, number b) returns number
         if a < b
             return a
         end
         return b
-    end 
-    
+    end
+
     private action Max2(number a, number b) returns number
         if a > b
             return a
         end
         return b
     end
-    
+
     private action AbsInt(integer a) returns integer
         if a < 0
             return -a
@@ -89,17 +106,17 @@ class LineRender is Game, KeyboardListener
         return a
     end
 
+    // Bounds over every point of every contour, so all planes share one scale.
     private action ComputeBounds
         boolean any = false
-    
         number maxX = 0.0
         number maxY = 0.0
-        
+
         integer c = 0
-        repeat while c < contours:GetSize() 
+        repeat while c < contours:GetSize()
             Contour con = contours:Get(c)
             integer i = 0
-            repeat while i < con:GetSize() 
+            repeat while i < con:GetSize()
                 number x = con:xs:Get(i)
                 number y = con:ys:Get(i)
                 if not any
@@ -118,47 +135,45 @@ class LineRender is Game, KeyboardListener
             end
             c = c + 1
         end
-        
+
         if not any
             return now
-        end        
+        end
 
-        number span = Max2(maxX-minX,maxY-minY)
+        number span = Max2(maxX - minX, maxY - minY)
         if span <= 0
             span = 1.0
         end
-        
         scale = (cast(number, screenSize) - 2.0 * margin) / span
     end
-    
+
     private action ToScreenX(number x) returns number
         return margin + (x - minX) * scale
     end
-    
+
     private action ToScreenY(number y) returns number
         return margin + (y - minY) * scale
     end
-     
+
     private action RoundToInt(number a) returns integer
         return cast(integer, a + 0.5)
     end
-    
+
     private action Plot(integer x, integer y, Color color)
         integer key = y * screenSize + x
         if plotted:HasKey(key)
             return now
         end
-        plotted:Add(key, true)  
-        
+        plotted:Add(key, true)
+
         Drawable dot
         dot:LoadFilledRectangle(pixelSize, pixelSize, color)
         dot:SetPosition(x, y)
         Add(dot)
-        draws:Add(dot) 
+        draws:Add(dot)
     end
 
-    private action DrawBresenLine(integer x0, integer y0, integer x1,
-                                 integer y1, Color color)
+    private action DrawBresenLine(integer x0, integer y0, integer x1, integer y1, Color color)
         integer dx = AbsInt(x1 - x0)
         integer dy = -AbsInt(y1 - y0)
         integer sx = 1
@@ -191,7 +206,7 @@ class LineRender is Game, KeyboardListener
             end
         end
     end
-    
+
     private action DrawEdge(number x0, number y0, number x1, number y1, Color color)
         DrawBresenLine(RoundToInt(ToScreenX(x0)), RoundToInt(ToScreenY(y0)),
                        RoundToInt(ToScreenX(x1)), RoundToInt(ToScreenY(y1)), color)
@@ -207,19 +222,184 @@ class LineRender is Game, KeyboardListener
 
     private action ClearDrawing
         integer d = 0
-        repeat while d < draws:GetSize() 
+        repeat while d < draws:GetSize()
             Remove(draws:Get(d))
             d = d + 1
         end
-        draws:Empty() 
+        draws:Empty()
         plotted:Empty()
     end
 
+    private action DrawPlane(integer p)
+        ClearDrawing()
+        DrawOverhangs(p)   // first, so the contour lines draw on top
+
+        if hasPaths
+            DrawPaths(p)
+            return now
+        end
+
+        integer loopCount = 0
+        integer openCount = 0
+
+        integer c = 0
+        repeat while c < contours:GetSize()
+            Contour con = contours:Get(c)
+            integer n = con:GetSize()
+            if con:planeIndex = p and n >= 2
+                number area2 = con:SignedArea2()
+                text direction = "CCW"
+                if area2 < 0
+                    direction = "CW"
+                end
+                text kind = "outer"
+                if con:isHole
+                    kind = "hole"
+                end
+                output "Contour " + loopCount + ": " + n + " points, closed=" + con:closed
+                    + ", " + kind + " (depth " + con:depth + "), " + direction + ", area=" + (area2 / 2.0)
+
+                // Edges as a gradient: blue at the start -> red at the end.
+                // A closed contour also draws the implied edge from last point back to first.
+                integer j = 0
+                integer edgeCount = n - 1
+                if con:closed
+                    edgeCount = n
+                end
+                j = 0
+                repeat while j < edgeCount
+                    integer k2 = j + 1
+                    if k2 = n
+                        k2 = 0
+                    end
+                    number t = cast(number, j) / cast(number, edgeCount)
+                    Color col
+                    col:SetColor(t, 0.2, 1.0 - t, 1.0)
+                    DrawEdge(con:xs:Get(j), con:ys:Get(j), con:xs:Get(k2), con:ys:Get(k2), col)
+                    j = j + 1
+                end
+
+                // Green square at the start point
+                Color green
+                green:SetColor(0.0, 0.8, 0.0, 1.0)
+                DrawMarker(con:HeadX(), con:HeadY(), green)
+
+                // Open contours also get a yellow square at the dangling end
+                if not con:closed
+                    Color yellow
+                    yellow:SetColor(1.0, 0.85, 0.0, 1.0)
+                    DrawMarker(con:TailX(), con:TailY(), yellow)
+                    openCount = openCount + 1
+                end
+
+                loopCount = loopCount + 1
+            end
+            c = c + 1
+        end
+
+        text overhangText = ""
+        if hasOverhangs
+            overhangText = ", overhang " + overhangs:GetOverhangArea(p) + " mm^2"
+        end
+        output "Plane " + p + ": " + loopCount + " contours, " + openCount + " still open" + overhangText
+    end
+
+    private action DrawPaths(integer p)
+        Color gray
+        gray:SetColor(0.75, 0.75, 0.75, 1.0)
+        Color red
+        red:SetColor(0.85, 0.15, 0.1, 1.0)
+        Color blue
+        blue:SetColor(0.15, 0.35, 0.9, 1.0)
+        Color green
+        green:SetColor(0.1, 0.65, 0.25, 1.0)
+        Color purple
+        purple:SetColor(0.55, 0.2, 0.75, 1.0)
+
+        // Plot keeps the first color drawn at each pixel, so draw in priority
+        // order: walls, then infill, then the outline wherever it's still visible
+        integer i = 0
+        integer wallLoops = 0
+        repeat while i < walls:GetSize()
+            Contour wall = walls:Get(i)
+            if wall:planeIndex = p
+                if wall:wallIndex = 0
+                    DrawPolyline(wall, true, red)
+                else
+                    DrawPolyline(wall, true, blue)
+                end
+                wallLoops = wallLoops + 1
+            end
+            i = i + 1
+        end
+
+        integer skinCount = 0
+        i = 0
+        repeat while i < skinLines:GetSize()
+            Contour line = skinLines:Get(i)
+            if line:planeIndex = p and line:GetSize() >= 2
+                DrawPolyline(line, false, purple)
+                skinCount = skinCount + 1
+            end
+            i = i + 1
+        end
+
+        integer infillCount = 0
+        number infillLength = 0.0
+        i = 0
+        repeat while i < infill:GetSize()
+            Contour seg = infill:Get(i)
+            if seg:planeIndex = p and seg:GetSize() >= 2
+                DrawPolyline(seg, false, green)
+                number dx = seg:TailX() - seg:HeadX()
+                number dy = seg:TailY() - seg:HeadY()
+                infillLength = infillLength + math:SquareRoot(dx * dx + dy * dy)
+                infillCount = infillCount + 1
+            end
+            i = i + 1
+        end
+
+        i = 0
+        repeat while i < contours:GetSize()
+            Contour con = contours:Get(i)
+            if con:planeIndex = p
+                DrawPolyline(con, con:closed, gray)
+            end
+            i = i + 1
+        end
+
+        text overhangText = ""
+        if hasOverhangs
+            overhangText = ", overhang " + overhangs:GetOverhangArea(p) + " mm^2"
+        end
+        output "Plane " + p + ": " + wallLoops + " wall loops, " + skinCount + " skin lines, "
+            + infillCount + " infill lines (" + infillLength + " mm)" + overhangText
+    end
+
+    private action DrawPolyline(Contour con, boolean closeIt, Color color)
+        integer n = con:GetSize()
+        integer edgeCount = n - 1
+        if closeIt
+            edgeCount = n
+        end
+        integer j = 0
+        repeat while j < edgeCount
+            integer k = j + 1
+            if k = n
+                k = 0
+            end
+            DrawEdge(con:xs:Get(j), con:ys:Get(j), con:xs:Get(k), con:ys:Get(k), color)
+            j = j + 1
+        end
+    end
+
+    // Draws this plane's overhang cells as orange rectangles, merging each
+    // row's consecutive cells into one rectangle to keep the drawable count low.
     private action DrawOverhangs(integer p)
         if not hasOverhangs
             return now
         end
-        
+
         Color orange
         orange:SetColor(1.0, 0.55, 0.0, 1.0)
         number cell = overhangs:GetCellSize()
@@ -227,20 +407,20 @@ class LineRender is Game, KeyboardListener
         number oy = overhangs:GetOriginY()
         integer cols = overhangs:GetColumns()
 
-        integer i = overhangs:GetStart(p)
+        integer k = overhangs:GetStart(p)
         integer stop = overhangs:GetEnd(p)
-        repeat while i < stop
-            integer index = overhangs:GetCell(i)
-            integer row = index / cols
-            integer colStart = index - row * cols
+        repeat while k < stop
+            integer idx = overhangs:GetCell(k)
+            integer row = idx / cols
+            integer colStart = idx - row * cols
             integer colEnd = colStart
-            
+
             boolean extending = true
             repeat while extending
-                if i + 1 < stop
-                    if overhangs:GetCell(i + 1) = row * cols + colEnd + 1
+                if k + 1 < stop
+                    if overhangs:GetCell(k + 1) = row * cols + colEnd + 1
                         colEnd = colEnd + 1
-                        i = i + 1
+                        k = k + 1
                     else
                         extending = false
                     end
@@ -268,73 +448,7 @@ class LineRender is Game, KeyboardListener
             Add(rect)
             draws:Add(rect)
 
-            i = i + 1       
+            k = k + 1
         end
-    end
-    
-    private action DrawPlane(integer p)
-        ClearDrawing() 
-        DrawOverhangs(p)
-        
-        integer loopCount = 0
-        integer openCount = 0
-        
-        integer c = 0
-        repeat while c < contours:GetSize() 
-            Contour con = contours:Get(c)
-            integer n = con:GetSize() 
-            if con:planeIndex = p and n >= 2
-                number area2 = con:SignedArea2()
-                text direction = "CCW"
-                if area2 < 0
-                    direction = "CW"
-                end
-                text kind = "outer"
-                if con:isHole   
-                    kind = "hole"    
-                end
-                output "Contour " + loopCount + ": " + n + " points, closed = "
-                    + con:closed + ", " + kind + " (depth " + con:depth + "), " + direction + ", area = " + (area2 / 2.0)
-                
-                integer edgeCount = n - 1
-                if con:closed
-                    edgeCount = n
-                end
-                
-                i = 0
-                repeat while i < edgeCount
-                    integer j = i + 1
-                    if j = n
-                        j = 0
-                    end
-                    number t = cast(number, j) / cast(number, edgeCount)
-                    Color col
-                    col:SetColor(t, 0.2, 1.0 - t, 1.0)
-                    DrawEdge(con:xs:Get(i), con:ys:Get(i), con:xs:Get(j), con:ys:Get(j), col)
-                    i = i + 1
-                end
-
-                Color green
-                green:SetColor(0.0,0.8,0.0,1.0)
-                DrawMarker(con:HeadX(), con:HeadY(), green)
-
-                if not con:closed
-                    Color yellow
-                    yellow:SetColor(1.0,0.85,0.0,1.0)
-                    DrawMarker(con:TailX(), con:TailY(), yellow)
-                    openCount = openCount + 1
-                end
-
-                loopCount = loopCount + 1
-            end
-            c = c + 1
-        end
-        
-        text overhangText = ""
-        if hasOverhangs
-            overhangText = ", overhang " + overhangs:GetOverhangArea(p) + " mm^2"
-        end
-
-        output "Plane " + p + ": " + loopCount + " contours, " + openCount + " still open" + overhangText
     end
 end
