@@ -37,7 +37,7 @@ class GeometryUtilities
 
     action CeilingToInt(number v) returns integer
         integer res = cast(integer, v)
-        if v < cast(number, res)
+        if v > cast(number, res)
             res = res + 1
         end
         return res
@@ -92,7 +92,7 @@ class GeometryUtilities
         integer n = path:GetSize()
         integer segments = n - 1
         if path:closed
-
+            segments = n
         end
         integer i = 0
         repeat while i < segments

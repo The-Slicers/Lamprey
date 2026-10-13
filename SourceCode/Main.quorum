@@ -18,6 +18,7 @@ use geometry.PathGenerator
 use geometry.PathOrderer
 use geometry.Gcode
 use geometry.SkirtGenerator
+use geometry.TreeSupport
 
 use tool.LineRender
 
@@ -25,7 +26,7 @@ class Main
     action Main
         // Load in model from assets folder
         File file
-        file:SetPath("assets/cube.obj")
+        file:SetPath("assets/bunny.obj")
 
         // packages model data into a ModelData class
         ModelLoader loader
@@ -49,7 +50,7 @@ class Main
         number cutAmount = 0.0 // 1.6
 
         TestSlicer slicer
-        slicer:SetUnitScale(20.0) // 25.4
+        slicer:SetUnitScale(8.0) // 25.4
         slicer:SetTriangles(meshData)
         Array<number> planeRange = slicer:GetSliceRange()         
         output "Plane Low: " + planeRange:Get(0) + " Plane High: " + planeRange:Get(1)
@@ -83,18 +84,29 @@ class Main
         paths:SetBottomLayers(12) 
         paths:Generate(contours, planes:GetSize()) 
         
-        Contour c = contours:Get(50)
-output "contour, plane 50: " + c:GetSize() + " points, area " + (c:SignedArea2() / 2.0)
-Array<Contour> walls = paths:GetWalls()
-Contour outer = walls:Get(99)       // plane 50, wall 0
-Contour inner = walls:Get(101)       // plane 50, wall 1
-output "outer wall: " + outer:GetSize() + " points, area " + (outer:SignedArea2() / 2.0)
-output "inner wall: " + inner:GetSize() + " points, area " + (inner:SignedArea2() / 2.0)
+        TreeSupport trees
+        trees:SetLayerHeight(0.2)
+        trees:SetLineWidth(0.4)
+        trees:Generate(contours, planes:GetSize())
+            
+        Array<Contour> base
+        integer i = 0
+        repeat while i < contours:GetSize()
+            base:Add(contours:Get(i))
+            i = i + 1
+        end
+        
+        Array<Contour> supportAreas = trees:GetAreas() 
+        i = 0
+        repeat while i < supportAreas:GetSize()
+            base:Add(supportAreas:Get(i))
+            i = i + 1
+        end
+
         SkirtGenerator skirtGen
         skirtGen:SetLineWidth(0.4)
-        skirtGen:SetSkirt(2, 3.0, 1)
-        Array<Contour> skirt = skirtGen:Generate(contours)
-    
+        skirtGen:SetBrim(8, 0.0)
+        Array<Contour> skirt = skirtGen:Generate(base)
 
 //        LineRender lr
 //        lr:SetData(planes, contours)
@@ -105,6 +117,7 @@ output "inner wall: " + inner:GetSize() + " points, area " + (inner:SignedArea2(
         
         PathOrderer orderer
         orderer:SetSkirt(skirt)
+        orderer:SetSupport(trees:GetPaths())
         Array<Contour> ordered = orderer:Order(contours, paths:GetWalls(), paths:GetSkin(), paths:GetInfill(), planes:GetSize())
         
         Gcode gcode

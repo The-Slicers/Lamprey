@@ -1,0 +1,1017 @@
+package geometry
+
+use Libraries.Containers.Array 
+use Libraries.Compute.Math 
+
+class TreeSupport
+    // support settings
+    number layerHeight = 0.2
+    number lineWidth = 0.4
+    number supportAngle = 50.0
+    number branchAngle = 40.0
+    number tipSpacing = 3.0
+    number tipDiameter = 1.0
+    number tineLength = 1.0
+    number growthAngle = 5.0
+    number maxRadius = 4.0
+    number xyGap = 0.8
+    number tineXYGap = 0.3
+    integer topGapLayers = 1
+    number lookDown = 1.0
+    number density = 0.15
+    number baseFlare = 1.0
+    integer baseLayers = 5
+    
+    number allowed = 0.0
+    number maxMove = 0.0
+    number growth = 0.0
+    number tipRadius = 0.5
+    number mergeSearch = 12.0
+    integer tineLayers = 5
+    integer lookLayers = 5
+    integer spacingLayers = 3
+    
+    // model by layer
+    Array<Contour> src
+    Array<integer> layerStart
+    Array<integer> layerOrder
+    integer planeTotal = 0
+    Array<boolean> hasBox
+    Array<number> boxMinX
+    Array<number> boxMinY
+    Array<number> boxMaxX
+    Array<number> boxMaxY
+
+    // tines
+    Array<number> tipX
+    Array<number> tipY
+    Array<integer> tipLayer
+    Array<integer> firstTipOfSurface
+
+    Array<Contour> areas
+    Array<Contour> paths
+    integer reachedBed = 0
+    integer restedOnModel = 0
+    
+    boolean nearInside = false
+    number nearDistance = 0.0
+    number nearX = 0.0
+    number nearY = 0.0
+    number placeX = 0.0
+    number placeY = 0.0
+
+    Math math
+    GeometryUtilities util
+    Offsetter offsetter
+    PolygonOps ops
+
+    action SetLayerHeight(number height)
+        layerHeight = height
+    end 
+    
+    action SetLineWidth(number width)
+        lineWidth = width
+    end
+    
+    // overhangs steeper than this angle get supports
+    action SetOverhangAngle(number degrees)
+        supportAngle = degrees
+    end
+    
+    // distance between neighboring tines (mm)
+    action SetTipSpacing(number spacing)
+        tipSpacing = spacing
+    end
+
+    action SetBranchGrowth(number degrees, number maxR)
+        growthAngle = degrees
+        maxRadius = maxR
+    end
+    
+    action SetGaps(number branchGap, number tineGap, integer topLayers)
+        xyGap = branchGap
+        tineXYGap = tineGap
+        topGapLayers = topLayers
+    end
+
+    action SetDensity(number value)
+        density = value
+    end
+    
+    action SetBase(number flare, integer layers)
+        baseFlare = flare
+        baseLayers = layers
+    end    
+
+    action GetAreas returns Array<Contour>
+        return areas
+    end
+    
+    action GetPaths returns Array<Contour>
+        return paths
+    end
+
+    action GetTipCount returns integer
+        return tipX:GetSize() 
+    end
+
+    action GetReachedBed returns integer
+        return reachedBed
+    end
+    
+    action GetRestedOnModel returns integer
+        return restedOnModel
+    end
+    
+    action Generate(Array<Contour> contours, integer planeCount)
+        areas:Empty()
+        paths:Empty()
+        reachedBed = 0
+        restedOnModel = 0
+        src = contours
+        planeTotal = planeCount
+
+        allowed = layerHeight * Tan(supportAngle)
+        maxMove = layerHeight * Tan(branchAngle)
+        growth = layerHeight * Tan(growthAngle)
+        tipRadius = tipDiameter / 2.0
+        mergeSearch = 4.0 * tipSpacing
+        tineLayers = util:FloorToInt(tineLength / layerHeight + 0.5)
+        if tineLayers < 1
+            tineLayers = 1
+        end
+        lookLayers = util:FloorToInt(lookDown / layerHeight + 0.5)
+        if lookLayers < 1
+            lookLayers = 1
+        end
+        spacingLayers = util:FloorToInt(0.6 / layerHeight + 0.5)
+        if spacingLayers < 1
+            spacingLayers = 1
+        end
+
+        util:BucketUsableLoops(contours, planeCount, layerStart, layerOrder)
+        ComputeBoxes()
+        SeedTips()
+        Grow()
+
+        text summary = "TreeSupport: " + tipX:GetSize() + " tines, " + reachedBed + " trunks reach the bed, "
+        summary = summary + restedOnModel + " branches rest on the model, " + paths:GetSize() + " support paths"
+        output summary
+    end
+
+    private action SeedTips
+        tipX:Empty()
+        tipY:Empty()
+        tipLayer:Empty()
+        firstTipOfSurface:Empty()
+        integer p = 0
+        repeat while p <= planeTotal
+            firstTipOfSurface:Add(0)
+            p = p + 1
+        end
+
+        // bounding box of the whole model
+        boolean any = false
+        number minX = 0.0
+        number minY = 0.0
+        number maxX = 0.0
+        number maxY = 0.0
+        p = 0
+        repeat while p < planeTotal
+            if hasBox:Get(p)
+                if not any
+                    minX = boxMinX:Get(p)
+                    minY = boxMinY:Get(p)
+                    maxX = boxMaxX:Get(p)
+                    maxY = boxMaxY:Get(p)
+                    any = true
+                end
+                minX = util:Min2(minX, boxMinX:Get(p))
+                minY = util:Min2(minY, boxMinY:Get(p))
+                maxX = util:Max2(maxX, boxMaxX:Get(p))
+                maxY = util:Max2(maxY, boxMaxY:Get(p))
+            end
+            p = p + 1
+        end
+        if not any
+            return now
+        end
+
+        // triangular grid: rows rowStep apart, odd rows shifted half a spacing
+        number sp = tipSpacing
+        number rowStep = sp * 0.8660254037844386
+        integer r0 = util:FloorToInt(minY / rowStep)
+        integer r1 = util:CeilingToInt(maxY / rowStep)
+        integer c0 = util:FloorToInt(minX / sp) - 1
+        integer c1 = util:CeilingToInt(maxX / sp) + 1
+        integer rows = r1 - r0 + 1
+        integer cols = c1 - c0 + 1
+
+        Array<boolean> prev
+        Array<boolean> cur
+        integer i = 0
+        repeat while i < rows * cols
+            prev:Add(false)
+            cur:Add(false)
+            i = i + 1
+        end
+        Array<number> hits
+
+        integer layer = 0
+        repeat while layer < planeTotal
+            firstTipOfSurface:Set(layer, tipX:GetSize())
+            i = 0
+            repeat while i < rows * cols
+                cur:Set(i, false)
+                i = i + 1
+            end
+
+            if hasBox:Get(layer)
+                integer r = 0
+                repeat while r < rows
+                    number gy = cast(number, r0 + r) * rowStep
+                    number shift = 0.0
+                    if (r0 + r) mod 2 not= 0
+                        shift = 0.5 * sp
+                    end
+                    hits:Empty()
+                    RowHits(layer, gy, hits)
+                    util:SortNumbers(hits)
+
+                    integer h = 0
+                    integer c = 0
+                    repeat while c < cols
+                        number gx = cast(number, c0 + c) * sp + shift
+                        // count the crossings left of gx: odd = inside
+                        boolean counting = true
+                        repeat while counting
+                            if h >= hits:GetSize()
+                                counting = false
+                            elseif hits:Get(h) < gx
+                                h = h + 1
+                            else
+                                counting = false
+                            end
+                        end
+                        integer idx = r * cols + c
+                        boolean isIn = false
+                        if h mod 2 = 1
+                            isIn = true
+                        end
+                        cur:Set(idx, isIn)
+                        if isIn and layer > 0
+                            if not prev:Get(idx)
+                                // the model's underside passes this grid point here
+                                if NeedsSupport(gx, gy, layer)
+                                    AddTip(gx, gy, layer)
+                                end
+                            end
+                        end
+                        c = c + 1
+                    end
+                    r = r + 1
+                end
+
+                if layer > 0
+                    OutlineTips(layer)
+                end
+            end
+
+            i = 0
+            repeat while i < rows * cols
+                prev:Set(i, cur:Get(i))
+                i = i + 1
+            end
+            layer = layer + 1
+        end
+        firstTipOfSurface:Set(planeTotal, tipX:GetSize())
+    end
+
+    // x positions where given layer's outlines cross the horizontal line y = gy
+    private action RowHits(integer layer, number gy, Array<number> hits)
+        integer k = layerStart:Get(layer)
+        repeat while k < layerStart:Get(layer + 1)
+            Contour con = src:Get(layerOrder:Get(k))
+            integer n = con:GetSize()
+            integer j = n - 1
+            integer i = 0
+            repeat while i < n
+                number yi = con:ys:Get(i)
+                number yj = con:ys:Get(j)
+                boolean iAbove = yi > gy
+                boolean jAbove = yj > gy
+                if iAbove not= jAbove
+                    number xi = con:xs:Get(i)
+                    number xj = con:xs:Get(j)
+                    hits:Add(xj + (gy - yj) * (xi - xj) / (yi - yj))
+                end
+                j = i
+                i = i + 1
+            end
+            k = k + 1
+        end
+    end
+
+    // candidate tines every tipSpacing along given layer outlines
+    private action OutlineTips(integer layer)
+        integer k = layerStart:Get(layer)
+        repeat while k < layerStart:Get(layer + 1)
+            Contour con = src:Get(layerOrder:Get(k))
+            integer n = con:GetSize()
+            number carry = 0.0
+            integer i = 0
+            repeat while i < n
+                integer i2 = i + 1
+                if i2 = n
+                    i2 = 0
+                end
+                number ex = con:xs:Get(i2) - con:xs:Get(i)
+                number ey = con:ys:Get(i2) - con:ys:Get(i)
+                number el = math:SquareRoot(ex * ex + ey * ey)
+                if el > 0
+                    // material is on the left of every outline
+                    number nx = -ey / el
+                    number ny = ex / el
+                    number t = carry
+                    repeat while t < el
+                        TryOutlineTip(layer, con:xs:Get(i) + ex * t / el, con:ys:Get(i) + ey * t / el, nx, ny)
+                        t = t + tipSpacing
+                    end
+                    carry = t - el
+                end
+                i = i + 1
+            end
+            k = k + 1
+        end
+    end
+
+    // the tine's center goes a tip radius in from the edge
+    // for a gentle slope that spot is already held up by
+    // the layer below, so it fallsed back to just inside the
+    // edge
+    private action TryOutlineTip(integer layer, number px, number py, number nx, number ny)
+        integer attempt = 0
+        repeat while attempt < 2
+            number inset = tipRadius
+            if attempt = 1
+                inset = 0.05
+            end
+            number qx = px + nx * inset
+            number qy = py + ny * inset
+            if Inside(layer, qx, qy)
+                if not Inside(layer - 1, qx, qy)
+                    if NeedsSupport(qx, qy, layer)
+                        AddTip(qx, qy, layer)
+                    end
+                    return now
+                end
+            end
+            attempt = attempt + 1
+        end
+    end
+
+    private action Grow
+        integer tipCount = tipX:GetSize()
+        if tipCount = 0
+            return now
+        end
+
+        Array<number> nodeX
+        Array<number> nodeY
+        Array<integer> nodeDist      // layers below its tine's top
+        Array<integer> nodeWeight    // how many tines it carries
+
+        // tines were added bottom-up, so tipLayer never decreases
+        integer cursor = tipCount - 1
+        integer layer = tipLayer:Get(cursor)
+        repeat while layer >= 0
+            // tines whose top is on this layer start here
+            boolean adding = true
+            repeat while adding
+                if cursor < 0
+                    adding = false
+                elseif tipLayer:Get(cursor) = layer
+                    number sx = tipX:Get(cursor)
+                    number sy = tipY:Get(cursor)
+                    if Place(layer, sx, sy, tipRadius, tineXYGap, sx, sy, tipRadius)
+                        nodeX:Add(placeX)
+                        nodeY:Add(placeY)
+                        nodeDist:Add(0)
+                        nodeWeight:Add(1)
+                    end
+                    cursor = cursor - 1
+                else
+                    adding = false
+                end
+            end
+
+            integer n = nodeX:GetSize()
+            Array<number> circleX
+            Array<number> circleY
+            Array<number> circleR
+
+            if layer = 0
+                // on the bed: done
+                integer b = 0
+                repeat while b < n
+                    circleX:Add(nodeX:Get(b))
+                    circleY:Add(nodeY:Get(b))
+                    circleR:Add(Radius(nodeDist:Get(b)))
+                    b = b + 1
+                end
+                reachedBed = reachedBed + n
+                BuildLayer(0, circleX, circleY, circleR)
+            else
+                // lean toward the nearest neighbour (tines go straight down)
+                Array<number> newX
+                Array<number> newY
+                integer i = 0
+                repeat while i < n
+                    newX:Add(nodeX:Get(i))
+                    newY:Add(nodeY:Get(i))
+                    i = i + 1
+                end
+                i = 0
+                repeat while i < n
+                    if nodeDist:Get(i) >= tineLayers
+                        integer best = -1
+                        number bestD2 = mergeSearch * mergeSearch
+                        integer j = 0
+                        repeat while j < n
+                            if j not= i
+                                number ax = nodeX:Get(j) - nodeX:Get(i)
+                                number ay = nodeY:Get(j) - nodeY:Get(i)
+                                number d2 = ax * ax + ay * ay
+                                if d2 < bestD2
+                                    bestD2 = d2
+                                    best = j
+                                end
+                            end
+                            j = j + 1
+                        end
+                        if best >= 0
+                            number d = math:SquareRoot(bestD2)
+                            if d > 0
+                                number step = util:Min2(maxMove, d / 2.0)
+                                newX:Set(i, nodeX:Get(i) + (nodeX:Get(best) - nodeX:Get(i)) / d * step)
+                                newY:Set(i, nodeY:Get(i) + (nodeY:Get(best) - nodeY:Get(i)) / d * step)
+                            end
+                        end
+                    end
+                    i = i + 1
+                end
+
+                // merge branches that are now within one step of each other
+                Array<boolean> alive
+                Array<integer> into
+                i = 0
+                repeat while i < n
+                    alive:Add(true)
+                    into:Add(i)
+                    i = i + 1
+                end
+                number merge2 = maxMove * maxMove
+                i = 0
+                repeat while i < n
+                    if alive:Get(i)
+                        if nodeDist:Get(i) >= tineLayers
+                            integer m = i + 1
+                            repeat while m < n
+                                if alive:Get(m)
+                                    if nodeDist:Get(m) >= tineLayers
+                                        number mx = newX:Get(i) - newX:Get(m)
+                                        number my = newY:Get(i) - newY:Get(m)
+                                        if mx * mx + my * my <= merge2
+                                            number wi = cast(number, nodeWeight:Get(i))
+                                            number wm = cast(number, nodeWeight:Get(m))
+                                            newX:Set(i, (newX:Get(i) * wi + newX:Get(m) * wm) / (wi + wm))
+                                            newY:Set(i, (newY:Get(i) * wi + newY:Get(m) * wm) / (wi + wm))
+                                            nodeWeight:Set(i, nodeWeight:Get(i) + nodeWeight:Get(m))
+                                            if nodeDist:Get(m) > nodeDist:Get(i)
+                                                nodeDist:Set(i, nodeDist:Get(m))
+                                            end
+                                            alive:Set(m, false)
+                                            into:Set(m, i)
+                                        end
+                                    end
+                                end
+                                m = m + 1
+                            end
+                        end
+                    end
+                    i = i + 1
+                end
+
+                // keep clear of the model on the layer below
+                Array<number> outX
+                Array<number> outY
+                Array<integer> outDist
+                Array<integer> outWeight
+                Array<boolean> kept
+                i = 0
+                repeat while i < n
+                    kept:Add(false)
+                    i = i + 1
+                end
+                i = 0
+                repeat while i < n
+                    if alive:Get(i)
+                        integer dist = nodeDist:Get(i)
+                        number gap = xyGap
+                        if dist + 1 < tineLayers
+                            gap = tineXYGap
+                        end
+                        number budget = tipRadius
+                        if dist >= tineLayers
+                            budget = 2.0 * maxMove
+                        end
+                        number r = Radius(dist + 1)
+                        boolean ok = Place(layer - 1, newX:Get(i), newY:Get(i), r, gap, nodeX:Get(i), nodeY:Get(i), budget)
+                        if not ok
+                            if newX:Get(i) not= nodeX:Get(i) or newY:Get(i) not= nodeY:Get(i)
+                                // the lean ran into the model, try straight down
+                                ok = Place(layer - 1, nodeX:Get(i), nodeY:Get(i), r, gap, nodeX:Get(i), nodeY:Get(i), budget)
+                            end
+                        end
+                        if ok
+                            outX:Add(placeX)
+                            outY:Add(placeY)
+                            outDist:Add(dist + 1)
+                            outWeight:Add(nodeWeight:Get(i))
+                            kept:Set(i, true)
+                            circleX:Add(nodeX:Get(i))
+                            circleY:Add(nodeY:Get(i))
+                            circleR:Add(Radius(dist))
+                        else
+                            // model right underneath: the branch rests on it.
+                            // This layer is left out: a one-layer gap above the model
+                            restedOnModel = restedOnModel + 1
+                        end
+                    end
+                    i = i + 1
+                end
+                // branches merged away this layer still print here
+                i = 0
+                repeat while i < n
+                    if not alive:Get(i)
+                        if kept:Get(into:Get(i))
+                            circleX:Add(nodeX:Get(i))
+                            circleY:Add(nodeY:Get(i))
+                            circleR:Add(Radius(nodeDist:Get(i)))
+                        end
+                    end
+                    i = i + 1
+                end
+
+                BuildLayer(layer, circleX, circleY, circleR)
+                nodeX = outX
+                nodeY = outY
+                nodeDist = outDist
+                nodeWeight = outWeight
+            end
+            layer = layer - 1
+        end
+    end
+
+    // tries to place a branch of radius r at (x, y) for the given layer.
+    // a successful branch is placed in placeX and placeY
+    private action Place(integer layer, number x, number y, number r, number gap,
+                         number fromX, number fromY, number budget) returns boolean
+        placeX = x
+        placeY = y
+        number need = gap + r
+        Nearest(layer, x, y, need + budget + 1.0)
+        boolean wasInside = nearInside
+        if not wasInside
+            if nearDistance >= need
+                return true
+            end
+        end
+        number dx = x - nearX
+        number dy = y - nearY
+        number d = math:SquareRoot(dx * dx + dy * dy)
+        if d < 0.000000001
+            if wasInside
+                return false
+            end
+            return true
+        end
+      
+        number push = need - d
+        if wasInside
+            // inside the model: cross its edge to the outside
+            dx = -dx
+            dy = -dy
+            push = need + d
+        end
+        dx = dx / d
+        dy = dy / d
+        number qx = x + dx * push
+        number qy = y + dy * push
+        number mx = qx - fromX
+        number my = qy - fromY
+        if mx * mx + my * my <= budget * budget
+            Nearest(layer, qx, qy, need + 1.0)
+            if not nearInside
+                placeX = qx
+                placeY = qy
+                return true
+            end
+        end
+
+        if wasInside
+            return false
+        end
+        mx = x - fromX
+        my = y - fromY
+        number left = budget - math:SquareRoot(mx * mx + my * my)
+        number step = util:Min2(push, util:Max2(left, 0.0))
+        if step > 0
+            qx = x + dx * step
+            qy = y + dy * step
+            Nearest(layer, qx, qy, need + 1.0)
+            if not nearInside
+                placeX = qx
+                placeY = qy
+            end
+        end
+        return true
+    end
+
+    private action BuildLayer(integer layer, Array<number> cx, Array<number> cy, Array<number> cr)
+        if cx:GetSize() = 0
+            return now
+        end
+        ops:Clear()
+        Array<number> qx
+        Array<number> qy
+        integer i = 0
+        repeat while i < cx:GetSize()
+            number r = cr:Get(i)
+            if layer < baseLayers
+                r = r + baseFlare * cast(number, baseLayers - layer) / cast(number, baseLayers)
+            end
+            qx:Empty()
+            qy:Empty()
+            CirclePoints(cx:Get(i), cy:Get(i), r, qx, qy)
+            ops:AddPoints(qx, qy, false)
+            i = i + 1
+        end
+        Array<Contour> support = ops:Resolve(1, layer)
+        if support:GetSize() = 0
+            return now
+        end
+
+        // never closer than tineXYGap to the model
+        Array<Contour> model = LayerContours(layer)
+        if model:GetSize() > 0
+            Array<Contour> grown = offsetter:Offset(model, -tineXYGap)
+            if grown:GetSize() > 0
+                support = ops:Difference(support, grown, layer)
+            end
+        end
+        if support:GetSize() = 0
+            return now
+        end
+        i = 0
+        repeat while i < support:GetSize()
+            areas:Add(support:Get(i))
+            i = i + 1
+        end
+
+        // one wall, its outside edge on the support outline
+        Array<Contour> walls = offsetter:Offset(support, lineWidth * 0.5)
+        i = 0
+        repeat while i < walls:GetSize()
+            Contour wall = walls:Get(i)
+            wall:wallIndex = 0
+            paths:Add(wall)
+            i = i + 1
+        end
+
+        // sparse lines inside thick trunks, reaching a quarter line into the wall
+        if density > 0
+            Array<Contour> inner = offsetter:Offset(support, lineWidth * 1.25)
+            if inner:GetSize() > 0
+                AddLines(inner, layer, lineWidth / util:Min2(density, 1.0), paths)
+            end
+        end
+    end
+
+    // checks if (x, y), the underside of the given layer, is too steep to
+    // print without support
+    private action NeedsSupport(number x, number y, integer layer) returns boolean
+        integer k = lookLayers
+        if layer < k
+            k = layer
+        end
+        if k <= 0
+            return false
+        end
+        number limit = cast(number, k) * allowed
+        Nearest(layer - k, x, y, limit + 1.0)
+        if nearInside
+            return false
+        end
+        return nearDistance > limit
+    end
+
+    private action AddTip(number x, number y, integer layer)
+        integer top = layer - 1 - topGapLayers
+        if top < 0
+            return now
+        end
+
+        integer from = layer - spacingLayers
+        if from < 0
+            from = 0
+        end
+
+        number limit = 0.75 * tipSpacing
+        number limit2 = limit * limit
+        integer t = firstTipOfSurface:Get(from) 
+        repeat while t < tipX:GetSize()
+            number dx = tipX:Get(t) - x
+            number dy = tipY:Get(t) - y
+            if dx * dx + dy * dy < limit2
+                return now
+            end
+            t = t + 1
+        end
+        tipX:Add(x) 
+        tipY:Add(y) 
+        tipLayer:Add(top)
+    end
+
+    // makes a ccw polygon around (x, y) with 8 sides when considered thin
+    // 16 when thick
+    private action CirclePoints(number x, number y, number r, Array<number> qx, Array<number> qy)
+       integer sides = 8
+       number cs = 0.7071067811865476 // cos 45
+       number sn = 0.7071067811865476 // sin 45
+       if r >= 1.0
+           sides = 16
+           cs = 0.9238795325112867 // cos 22.5
+           sn = 0.3826834323650898 // sin 22.5
+       end
+       number vx = r
+       number vy = 0.0
+       integer k = 0
+       repeat while k < sides
+           qx:Add(x + vx)
+           qy:Add(y + vy)
+           number wx = vx * cs - vy * sn
+           vy = vx * sn + vy * cs
+           vx = wx
+           k = k + 1
+       end
+    end
+
+    private action AddLines(Array<Contour> region, integer planeIndex, number spacing, Array<Contour> target)
+        number half = math:SquareRoot(0.5)
+        number cs = half
+        number sn = half
+        if planeIndex mod 2 = 1
+            cs = -half
+        end
+
+        Array<number> rx
+        Array<number> ry
+        Array<integer> loopStart
+        integer c = 0
+        repeat while c < region:GetSize()
+            Contour con = region:Get(c)
+            loopStart:Add(rx:GetSize())
+            integer i = 0
+            repeat while i < con:GetSize()
+                number x = con:xs:Get(i)
+                number y = con:ys:Get(i)
+                rx:Add(x * cs + y * sn)
+                ry:Add(-x * sn + y * cs)
+                i = i + 1
+            end
+            c = c + 1
+        end
+        loopStart:Add(rx:GetSize())
+        if ry:GetSize() = 0
+            return now
+        end
+
+        number lowY = ry:Get(0)
+        number highY = lowY
+        integer v = 0
+        repeat while v < ry:GetSize()
+            if ry:Get(v) < lowY
+                lowY = ry:Get(v)
+            end
+            if ry:Get(v) > highY
+                highY = ry:Get(v)
+            end
+            v = v + 1
+        end
+
+        Array<number> hits
+        integer lineCount = 0
+        integer line = util:CeilingToInt(lowY / spacing)
+        repeat while cast(number, line) * spacing <= highY
+            number scanY = cast(number, line) * spacing
+            hits:Empty()
+            integer L = 0
+            repeat while L < region:GetSize()
+                integer s = loopStart:Get(L)
+                integer n = loopStart:Get(L + 1) - s
+                integer j = n - 1
+                integer k = 0
+                repeat while k < n
+                    number y0 = ry:Get(s + j)
+                    number y1 = ry:Get(s + k)
+                    boolean above0 = y0 > scanY
+                    boolean above1 = y1 > scanY
+                    if above0 not= above1
+                        number x0 = rx:Get(s + j)
+                        number x1 = rx:Get(s + k)
+                        hits:Add(x0 + (scanY - y0) * (x1 - x0) / (y1 - y0))
+                    end
+                    j = k
+                    k = k + 1
+                end
+                L = L + 1
+            end
+            util:SortNumbers(hits)
+
+            integer q = 0
+            repeat while q + 1 < hits:GetSize()
+                number a = hits:Get(q)
+                number b = hits:Get(q + 1)
+                if b - a >= lineWidth
+                    if lineCount mod 2 = 1
+                        number swap = a
+                        a = b
+                        b = swap
+                    end
+                    Contour seg
+                    seg:AddPoint(a * cs - scanY * sn, a * sn + scanY * cs)
+                    seg:AddPoint(b * cs - scanY * sn, b * sn + scanY * cs)
+                    seg:closed = false
+                    seg:planeIndex = planeIndex
+                    target:Add(seg)
+                end
+                q = q + 2
+            end
+            lineCount = lineCount + 1
+            line = line + 1
+        end
+    end
+
+    private action Nearest(integer layer, number x, number y, number reach)
+        nearInside = false
+        nearDistance = reach
+        nearX = x
+        nearY = y
+        if layer < 0 or layer >= planeTotal
+            return now
+        end
+        if not hasBox:Get(layer) 
+            return now
+        end
+        if x < boxMinX:Get(layer) - reach or x > boxMaxX:Get(layer) + reach
+            return now
+        end
+        if y < boxMinY:Get(layer) - reach or y > boxMaxY:Get(layer) + reach
+            return now
+        end
+
+        nearInside = Inside(layer, x, y)
+        number best = reach * reach
+        integer k = layerStart:Get(layer) 
+        repeat while k < layerStart:Get(layer + 1)
+            Contour con = src:Get(layerOrder:Get(k))
+            integer n = con:GetSize()
+            integer j = n - 1
+            integer i = 0
+            repeat while i < n
+                number ax = con:xs:Get(j)
+                number ay = con:ys:Get(j)
+                number vx = con:xs:Get(i) - ax
+                number vy = con:ys:Get(i) - ay
+                number wx = x - ax
+                number wy = y - ay
+                number len2 = vx * vx + vy * vy
+                number t = 0.0
+                if len2 > 0
+                    t = (wx * vx + wy * vy) / len2
+                    if t < 0
+                        t = 0.0
+                    elseif t > 1
+                        t = 1.0
+                    end
+                end
+                number qx = ax + t * vx
+                number qy = ay + t * vy
+                number d2 = (x - qx) * (x - qx) + (y - qy) * (y - qy)
+                if d2 < best
+                    best = d2
+                    nearX = qx
+                    nearY = qy
+                end
+                j = i
+                i = i + 1
+            end
+            k = k + 1
+        end
+        nearDistance = math:SquareRoot(best)
+    end
+
+    private action Inside(integer layer, number x, number y) returns boolean
+        if layer < 0 or layer >= planeTotal
+            return false
+        end
+        if not hasBox:Get(layer) 
+            return false
+        end
+        if x < boxMinX:Get(layer) or x > boxMaxX:Get(layer) 
+            return false
+        end
+        if y < boxMinY:Get(layer) or y > boxMaxY:Get(layer) 
+            return false
+        end
+
+        boolean inside = false
+        integer i = layerStart:Get(layer) 
+        repeat while i < layerStart:Get(layer + 1)
+            Contour con = src:Get(layerOrder:Get(i))
+            if con:ContainsPoint(x, y)
+                inside = not inside
+            end
+            i = i + 1
+        end
+        return inside
+    end
+    
+    private action ComputeBoxes
+        hasBox:Empty()
+        boxMinX:Empty()
+        boxMinY:Empty()
+        boxMaxX:Empty()
+        boxMaxY:Empty()
+
+        integer p = 0
+        repeat while p < planeTotal
+            boolean found = false
+            number lowX = 0.0
+            number lowY = 0.0
+            number highX = 0.0
+            number highY = 0.0
+            integer k = layerStart:Get(p) 
+            repeat while k < layerStart:Get(p + 1)
+                Contour con = src:Get(layerOrder:Get(k))
+                integer i = 0
+                repeat while i < con:GetSize()
+                    number x = con:xs:Get(i) 
+                    number y = con:ys:Get(i) 
+                    if not found
+                        lowX = x
+                        highX = x
+                        lowY = y
+                        highY = y
+                        found = true
+                    end
+                    lowX = util:Min2(lowX, x)
+                    lowY = util:Min2(lowY, y)
+                    highX = util:Max2(highX, x)
+                    highY = util:Max2(highY, y)
+                    i = i + 1
+                end
+                k = k + 1
+            end
+            hasBox:Add(found) 
+            boxMinX:Add(lowX) 
+            boxMinY:Add(lowY) 
+            boxMaxX:Add(highX) 
+            boxMaxY:Add(highY)
+            p = p + 1
+        end
+    end
+
+    private action Radius(integer dist) returns number
+        if dist < tineLayers
+            return tipRadius
+        end
+        return util:Min2(tipRadius + cast(number, dist - tineLayers) * growth, maxRadius)
+    end
+    
+    private action LayerContours(integer p) returns Array<Contour>
+        Array<Contour> layer
+        integer i = layerStart:Get(p) 
+        repeat while i < layerStart:Get(p + 1)
+            layer:Add(src:Get(layerOrder:Get(i)))
+            i = i + 1
+        end
+        return layer
+    end
+
+    private action Tan(number deg) returns number
+        return math:Tangent(deg * 3.141592653589793 / 180.0)
+    end
+
+end

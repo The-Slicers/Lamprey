@@ -11,6 +11,7 @@ class PathOrderer
     number minSegmentLength = 0.05
     integer droppedPaths = 0
     Array<Contour> skirt
+    Array<Contour> support
 
     number nozzleX = 0.0
     number nozzleY = 0.0
@@ -31,6 +32,10 @@ class PathOrderer
     
     action SetSkirt(Array<Contour> loops)
         skirt = loops
+    end
+
+    action SetSupport(Array<Contour> paths)
+        support = paths
     end
 
     action GetDroppedCount returns integer
@@ -56,10 +61,15 @@ class PathOrderer
         Array<integer> infillStart
         Array<integer> infillOrder
         util:BucketContours(infill, planeCount, infillStart, infillOrder)
+        Array<integer> supportStart
+        Array<integer> supportOrder
+        util:BucketContours(support, planeCount, supportStart, supportOrder)
+        
 
         integer p = 0
         repeat while p < planeCount
             PrintSkirt(p)
+            PrintSupport(p, supportStart, supportOrder)
         
             Array<Contour> islands
             integer i = contourStart:Get(p) 
@@ -325,6 +335,28 @@ class PathOrderer
             end
             i = i + 1
         end
+    end
+    
+    // adds the wall loops first then the inside lines for tree supports
+    private action PrintSupport(integer p, Array<integer> supportStart, Array<integer> supportOrder)
+        Array<Contour> noIslands
+        Array<Contour> layerSupport
+        Array<integer> supportIsland
+        CollectLayer(support, supportStart, supportOrder, p, noIslands, layerSupport, supportIsland)
+        Array<Contour> loops
+        Array<Contour> lines
+        integer i = 0
+        repeat while i < layerSupport:GetSize()
+            Contour path = layerSupport:Get(i) 
+            if path:closed 
+                loops:Add(path)
+            else
+                lines:Add(path)
+            end
+            i = i + 1
+        end
+        OrderLoops(loops, 5)
+        OrderLines(lines, 6)
     end
 
     private action AddSpaced(Contour path, number x, number y, boolean isLast)

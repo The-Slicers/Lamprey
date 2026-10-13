@@ -25,6 +25,7 @@ class Gcode
     number innerWallSpeed = 35.0
     number skinSpeed = 56.0
     number infillSpeed = 40.0
+    number supportSpeed = 30.0
     number firstLayerSpeed = 25.0
 
     number retractLength = 1.0
@@ -117,6 +118,10 @@ class Gcode
     action SetEndGCodeFile(text path)
         endFile = path
     end
+
+    action SetSupportSpeed(number mmPerSecond)
+        supportSpeed = mmPerSecond
+    end 
     
     // write all paths, in order and grouped by layer, to filePath
     action Write(Array<Contour> paths, text filePath)
@@ -510,6 +515,8 @@ class Gcode
             return skinSpeed
         elseif path:role = 4
             return firstLayerSpeed
+        elseif path:role = 5 or path:role = 4
+            return supportSpeed
         end    
         return infillSpeed
     end
@@ -524,6 +531,8 @@ class Gcode
             return "SKIN"
         elseif role = 4
             return "SKIRT"
+        elseif role = 5 or role = 4
+            return "SUPPORT"
         end
         return "FILL"
     end
