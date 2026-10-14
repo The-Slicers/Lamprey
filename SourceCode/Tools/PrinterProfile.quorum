@@ -7,6 +7,14 @@ class ProfileManager
     Array<Printer> printers
 
     action Add(Printer printer)
+        if printer = undefined
+            //printer is undefined
+            alert("Cannot add an undefined printer profile.")
+        end
+            //duplicate printer name
+        if FindIn(printers, printer:GetName()) not= undefined
+            alert("A printer profile named '" + printer:GetName() + "' already exists.")
+        end
         printers:Add(printer)
     end
 
@@ -16,6 +24,10 @@ class ProfileManager
 
     action Get(integer index) returns Printer
         return printers:Get(index)
+    end
+
+    action Find(text name) returns Printer
+        return FindIn(printers, name)
     end
 
     //returns the file of the given name or undefined if no profile. 
@@ -81,9 +93,18 @@ class ProfileManager
         repeat keys:GetSize() times
             text key = keys:Get(i)
 
+            if FindIn(loaded, key) not= undefined
+                alert("Profile file contains more than one profile names '" + key + "'.")
+            end
+
             // GetValue returns the nested object as JSON text, so parse it into its own object
             JavaScriptObjectNotation entry
-            entry:Read(root:GetValue(key))
+            check
+                entry:Read(root:GetValue(key))
+            detect e
+                alert("Profile '" + key + "' is not a valid JSON object.")
+            end
+            
 
             Printer p
             p:SetName(key)
@@ -103,6 +124,51 @@ class ProfileManager
             i = i + 1
         end
         printers = loaded
+    end
+
+    //Boolean helper function that reurns true if JSON object contains the given key. 
+    private action HasKey(JavaScriptObjectNotation json, text key) returns boolean
+        Array<text> keys = json:GetKeys()
+        integer i = 0
+        repeat keys:GetSize() times
+            if keys:Get(i) = key
+                return true
+            end
+            i = i + 1
+        end
+        return false
+    end
+
+    //reurns the value for the key, error if missing
+    private action GetReqValue(JavaScriptObjectNotation entry, text profileName, text key) returns text
+        if not HasKey(entry, key)
+            alert("Profile '" + profileName + "' is missing the required value '" + key + "'.")
+        end
+        return entry:GetValue(key)
+    end
+
+    //returns the value for the key as a number, error if missing or not numeric
+    private action GetReqNumber(JavaScriptObjectNotation entry, text profileName, text key) returns number
+        text value = GetReqValue(entry, profileName, key)
+        number result = 0 
+        check 
+            result = cast(number, value)
+        detect e
+            alert("Profile '" + profileName + "' has an invalid number for '" + key + "': " + value)
+        end
+        return result
+    end
+
+    //returns the value for the key as a integer, error if missing or not an integer
+    private action GetReqInteger(JavaScriptObjectNotation entry, text profileName, text key) returns number
+        text value = GetReqValue(entry, profileName, key)
+        number result = 0 
+        check 
+            result = cast(integer, value)
+        detect e
+            alert("Profile '" + profileName + "' has an invalid whole number for '" + key + "': " + value)
+        end
+        return result
     end
 
 end
