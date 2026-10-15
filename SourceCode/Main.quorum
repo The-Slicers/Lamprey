@@ -26,7 +26,7 @@ class Main
     action Main
         // Load in model from assets folder
         File file
-        file:SetPath("assets/bunny.obj")
+        file:SetPath("assets/lizard_man.stl")
 
         // packages model data into a ModelData class
         ModelLoader loader
@@ -50,7 +50,7 @@ class Main
         number cutAmount = 0.0 // 1.6
 
         TestSlicer slicer
-        slicer:SetUnitScale(8.0) // 25.4
+        slicer:SetUnitScale(1.1) // 25.4
         slicer:SetTriangles(meshData)
         Array<number> planeRange = slicer:GetSliceRange()         
         output "Plane Low: " + planeRange:Get(0) + " Plane High: " + planeRange:Get(1)
@@ -87,6 +87,9 @@ class Main
         TreeSupport trees
         trees:SetLayerHeight(0.2)
         trees:SetLineWidth(0.4)
+        trees:SetTip(0.8, 1.0)
+        trees:SetGaps(0.8, 0.35, 1)
+        trees:SetRestRules(3.0, 3.0)
         trees:Generate(contours, planes:GetSize())
             
         Array<Contour> base
@@ -123,13 +126,23 @@ class Main
         Gcode gcode
         gcode:SetLayerHeight(layerHeight)
         gcode:SetLineWidth(0.4)
+        gcode:SetNozzleDiameter(0.4)
         gcode:SetFilamentDiameter(1.75)
         gcode:SetFlow(1.0)
-        gcode:SetTemperature(200, 55)
+        gcode:SetTemperatures(190, 55)
         gcode:SetBed(160.0, 160.0)
+        gcode:SetBedHeight(160.0)
         gcode:SetRetraction(6.0, 40.0)
-        gcode:SetRetractionLimit(25, 6.0)
+        gcode:SetZHop(0.4)
+        gcode:SetZHopMinTravel(1.5)
+        gcode:SetSpeeds(25, 45, 40, 60, 40, 20)
+        gcode:SetTravelSpeed(150)
+        gcode:SetMaxFlow(10)
+        gcode:SetRetractionLimit(55, 6.0)
         gcode:SetMinLayerTime(15.0, 10.0)
+        gcode:SetBambuExtras(false)
+        gcode:SetStartGCodeFile("Templates\ender3-v2\start.gcode")
+        gcode:SetEndGCodeFile("Templates\ender3-v2\end.gcode")
         //gcode:SetDryRun(true, 20.0)
         gcode:Write(ordered, "Outputs/dry_cube.gcode")
     end

@@ -21,7 +21,15 @@ class TreeSupport
     number density = 0.15
     number baseFlare = 1.0
     integer baseLayers = 5
-    
+
+    // Branches may only come to rest on the model where they land at least
+    // minRestWidth / 2 inside its edge (a plinth, shoulders), never on a spear
+    // shaft, tail or spike. Branches look avoidDistance mm ahead (down) and
+    // steer off thin parts early. 0 = rest anywhere (no steering).
+    number minRestWidth = 3.0
+    number avoidDistance = 3.0
+    integer avoidLayers = 15
+
     number allowed = 0.0
     number maxMove = 0.0
     number growth = 0.0
@@ -101,7 +109,22 @@ class TreeSupport
     action SetBase(number flare, integer layers)
         baseFlare = flare
         baseLayers = layers
-    end    
+    end
+
+    // Contact tip diameter (mm) and how far it runs straight down before
+    // it may lean (mm). Smaller tips break off cleaner and mark less.
+    action SetTip(number diameter, number length)
+        tipDiameter = diameter
+        tineLength = length
+    end
+
+    // Branches rest on the model only where it's at least `width` mm wide
+    // under them; they look `lookAhead` mm down to steer off narrower parts
+    // in time. width 0 = rest anywhere, as before.
+    action SetRestRules(number width, number lookAhead)
+        minRestWidth = width
+        avoidDistance = lookAhead
+    end
 
     action GetAreas returns Array<Contour>
         return areas
@@ -147,6 +170,10 @@ class TreeSupport
         spacingLayers = util:FloorToInt(0.6 / layerHeight + 0.5)
         if spacingLayers < 1
             spacingLayers = 1
+        end
+        avoidLayers = util:FloorToInt(avoidDistance / layerHeight + 0.5)
+        if avoidLayers < 1
+            avoidLayers = 1
         end
 
         util:BucketUsableLoops(contours, planeCount, layerStart, layerOrder)
@@ -434,27 +461,38 @@ class TreeSupport
                 i = 0
                 repeat while i < n
                     if nodeDist:Get(i) >= tineLayers
-                        integer best = -1
-                        number bestD2 = mergeSearch * mergeSearch
-                        integer j = 0
-                        repeat while j < n
-                            if j not= i
-                                number ax = nodeX:Get(j) - nodeX:Get(i)
-                                number ay = nodeY:Get(j) - nodeY:Get(i)
-                                number d2 = ax * ax + ay * ay
-                                if d2 < bestD2
-                                    bestD2 = d2
-                                    best = j
-                                end
-                            end
-                            j = j + 1
+                        // thin model ahead (a spear shaft, a tail): head off
+                        // it now, while there are layers left to do it gently
+                        boolean steered = false
+                        if minRestWidth > 0
+                            steered = SteerAway(layer, nodeX:Get(i), nodeY:Get(i), Radius(nodeDist:Get(i)))
                         end
-                        if best >= 0
-                            number d = math:SquareRoot(bestD2)
-                            if d > 0
-                                number step = util:Min2(maxMove, d / 2.0)
-                                newX:Set(i, nodeX:Get(i) + (nodeX:Get(best) - nodeX:Get(i)) / d * step)
-                                newY:Set(i, nodeY:Get(i) + (nodeY:Get(best) - nodeY:Get(i)) / d * step)
+                        if steered
+                            newX:Set(i, placeX)
+                            newY:Set(i, placeY)
+                        else
+                            integer best = -1
+                            number bestD2 = mergeSearch * mergeSearch
+                            integer j = 0
+                            repeat while j < n
+                                if j not= i
+                                    number ax = nodeX:Get(j) - nodeX:Get(i)
+                                    number ay = nodeY:Get(j) - nodeY:Get(i)
+                                    number d2 = ax * ax + ay * ay
+                                    if d2 < bestD2
+                                        bestD2 = d2
+                                        best = j
+                                    end
+                                end
+                                j = j + 1
+                            end
+                            if best >= 0
+                                number d = math:SquareRoot(bestD2)
+                                if d > 0
+                                    number step = util:Min2(maxMove, d / 2.0)
+                                    newX:Set(i, nodeX:Get(i) + (nodeX:Get(best) - nodeX:Get(i)) / d * step)
+                                    newY:Set(i, nodeY:Get(i) + (nodeY:Get(best) - nodeY:Get(i)) / d * step)
+                                end
                             end
                         end
                     end
@@ -546,6 +584,8 @@ class TreeSupport
                             // model right underneath: the branch rests on it.
                             // This layer is left out: a one-layer gap above the model
                             restedOnModel = restedOnModel + 1
+                            CatchEdge(layer, nodeX:Get(i), nodeY:Get(i), dist, circleX, circleY, circleR,
+                                      outX, outY, outDist, outWeight)
                         end
                     end
                     i = i + 1
@@ -642,7 +682,21 @@ class TreeSupport
         if cx:GetSize() = 0
             return now
         end
-        ops:Clear()
+
+        // Clearance from the model on this layer. Tines (still tip-sized)
+        // may come within tineXYGap of it, since they hold up its edges.
+        // Thicker branches keep xyGap away, so they don't hug thin parts all
+        // the way down and fuse to them, unless that would cut away most of
+        // the branch (one squeezed between two parts).
+        Array<Contour> model = LayerContours(layer)
+        Array<Contour> nearClear
+        Array<Contour> farClear
+        if model:GetSize() > 0
+            nearClear = offsetter:Offset(model, -tineXYGap)
+            farClear = offsetter:Offset(model, -xyGap)
+        end
+
+        Array<Contour> support
         Array<number> qx
         Array<number> qy
         integer i = 0
@@ -654,20 +708,50 @@ class TreeSupport
             qx:Empty()
             qy:Empty()
             CirclePoints(cx:Get(i), cy:Get(i), r, qx, qy)
+            ops:Clear()
             ops:AddPoints(qx, qy, false)
+            Array<Contour> piece = ops:Resolve(1, layer)
+            if piece:GetSize() > 0 and nearClear:GetSize() > 0
+                Array<Contour> nearPiece = ops:Difference(piece, nearClear, layer)
+                if cr:Get(i) > tipRadius + 0.001 and farClear:GetSize() > 0
+                    Array<Contour> farPiece = ops:Difference(piece, farClear, layer)
+                    if TotalArea(farPiece) >= 0.5 * TotalArea(nearPiece)
+                        nearPiece = farPiece
+                    end
+                end
+                piece = nearPiece
+            end
+            if piece:GetSize() > 0
+                if support:GetSize() = 0
+                    support = piece
+                else
+                    support = ops:Union(support, piece, layer)
+                end
+            end
             i = i + 1
         end
-        Array<Contour> support = ops:Resolve(1, layer)
         if support:GetSize() = 0
             return now
         end
 
-        // never closer than tineXYGap to the model
-        Array<Contour> model = LayerContours(layer)
-        if model:GetSize() > 0
-            Array<Contour> grown = offsetter:Offset(model, -tineXYGap)
-            if grown:GetSize() > 0
-                support = ops:Difference(support, grown, layer)
+        // Z gaps, whatever placed the circles: nothing under the model's
+        // next topGapLayers layers (tine tops, branches leaning in under an
+        // overhang), and nothing printed straight onto the model's top
+        // surface on the layer below.
+        integer above = 1
+        repeat while above <= topGapLayers and support:GetSize() > 0
+            if layer + above < planeTotal
+                Array<Contour> over = LayerContours(layer + above)
+                if over:GetSize() > 0
+                    support = ops:Difference(support, over, layer)
+                end
+            end
+            above = above + 1
+        end
+        if layer > 0 and support:GetSize() > 0
+            Array<Contour> under = LayerContours(layer - 1)
+            if under:GetSize() > 0
+                support = ops:Difference(support, under, layer)
             end
         end
         if support:GetSize() = 0
@@ -948,6 +1032,58 @@ class TreeSupport
         return inside
     end
     
+    private action CatchEdge(integer layer, number x, number y, integer dist,
+                             Array<number> circleX, Array<number> circleY, Array<number> circleR,
+                             Array<number> outX, Array<number> outY,
+                             Array<integer> outDist, Array<integer> outWeight)
+        number r = Radius(dist)
+        if layer + 1 < baseLayers
+            r = r + baseFlare * cast(number, baseLayers - layer - 1) / cast(number, baseLayers)
+        end
+        Nearest(layer - 1, x, y, r + 1.0)
+        if not nearInside
+            return now
+        end
+        number d = nearDistance
+        if d >= r
+            return now // fully on the model
+        end
+        number dx = nearX - x
+        number dy = nearY - y
+        number len = math:SquareRoot(dx * dx + dy * dy)
+        if len < 0.000001
+            return now
+        end
+        dx = dx / len
+        dy = dy / len
+
+        // as wide as the part that hangs over, but not wider than the branch
+        number overhang = r - d
+        number cr = util:Max2(tipRadius, util:Min2(r, overhang))
+        number cx = nearX + dx * (tineXYGap + cr)
+        number cy = nearY + dy * (tineXYGap + cr)
+        if not Place(layer, cx, cy, cr, tineXYGap, cx, cy, cr)
+            return now
+        end
+        cx = placeX
+        cy = placeY
+
+        // a branch whose radius is cr: dist chosen so Radius(dist) is about cr
+        integer childDist = tineLayers
+        if growth > 0
+            childDist = tineLayers + util:FloorToInt((cr - tipRadius) / growth + 0.5)
+        end
+        circleX:Add(cx)
+        circleY:Add(cy)
+        circleR:Add(cr)
+        if Place(layer - 1, cx, cy, cr, tineXYGap, cx, cy, 2.0 * maxMove)
+            outX:Add(placeX)
+            outY:Add(placeY)
+            outDist:Add(childDist + 1)
+            outWeight:Add(1)
+        end
+    end
+
     private action ComputeBoxes
         hasBox:Empty()
         boxMinX:Empty()
@@ -1008,6 +1144,58 @@ class TreeSupport
             i = i + 1
         end
         return layer
+    end
+
+    // Looks up to avoidLayers ahead (down, every other layer) for model that
+    // a branch of radius r at (x, y) would hit. If that model is too narrow
+    // to rest on there (closer than minRestWidth / 2 to its edge, or the
+    // branch is only beside it), returns true with placeX / placeY one
+    // maxMove step toward the nearest way off it. Model that is wide enough
+    // under the branch is fine to rest on: returns false.
+    private action SteerAway(integer layer, number x, number y, number r) returns boolean
+        number half = minRestWidth / 2.0
+        integer ahead = 1
+        repeat while ahead <= avoidLayers and layer - ahead >= 0
+            Nearest(layer - ahead, x, y, xyGap + r + half + 1.0)
+            boolean overModel = nearInside
+            number edge = nearDistance
+            if overModel or edge < xyGap + r
+                if overModel and edge >= half
+                    return false
+                end
+                number sx = x - nearX
+                number sy = y - nearY
+                number slen = math:SquareRoot(sx * sx + sy * sy)
+                if slen < 0.000001
+                    return false
+                end
+                if overModel
+                    // leave through the nearest edge
+                    sx = -sx
+                    sy = -sy
+                end
+                placeX = x + sx / slen * maxMove
+                placeY = y + sy / slen * maxMove
+                return true
+            end
+            ahead = ahead + 2
+        end
+        return false
+    end
+
+    // Net area of a set of loops (holes subtract).
+    private action TotalArea(Array<Contour> loops) returns number
+        number twice = 0.0
+        integer i = 0
+        repeat while i < loops:GetSize()
+            Contour loop = loops:Get(i)
+            twice = twice + loop:SignedArea2()
+            i = i + 1
+        end
+        if twice < 0
+            twice = -twice
+        end
+        return twice / 2.0
     end
 
     private action Tan(number deg) returns number
