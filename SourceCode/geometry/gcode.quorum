@@ -258,6 +258,7 @@ class Gcode
         Line("M83 ;relative extrustion")
         Line("G92 E0")
         Line("M107 ;fan off for first layer")
+        Line("M960 L0 M0 B255 ;filament spool on")
         retracted = false
         posX = -1000.0
         posY = -1000.0
@@ -265,6 +266,7 @@ class Gcode
     end
 
     private action WriteEnd
+        Line("M960 L0 M0 B0 ;filament spool off")
         if dryRun
             Line(";END OF DRY RUN")
             Line("G91")
