@@ -337,7 +337,7 @@ class Gcode
             posY = -1000.0
             zKnown = false
             zPending = false
-            lastTole = -1
+            lastRole = -1
             lastSpeed = -1
             return now
         end

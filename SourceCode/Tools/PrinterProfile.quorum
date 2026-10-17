@@ -12,7 +12,7 @@ class ProfileManager
             alert("Cannot add an undefined printer profile.")
         end
             //duplicate printer name
-        if FindIn(printers, printer:GetName()) not= undefined
+        if FindIn(printer:GetName()) not= undefined
             alert("A printer profile named '" + printer:GetName() + "' already exists.")
         end
         printers:Add(printer)
@@ -27,14 +27,15 @@ class ProfileManager
     end
 
     action Find(text name) returns Printer
-        return FindIn(printers, name)
+        return FindIn(name)
     end
 
     //returns the file of the given name or undefined if no profile. 
-    action Find(text name) returns Printer
+    action FindIn(text name) returns Printer
         integer i = 0
+        Printer current
         repeat printers:GetSize() times
-            Printer current = printers:Get(i)
+            current = printers:Get(i)
             if current:GetName() = name
                 return current
             end
@@ -93,7 +94,7 @@ class ProfileManager
         repeat keys:GetSize() times
             text key = keys:Get(i)
 
-            if FindIn(loaded, key) not= undefined
+            if FindIn(key) not= undefined
                 alert("Profile file contains more than one profile names '" + key + "'.")
             end
 

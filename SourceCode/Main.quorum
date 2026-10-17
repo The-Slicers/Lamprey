@@ -26,7 +26,7 @@ class Main
     action Main
         // Load in model from assets folder
         File file
-        file:SetPath("assets/lizard_man.stl")
+        file:SetPath("assets\sahuagin-warrior-2-fdm-friendly.stl")
 
         // packages model data into a ModelData class
         ModelLoader loader
@@ -37,22 +37,136 @@ class Main
         // simple program to check data in the model
         PrintMeshStats(data)
 
-        SampleRun(data)
+        boolean bambu = false
+        if bambu
+            BambuRun(data)
+        else
+            EnderRun(data)
+        end
     end
 
-    action SampleRun(ModelData data)
+    action BambuRun(ModelData data)
         PlaneMesh meshData
         meshData:splitCoords(data)
-    
+
         number nozzle = 0.4
         number layerHeight = 0.2
+        number lineWidth = 0.42 // could be 0.40 for non bambu
         number maxGap = 0.5 * nozzle
         number cutAmount = 0.0 // 1.6
 
         TestSlicer slicer
-        slicer:SetUnitScale(1.1) // 25.4
+        slicer:SetUnitScale(1.0) // 25.4
         slicer:SetTriangles(meshData)
-        Array<number> planeRange = slicer:GetSliceRange()         
+        Array<number> planeRange = slicer:GetSliceRange()
+        output "Plane Low: " + planeRange:Get(0) + " Plane High: " + planeRange:Get(1)
+        Array<number> planes = slicer:BuildPlanes(planeRange:Get(0) + cutAmount, planeRange:Get(1), layerHeight)
+
+        Array<Segment> segments = slicer:Slice(planes)
+
+        output "segments: " + segments:GetSize()
+        output "max crossings: " + slicer:GetMaxCrossingsPerFace()
+        output "odd faces: " + slicer:GetOddCrossingCount()
+
+        ContourGenerator conGen
+        conGen:SetSimplifyTolerance(0.02)
+        conGen:SetMinArea(0.05)
+        Array<Contour> contours = conGen:Build(segments, planes:GetSize(), maxGap)
+
+        output "flipped count: " + conGen:GetFlippedCount()
+        output "specks dropped: " + conGen:GetDroppedCount()
+        output "points: " + conGen:GetPointsBefore() + " -> " + conGen:GetPointsAfter()
+
+        OverhangGrid overhangs
+        overhangs:SetCellSize(0.1)
+        overhangs:Build(contours, planes:GetSize(), layerHeight * 1.43)
+
+        PathGenerator paths
+        paths:SetLineWidth(lineWidth) // nozzle diameter
+        paths:SetWallCount(3)
+        paths:SetInfillDensity(0.15) // 70%
+        paths:SetTopLayers(12)
+        paths:SetBottomLayers(12)
+        paths:Generate(contours, planes:GetSize())
+        
+        TreeSupport trees
+        trees:SetLayerHeight(layerHeight)
+        trees:SetLineWidth(lineWidth)
+        trees:SetTip(0.8, 1.0)
+        trees:SetGaps(0.8, 0.35, 1)
+        trees:SetRestRules(3.0, 3.0)
+        trees:Generate(contours, planes:GetSize())
+
+        Array<Contour> base
+        integer i = 0
+        repeat while i < contours:GetSize()
+            base:Add(contours:Get(i))
+            i = i + 1
+        end
+
+        Array<Contour> supportAreas = trees:GetAreas()
+        i = 0
+        repeat while i < supportAreas:GetSize()
+            base:Add(supportAreas:Get(i))
+            i = i + 1
+        end
+
+        SkirtGenerator skirtGen
+        skirtGen:SetLineWidth(lineWidth)
+        skirtGen:SetBrim(8, 0.0)
+        Array<Contour> skirt = skirtGen:Generate(base)
+
+//        LineRender lr
+//        lr:SetData(planes, contours)
+//        lr:SetPaths(paths:GetWalls(), paths:GetInfill())
+//        lr:SetSkin(paths:GetSkin())
+//        lr:SetOverhangs(overhangs)
+//        lr:LineRender()
+
+        PathOrderer orderer
+        orderer:SetSkirt(skirt)
+        orderer:SetSupport(trees:GetPaths())
+        Array<Contour> ordered = orderer:Order(contours, paths:GetWalls(), paths:GetSkin(), paths:GetInfill(), planes:GetSize())
+
+        Gcode gcode
+        gcode:SetLayerHeight(layerHeight)
+        gcode:SetLineWidth(lineWidth)
+        gcode:SetNozzleDiameter(0.4)
+        gcode:SetFilamentDiameter(1.75)
+        gcode:SetFlow(0.98)
+        gcode:SetTemperatures(225, 55)
+        gcode:SetBed(220.0, 220.0)
+        gcode:SetBedHeight(220.0)
+        gcode:SetRetraction(0.8, 30.0)
+        gcode:SetZHop(0.4)
+        gcode:SetZHopMinTravel(1.5)
+        gcode:SetSpeeds(200, 300, 200, 270, 150, 50)
+        gcode:SetTravelSpeed(600)
+        gcode:SetMaxFlow(21)
+        gcode:SetAccelerations(6000, 10000, 2000, 10000, 10000, 500, 10000)
+        gcode:SetRetractionLimit(90, 0.9)
+        gcode:SetMinLayerTime(4.0, 20.0)
+        gcode:SetBambuExtras(true)
+        gcode:SetStartGCodeFile("Templates\bambu-p2s\start.gcode")
+        gcode:SetEndGCodeFile("Templates\bambu-p2s\end.gcode")
+        //gcode:SetDryRun(true, 20.0)
+        gcode:Write(ordered, "Outputs/dry_cube.gcode")
+    end
+
+    action EnderRun(ModelData data)
+        PlaneMesh meshData
+        meshData:splitCoords(data)
+
+        number nozzle = 0.4
+        number layerHeight = 0.2
+        number lineWidth = 0.40 // could be 0.40 for non bambu
+        number maxGap = 0.5 * nozzle
+        number cutAmount = 0.0 // 1.6
+
+        TestSlicer slicer
+        slicer:SetUnitScale(1.0) // 25.4
+        slicer:SetTriangles(meshData)
+        Array<number> planeRange = slicer:GetSliceRange()
         output "Plane Low: " + planeRange:Get(0) + " Plane High: " + planeRange:Get(1)
         Array<number> planes = slicer:BuildPlanes(planeRange:Get(0) + cutAmount, planeRange:Get(1), layerHeight)
         output "planes: " + planes:GetSize()
@@ -65,41 +179,41 @@ class Main
 
         ContourGenerator conGen
         conGen:SetSimplifyTolerance(0.02)
-        conGen:SetMinArea(0.05) 
+        conGen:SetMinArea(0.05)
         Array<Contour> contours = conGen:Build(segments, planes:GetSize(), maxGap)
-           
+
         output "flipped count: " + conGen:GetFlippedCount()
         output "specks dropped: " + conGen:GetDroppedCount()
         output "points: " + conGen:GetPointsBefore() + " -> " + conGen:GetPointsAfter()
-        
+
         OverhangGrid overhangs
-        overhangs:SetCellSize(0.1) 
+        overhangs:SetCellSize(0.1)
         overhangs:Build(contours, planes:GetSize(), layerHeight * 1.43)
-        
+
         PathGenerator paths
-        paths:SetLineWidth(0.4) // nozzle diameter
+        paths:SetLineWidth(lineWidth) // nozzle diameter
         paths:SetWallCount(3)
         paths:SetInfillDensity(0.15) // 70%
-        paths:SetTopLayers(12) 
-        paths:SetBottomLayers(12) 
-        paths:Generate(contours, planes:GetSize()) 
-        
+        paths:SetTopLayers(12)
+        paths:SetBottomLayers(12)
+        paths:Generate(contours, planes:GetSize())
+
         TreeSupport trees
-        trees:SetLayerHeight(0.2)
-        trees:SetLineWidth(0.4)
+        trees:SetLayerHeight(layerHeight)
+        trees:SetLineWidth(lineWidth)
         trees:SetTip(0.8, 1.0)
         trees:SetGaps(0.8, 0.35, 1)
         trees:SetRestRules(3.0, 3.0)
         trees:Generate(contours, planes:GetSize())
-            
+
         Array<Contour> base
         integer i = 0
         repeat while i < contours:GetSize()
             base:Add(contours:Get(i))
             i = i + 1
         end
-        
-        Array<Contour> supportAreas = trees:GetAreas() 
+
+        Array<Contour> supportAreas = trees:GetAreas()
         i = 0
         repeat while i < supportAreas:GetSize()
             base:Add(supportAreas:Get(i))
@@ -107,7 +221,7 @@ class Main
         end
 
         SkirtGenerator skirtGen
-        skirtGen:SetLineWidth(0.4)
+        skirtGen:SetLineWidth(lineWidth)
         skirtGen:SetBrim(8, 0.0)
         Array<Contour> skirt = skirtGen:Generate(base)
 
@@ -117,28 +231,28 @@ class Main
 //        lr:SetSkin(paths:GetSkin())
 //        lr:SetOverhangs(overhangs)
 //        lr:LineRender()
-        
+
         PathOrderer orderer
         orderer:SetSkirt(skirt)
         orderer:SetSupport(trees:GetPaths())
         Array<Contour> ordered = orderer:Order(contours, paths:GetWalls(), paths:GetSkin(), paths:GetInfill(), planes:GetSize())
-        
+
         Gcode gcode
         gcode:SetLayerHeight(layerHeight)
-        gcode:SetLineWidth(0.4)
+        gcode:SetLineWidth(lineWidth)
         gcode:SetNozzleDiameter(0.4)
         gcode:SetFilamentDiameter(1.75)
         gcode:SetFlow(1.0)
         gcode:SetTemperatures(190, 55)
-        gcode:SetBed(160.0, 160.0)
-        gcode:SetBedHeight(160.0)
+        gcode:SetBed(200.0, 200.0)
+        gcode:SetBedHeight(200.0)
         gcode:SetRetraction(6.0, 40.0)
         gcode:SetZHop(0.4)
         gcode:SetZHopMinTravel(1.5)
         gcode:SetSpeeds(25, 45, 40, 60, 40, 20)
         gcode:SetTravelSpeed(150)
         gcode:SetMaxFlow(10)
-        gcode:SetRetractionLimit(55, 6.0)
+        gcode:SetRetractionLimit(90, 6.0)
         gcode:SetMinLayerTime(15.0, 10.0)
         gcode:SetBambuExtras(false)
         gcode:SetStartGCodeFile("Templates\ender3-v2\start.gcode")
