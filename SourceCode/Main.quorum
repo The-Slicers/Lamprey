@@ -26,7 +26,7 @@ class Main
     action Main
         // Load in model from assets folder
         File file
-        file:SetPath("assets\dogs_bishop_v3.stl")
+        file:SetPath("assets\3dbenchy.stl")
 
         // packages model data into a ModelData class
         ModelLoader loader
@@ -37,7 +37,7 @@ class Main
         // simple program to check data in the model
         PrintMeshStats(data)
 
-        boolean bambu = false
+        boolean bambu = true
         if bambu
             BambuRun(data)
         else
@@ -51,7 +51,7 @@ class Main
 
         number nozzle = 0.4
         number layerHeight = 0.2
-        number lineWidth = 0.42 // could be 0.40 for non bambu
+        number lineWidth = 0.40 // could be 0.40 for non bambu
         number maxGap = 0.5 * nozzle
         number cutAmount = 0.0 // 1.6
 
@@ -85,17 +85,17 @@ class Main
         paths:SetLineWidth(lineWidth) // nozzle diameter
         paths:SetWallCount(3)
         paths:SetInfillDensity(0.15) // 70%
-        paths:SetTopLayers(12)
-        paths:SetBottomLayers(12)
+        paths:SetTopLayers(3)
+        paths:SetBottomLayers(3)
         paths:Generate(contours, planes:GetSize())
         
-        TreeSupport trees
-        trees:SetLayerHeight(layerHeight)
-        trees:SetLineWidth(lineWidth)
-        trees:SetTip(0.8, 1.0)
-        trees:SetGaps(0.8, 0.35, 1)
-        trees:SetRestRules(3.0, 3.0)
-        trees:Generate(contours, planes:GetSize())
+//        TreeSupport trees
+//        trees:SetLayerHeight(layerHeight)
+//        trees:SetLineWidth(lineWidth)
+//        trees:SetTip(0.8, 1.0)
+//        trees:SetGaps(0.8, 0.35, 1)
+//        trees:SetRestRules(3.0, 3.0)
+//        trees:Generate(contours, planes:GetSize())
 
         Array<Contour> base
         integer i = 0
@@ -104,18 +104,18 @@ class Main
             i = i + 1
         end
 
-        Array<Contour> supportAreas = trees:GetAreas()
-        i = 0
-        repeat while i < supportAreas:GetSize()
-            base:Add(supportAreas:Get(i))
-            i = i + 1
-        end
+//        Array<Contour> supportAreas = trees:GetAreas()
+//        i = 0
+//        repeat while i < supportAreas:GetSize()
+//            base:Add(supportAreas:Get(i))
+//            i = i + 1
+//        end
 
-        SkirtGenerator skirtGen
-        skirtGen:SetLineWidth(lineWidth)
-        skirtGen:SetBrim(8, 0.0)
-        Array<Contour> skirt = skirtGen:Generate(base)
-
+//        SkirtGenerator skirtGen
+//        skirtGen:SetLineWidth(lineWidth)
+//        skirtGen:SetBrim(8, 0.0)
+//        Array<Contour> skirt = skirtGen:Generate(base)
+//
 //        LineRender lr
 //        lr:SetData(planes, contours)
 //        lr:SetPaths(paths:GetWalls(), paths:GetInfill())
@@ -124,17 +124,17 @@ class Main
 //        lr:LineRender()
 
         PathOrderer orderer
-        orderer:SetSkirt(skirt)
+        //orderer:SetSkirt(skirt)
         //orderer:SetSupport(trees:GetPaths())
         Array<Contour> ordered = orderer:Order(contours, paths:GetWalls(), paths:GetSkin(), paths:GetInfill(), planes:GetSize())
 
         Gcode gcode
         gcode:SetLayerHeight(layerHeight)
         gcode:SetLineWidth(lineWidth)
-        gcode:SetNozzleDiameter(0.4)
+        gcode:SetNozzleDiameter(nozzle)
         gcode:SetFilamentDiameter(1.75)
-        gcode:SetFlow(0.98)
-        gcode:SetTemperatures(225, 55)
+        gcode:SetFlow(1.0)
+        gcode:SetTemperatures(210, 60)
         gcode:SetBed(220.0, 220.0)
         gcode:SetBedHeight(220.0)
         gcode:SetRetraction(0.8, 30.0)

@@ -118,12 +118,19 @@ M620.10 A0 F{FLOW_FEED} H{NOZZLE_DIAMETER} T240 P{NOZZLE_TEMP} S1
 M620.10 A1 F{FLOW_FEED} H{NOZZLE_DIAMETER} T240 P{NOZZLE_TEMP} S1
 
   ; (no filament switch: prints with the filament already in the toolhead)
-  M1002 set_filament_type:PLA ; CHANGE for other filaments
-  M104 S{NOZZLE_TEMP}
-  M400
-  M106 P1 S0
-  M400
-  G29.2 S1
+    M620.11 P0 L0 I0 E0
+    M620.11 K0 I0 R0
+     M620 S0A
+     M1002 gcode_claim_action : 4
+     M1002 set_filament_type:UNKNOWN
+     M400
+     T0
+     M400
+     M628 S0
+     M629
+     M400
+     M1002 set_filament_type:PLA
+     M621 S0A
 ;===== prepare print temperature and material ==========
 
 ;===== auto extrude cali start =========================
@@ -266,6 +273,15 @@ M620.10 A1 F{FLOW_FEED} H{NOZZLE_DIAMETER} T240 P{NOZZLE_TEMP} S1
 M1002 gcode_claim_action : 51
   G29.2 S1 ; ensure z comp turn on
   G90
+  M1002 set_filament_type:PLA
+  M620 S0A
+  M400
+  T0
+  M400
+  M628 S0
+  M629
+  M400
+  M621 S0A
   M83
   M400 P50
   M500 D1
