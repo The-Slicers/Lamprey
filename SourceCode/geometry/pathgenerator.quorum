@@ -9,6 +9,13 @@ class PathGenerator
     number infillDensity = 0.2
     number infillOverlap = 0.25
     number minInfillLength = 0.4
+    // shortest tip dot worth printing (mm); anything smaller is a speck
+    number minDotLength = 0.1
+    // layer 0's solid fill is printed as continuous zigzags (no loose line
+    // ends that can peel off the bed)
+    boolean joinFirstLayer = true
+    // a link whose midpoint is this close to an edge (mm) runs along it
+    number linkEdgeTolerance = 0.01
     integer topLayers = 4
     integer bottomLayers = 4
 
@@ -69,6 +76,12 @@ class PathGenerator
         bottomLayers = count
     end
 
+    // true (default): layer 0's solid fill is chained into continuous
+    // zigzags. false: separate straight lines, as on every other layer.
+    action SetJoinFirstLayer(boolean toggle)
+        joinFirstLayer = toggle
+    end
+
     action GetWalls returns Array<Contour>
         return walls
     end
@@ -110,10 +123,16 @@ class PathGenerator
                 // line widths inside the outline
                 integer w = 0
                 repeat while w < wallCount
-                    // every wall, the outer one too, must really sit its depth
-                    // inside the part; where the offsetter's loop doesn't,
-                    // that island is rebuilt exactly (see FitInset)
-                    Array<Contour> ring = Inset(layer, lineWidth * (cast(number, w) + 0.5))
+                    Array<Contour> ring
+                    Array<Contour> deeper
+                    if w = 0
+                        ring = Inset(layer, lineWidth * 0.5)
+                    else
+                        // only where wall w fits from both sides: shrink past
+                        // the far edge of this wall, then grow back to its centre
+                        deeper = FitInset(layer, lineWidth * cast(number, w + 1), false)
+                        ring = ExactOutset(deeper, lineWidth * 0.5)
+                    end
                     integer r = 0
                     repeat while r < ring:GetSize()
                         Contour wall = ring:Get(r)
@@ -122,11 +141,9 @@ class PathGenerator
                         r = r + 1
                     end
                     if w = 0
-                        // parts too thin for even the outer wall: one line
                         ThinIslands(layer, ring, p)
                     else
-                        // parts too thin for this wall: fill, don't leave hollow
-                        GapFill(layer, w, ring, p)
+                        WallGaps(layer, w, deeper, p)
                     end
                     w = w + 1
                 end
@@ -160,7 +177,12 @@ class PathGenerator
                     Array<Contour> skinArea = FindSkin(p, innerArea)
                     if skinArea:GetSize() > 0
                         Array<Contour> solid = ops:Intersect(fillArea, skinArea, p)
-                        AddLines(solid, p, lineWidth, skin)
+                        // first layer: one continuous zigzag, no loose ends to lift
+                        boolean joinThis = false
+                        if joinFirstLayer and p = 0
+                            joinThis = true
+                        end
+                        AddLinesJoined(solid, p, lineWidth, skin, joinThis)
                         if infillDensity > 0
                             Array<Contour> sparse = ops:Difference(fillArea, skinArea, p)
                             AddLines(sparse, p, lineWidth / util:Min2(infillDensity, 1.0), infill)
@@ -217,13 +239,12 @@ class PathGenerator
         integer o = 0
         repeat while o < outline:GetSize()
             if not IsHole(o, outline)
-                Contour shape = outline:Get(o)
-                if HoldsLoop(shape, kept) and not HoldsLoop(shape, dropped)
+                if OwnsAny(o, outline, kept) and not OwnsAny(o, outline, dropped)
                     integer k = 0
                     repeat while k < kept:GetSize()
                         Contour good = kept:Get(k)
                         if good:GetSize() > 0
-                            if shape:ContainsPoint(good:xs:Get(0), good:ys:Get(0))
+                            if OwnerIsland(outline, good:xs:Get(0), good:ys:Get(0)) = o
                                 result:Add(good)
                             end
                         end
@@ -237,7 +258,7 @@ class PathGenerator
                     integer e = 0
                     repeat while e < exact:GetSize()
                         Contour piece = exact:Get(e)
-                        if piece:GetSize() >= 3
+                        if piece:GetSize() >= 3 and LoopFits(piece, outline, depth)
                             result:Add(piece)
                         end
                         e = e + 1
@@ -249,6 +270,43 @@ class PathGenerator
         return result
     end
 
+    private action OwnerIsland(Array<Contour> outline, number x, number y) returns integer
+        integer best = -1
+        number bestArea = 0.0
+        integer i = 0
+        repeat while i < outline:GetSize()
+            if not IsHole(i, outline)
+                Contour shape = outline:Get(i) 
+                if shape:ContainsPoint(x, y)
+                    number area = shape:SignedArea2()
+                    if area < 0
+                        area = -area
+                    end
+                    if best = -1 or area < bestArea
+                        best = i
+                        bestArea = area
+                    end
+                end
+            end
+            i = i + 1
+        end
+        return best
+    end
+
+    private action OwnsAny(integer island, Array<Contour> outline, Array<Contour> loops) returns boolean
+        integer i = 0
+        repeat while i < loops:GetSize()
+            Contour loop = loops:Get(i) 
+            if loop:GetSize() > 0
+                if OwnerIsland(outline, loop:xs:Get(0), loop:ys:Get(0)) = island
+                    return true
+                end
+            end
+            i = i + 1
+        end
+        return false
+    end 
+
     // outline[index] plus the holes that start inside it.
     private action IslandWithHoles(integer index, Array<Contour> outline) returns Array<Contour>
         Array<Contour> island
@@ -259,7 +317,7 @@ class PathGenerator
             if i not= index and IsHole(i, outline)
                 Contour hole = outline:Get(i)
                 if hole:GetSize() > 0
-                    if shape:ContainsPoint(hole:xs:Get(0), hole:ys:Get(0))
+                    if OwnerIsland(outline, hole:xs:Get(0), hole:ys:Get(0)) = index
                         island:Add(hole)
                     end
                 end
@@ -302,14 +360,21 @@ class PathGenerator
             c = c + 1
         end
         if added = 0
-            return island
+            Array<Contour> blank
+            return blank
         end
         Array<Contour> band = ops:Resolve(1, plane)
+        
+        if band:GetSize() = 0
+            output "ExactInset: empty band on plane " + plane + " at depth " + depth
+            Array<Contour> blank
+            return blank
+        end
         return ops:Difference(island, band, plane)
     end
 
     // Counter-clockwise outline of a capsule around a?b: along the right
-    // side, round b, back along the left side, round a (arcs in 30° steps).
+    // side, round b, back along the left side, round a (arcs in 30? steps).
     private action Capsule(number startX, number startY, number endX, number endY, number len, number d,
                            Array<number> qx, Array<number> qy)
         number ux = (endX - startX) / len
@@ -468,10 +533,13 @@ class PathGenerator
             end
             i = i + 1
         end
+        number rawLength = high - low
         low = low + lineWidth * 0.5
         high = high - lineWidth * 0.5
         if high - low < lineWidth * 0.5
-            return now // a dot, not a line
+            // a dot, not a line
+            Dot(con, mx, my, ax, ay, rawLength, p)
+            return now
         end
 
         // pull each end toward the middle until it's inside the part
@@ -486,6 +554,7 @@ class PathGenerator
             tries = tries + 1
         end
         if high - low < lineWidth * 0.5
+            Dot(con, mx, my, ax, ay, rawLength, p)
             return now
         end
 
@@ -494,7 +563,33 @@ class PathGenerator
         line:AddPoint(mx + ax * high, my + ay * high)
         line:closed = false
         line:planeIndex = p
+        line:keepShort = true
         skin:Add(line)
+    end
+
+    // An island too small for even a center line (the last layers of an
+    // ear tip or a horn): one short dab along its long axis instead of
+    // nothing. Its length is picked so the dab holds about as much plastic
+    // as the island (area / line width), never longer than the island.
+    private action Dot(Contour con, number mx, number my, number ax, number ay, number rawLength, integer p)
+        if not con:ContainsPoint(mx, my)
+            return now
+        end
+        number length = con:Area() / lineWidth
+        if length > rawLength
+            length = rawLength
+        end
+        if length < minDotLength
+            return now
+        end
+        number halfLength = length / 2.0
+        Contour dot
+        dot:AddPoint(mx - ax * halfLength, my - ay * halfLength)
+        dot:AddPoint(mx + ax * halfLength, my + ay * halfLength)
+        dot:closed = false
+        dot:planeIndex = p
+        dot:keepShort = true
+        skin:Add(dot)
     end
 
     // loops[index] is a hole if it starts inside an odd number of the others.
@@ -657,6 +752,16 @@ class PathGenerator
 
     // Scanline fill of a region with parallel lines `spacing` apart.
     private action AddLines(Array<Contour> region, integer planeIndex, number spacing, Array<Contour> target)
+        AddLinesJoined(region, planeIndex, spacing, target, false)
+    end
+
+    // Same fill. With join = true the lines are chained into continuous
+    // zigzags: each line's end is linked to the next line's start along the
+    // region's edge, so the nozzle keeps extruding instead of stopping,
+    // jumping and starting again. Used on layer 0, where every loose line
+    // end is a spot that can lift off the bed.
+    private action AddLinesJoined(Array<Contour> region, integer planeIndex, number spacing,
+                                  Array<Contour> target, boolean join)
         if region:GetSize() = 0
             return now
         end
@@ -701,6 +806,11 @@ class PathGenerator
             v = v + 1
         end
 
+        // with join on, the lines are kept (in rotated space) and chained after
+        Array<integer> segLine
+        Array<number> segA
+        Array<number> segB
+
         Array<number> hits
         integer lineCount = 0
         integer line = util:CeilingToInt(lowY / spacing)
@@ -737,24 +847,253 @@ class PathGenerator
                 number a = hits:Get(q)
                 number b = hits:Get(q + 1)
                 if b - a >= minInfillLength
-                    // every other line runs backwards, so the nozzle zigzags
-                    if lineCount mod 2 = 1
-                        number swap = a
-                        a = b
-                        b = swap
+                    if join
+                        segLine:Add(line)
+                        segA:Add(a)
+                        segB:Add(b)
+                    else
+                        // every other line runs backwards, so the nozzle zigzags
+                        if lineCount mod 2 = 1
+                            number swap = a
+                            a = b
+                            b = swap
+                        end
+                        // rotate the two ends by +angle
+                        Contour seg
+                        seg:AddPoint(a * cs - scanY * sn, a * sn + scanY * cs)
+                        seg:AddPoint(b * cs - scanY * sn, b * sn + scanY * cs)
+                        seg:closed = false
+                        seg:planeIndex = planeIndex
+                        target:Add(seg)
                     end
-                    // rotate the two ends by +angle
-                    Contour seg
-                    seg:AddPoint(a * cs - scanY * sn, a * sn + scanY * cs)
-                    seg:AddPoint(b * cs - scanY * sn, b * sn + scanY * cs)
-                    seg:closed = false
-                    seg:planeIndex = planeIndex
-                    target:Add(seg)
                 end
                 q = q + 2
             end
             lineCount = lineCount + 1
             line = line + 1
+        end
+
+        if join
+            JoinLines(segLine, segA, segB, rx, ry, loopStart, region:GetSize(), spacing, cs, sn, planeIndex, target)
+        end
+    end
+
+    // Chains the scan lines (segLine / segA / segB, in rotated space, ordered
+    // by line then left to right) into zigzags. A chain that ends on the
+    // right end of a line continues from the right end of a line on the next
+    // scan line, and so on, as long as that end is within linkMax sideways
+    // and the link between them stays inside the region. Each chain is
+    // rotated back and added to target as one open path.
+    private action JoinLines(Array<integer> segLine, Array<number> segA, Array<number> segB,
+                             Array<number> rx, Array<number> ry, Array<integer> loopStart, integer loopCount,
+                             number spacing, number cs, number sn, integer planeIndex, Array<Contour> target)
+        integer count = segLine:GetSize()
+        Array<boolean> used
+        integer i = 0
+        repeat while i < count
+            used:Add(false)
+            i = i + 1
+        end
+        // longest sideways step a link may take: steep edges are fine,
+        // edges nearly parallel to the lines are not (the link would be a
+        // long line of its own)
+        number linkMax = 3.0 * spacing
+
+        integer seed = 0
+        repeat while seed < count
+            if not used:Get(seed)
+                used:Set(seed, true)
+                Array<number> px
+                Array<number> py
+                integer cur = seed
+                number firstY = cast(number, segLine:Get(cur)) * spacing
+                px:Add(segA:Get(cur))
+                py:Add(firstY)
+                px:Add(segB:Get(cur))
+                py:Add(firstY)
+                boolean atRight = true
+                boolean going = true
+                repeat while going
+                    number endX = px:Get(px:GetSize() - 1)
+                    number endY = py:Get(py:GetSize() - 1)
+                    integer nextLine = segLine:Get(cur) + 1
+                    number nextY = cast(number, nextLine) * spacing
+                    integer best = -1
+                    number bestGap = linkMax
+                    integer k = cur + 1
+                    boolean scanning = true
+                    repeat while scanning
+                        if k >= count
+                            scanning = false
+                        elseif segLine:Get(k) > nextLine
+                            scanning = false
+                        else
+                            if segLine:Get(k) = nextLine and not used:Get(k)
+                                number startX = segA:Get(k)
+                                if atRight
+                                    startX = segB:Get(k)
+                                end
+                                number gap = util:AbsNum(startX - endX)
+                                if gap <= bestGap
+                                    if LinkInside(endX, endY, startX, nextY, rx, ry, loopStart, loopCount)
+                                        best = k
+                                        bestGap = gap
+                                    end
+                                end
+                            end
+                            k = k + 1
+                        end
+                    end
+
+                    if best = -1
+                        going = false
+                    else
+                        used:Set(best, true)
+                        if atRight
+                            px:Add(segB:Get(best))
+                            py:Add(nextY)
+                            px:Add(segA:Get(best))
+                            py:Add(nextY)
+                        else
+                            px:Add(segA:Get(best))
+                            py:Add(nextY)
+                            px:Add(segB:Get(best))
+                            py:Add(nextY)
+                        end
+                        atRight = not atRight
+                        cur = best
+                    end
+                end
+
+                // rotate back by +angle
+                Contour chain
+                integer m = 0
+                repeat while m < px:GetSize()
+                    chain:AddPoint(px:Get(m) * cs - py:Get(m) * sn, px:Get(m) * sn + py:Get(m) * cs)
+                    m = m + 1
+                end
+                chain:closed = false
+                chain:planeIndex = planeIndex
+                target:Add(chain)
+            end
+            seed = seed + 1
+        end
+    end
+
+    // Does the link from (x0, y0) to (x1, y1) stay inside the region (all in
+    // rotated space)? Both ends sit on the region's edge, so touching it
+    // there is fine. Crossing an edge in between, or running outside the
+    // region (a notch between the two ends, caught by the midpoint), is not.
+    // When both ends lie on the same straight edge the midpoint lies on it
+    // too, and the even-odd test can land either way, so a midpoint within
+    // linkEdgeTolerance of an edge counts as inside. (A real notch puts the
+    // midpoint well outside, so this can't let a bad link through.)
+    private action LinkInside(number x0, number y0, number x1, number y1,
+                              Array<number> rx, Array<number> ry, Array<integer> loopStart,
+                              integer loopCount) returns boolean
+        number mx = (x0 + x1) / 2.0
+        number my = (y0 + y1) / 2.0
+        number dx = x1 - x0
+        number dy = y1 - y0
+        boolean inside = false
+        number nearest2 = -1.0
+        integer L = 0
+        repeat while L < loopCount
+            integer s = loopStart:Get(L)
+            integer n = loopStart:Get(L + 1) - s
+            integer j = n - 1
+            integer k = 0
+            repeat while k < n
+                number ax = rx:Get(s + j)
+                number ay = ry:Get(s + j)
+                number bx = rx:Get(s + k)
+                number by = ry:Get(s + k)
+
+                // even-odd count for the midpoint
+                boolean aAbove = ay > my
+                boolean bAbove = by > my
+                if aAbove not= bAbove
+                    if mx < ax + (my - ay) * (bx - ax) / (by - ay)
+                        inside = not inside
+                    end
+                end
+                number edge2 = util:SegmentDistance2(mx, my, ax, ay, bx, by)
+                if nearest2 < 0 or edge2 < nearest2
+                    nearest2 = edge2
+                end
+
+                // does this edge cross the link away from its two ends?
+                number ex = bx - ax
+                number ey = by - ay
+                number den = dx * ey - dy * ex
+                if den > 0.000000001 or den < -0.000000001
+                    number wx = ax - x0
+                    number wy = ay - y0
+                    number t = (wx * ey - wy * ex) / den
+                    number u = (wx * dy - wy * dx) / den
+                    if t > 0.02 and t < 0.98 and u >= 0 and u <= 1
+                        return false
+                    end
+                end
+                j = k
+                k = k + 1
+            end
+            L = L + 1
+        end
+        if inside
+            return true
+        end
+        // on the edge (both ends on one straight edge): fine
+        return nearest2 >= 0 and nearest2 < linkEdgeTolerance * linkEdgeTolerance
+    end
+
+    // Grows `region` outward by r: the region plus a capsule of radius r
+    // around every edge. Exact, like ExactInset.
+    private action ExactOutset(Array<Contour> region, number r) returns Array<Contour>
+        ops:Clear()
+        ops:AddContours(region, false)
+        Array<number> qx
+        Array<number> qy
+        integer c = 0
+        repeat while c < region:GetSize()
+            Contour con = region:Get(c)
+            integer n = con:GetSize()
+            integer j = n - 1
+            integer i = 0
+            repeat while i < n
+                number startX = con:xs:Get(j)
+                number startY = con:ys:Get(j)
+                number endX = con:xs:Get(i)
+                number endY = con:ys:Get(i)
+                number len = math:SquareRoot((endX - startX) * (endX - startX) + (endY - startY) * (endY - startY))
+                if len > 0.000001
+                    qx:Empty()
+                    qy:Empty()
+                    Capsule(startX, startY, endX, endY, len, r, qx, qy)
+                    ops:AddPoints(qx, qy, false)
+                end
+                j = i
+                i = i + 1
+            end
+            c = c + 1
+        end
+        return ops:Resolve(1, plane)
+    end
+
+    // Wall w should cover the band w..w+1 widths in. Wherever it couldn't
+    // (the part is too thin there), fill that band with solid lines.
+    private action WallGaps(Array<Contour> layer, integer w, Array<Contour> deeper, integer p)
+        Array<Contour> band = FitInset(layer, lineWidth * cast(number, w), false)
+        if band:GetSize() = 0
+            return now
+        end
+        Array<Contour> gaps = band
+        Array<Contour> reach = ExactOutset(deeper, lineWidth)
+        if reach:GetSize() > 0
+            gaps = ops:Difference(band, reach, p)
+        end
+        if gaps:GetSize() > 0
+            AddLines(gaps, p, lineWidth, skin)
         end
     end
 

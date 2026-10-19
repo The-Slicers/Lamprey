@@ -36,6 +36,7 @@ class PolygonOps
     Array<number> py1
     Array<integer> pieceFrom
     Array<integer> pieceTo
+    Array<integer> pieceEdge 
 
     HashTable<text, integer> nodeIds
     integer nodeCount = 0
@@ -44,6 +45,14 @@ class PolygonOps
     number delta = 0.0
     integer windLeft = 0
     integer windRight = 0
+
+    integer brokenChain = 0
+    integer dumps = 0
+    integer lastDumpPlane = -1
+
+    action GetBrokenChains returns integer
+        return brokenChain
+    end
 
     action Union(Array<Contour> a, Array<Contour> b, integer planeIndex) returns Array<Contour>
         Clear()
@@ -142,6 +151,8 @@ class PolygonOps
     end
 
     action Resolve(integer minWinding, integer planeIndex) returns Array<Contour>
+        brokenChain = 0
+
         Array<Contour> result
         integer edgeCount = ex0:GetSize()
         if edgeCount = 0
@@ -500,6 +511,7 @@ class PolygonOps
         py1:Empty()
         pieceFrom:Empty()
         pieceTo:Empty()
+        pieceEdge:Empty()
         nodeIds:Empty()
         nodeCount = 0
 
@@ -513,26 +525,27 @@ class PolygonOps
                 number sx = splitX:Get(s)
                 number sy = splitY:Get(s)
                 if sx not= x or sy not= y
-                    AddPiece(x, y, sx, sy)
+                    AddPiece(x, y, sx, sy, e)
                     x = sx
                     y = sy
                 end
                 q = q + 1
             end
             if ex1:Get(e) not= x or ey1:Get(e) not= y
-                AddPiece(x, y, ex1:Get(e), ey1:Get(e))
+                AddPiece(x, y, ex1:Get(e), ey1:Get(e), e)
             end
             e = e + 1
         end
     end
 
-    private action AddPiece(number x0, number y0, number x1, number y1)
+    private action AddPiece(number x0, number y0, number x1, number y1, integer edge)
         px0:Add(x0)
         py0:Add(y0)
         px1:Add(x1)
         py1:Add(y1)
         pieceFrom:Add(NodeId(x0, y0))
         pieceTo:Add(NodeId(x1, y1))
+        pieceEdge:Add(edge)
     end
 
     private action NodeId(number x, number y) returns integer
@@ -579,7 +592,7 @@ class PolygonOps
             integer k = bandStart:Get(b)
             repeat while k < bandStart:Get(b + 1)
                 integer e = bandEdges:Get(k)
-                if FirstBandIn(e, b0) = b
+                if FirstBandIn(e, b0) = b and e not= pieceEdge:Get(piece)
                     if NearBox(e, mx, my, d)
                         number gap = math:SquareRoot(EdgeDistance2(mx, my, e))
                         if gap > onLine and 0.25 * gap < d
@@ -724,6 +737,10 @@ class PolygonOps
                 loop:AddPoint(px0:Get(piece), py0:Get(piece))
                 loop:AddPoint(px1:Get(piece), py1:Get(piece))
                 integer startNode = pieceFrom:Get(piece)
+                number startX = px0:Get(piece)
+                number startY = py0:Get(piece)
+                number lastX = px1:Get(piece)
+                number lastY = py1:Get(piece)
                 integer current = pieceTo:Get(piece)
                 boolean ok = true
                 repeat while ok and current not= startNode
@@ -736,11 +753,22 @@ class PolygonOps
                         o = o + 1
                     end
                     if found = -1
-                        ok = false // broken chain (degenerate input); drop it
-                    else
+                        if SamePoint(lastX, lastY, startX, startY)
+                            current = startNode // back at the start, within snap
+                        else
+                            found = NearStart(live, used, lastX, lastY)
+                            if found = -1
+                                ok = false // broken chain (degenerate input); drop it
+                                brokenChain = brokenChain + 1
+                            end
+                        end
+                    end
+                    if found not= -1
                         used:Set(found, true)
                         integer foundPiece = live:Get(found)
                         loop:AddPoint(px1:Get(foundPiece), py1:Get(foundPiece))
+                        lastX = px1:Get(foundPiece)
+                        lastY = py1:Get(foundPiece)
                         current = pieceTo:Get(foundPiece)
                     end
                 end
@@ -751,6 +779,21 @@ class PolygonOps
             end
             k = k + 1
         end
+    end
+
+    private action NearStart(Array<integer> live, Array<boolean> used,
+                             number x, number y) returns integer
+        integer k = 0
+        repeat while k < live:GetSize()
+            if not used:Get(k) 
+                integer piece = live:Get(k) 
+                if SamePoint(px0:Get(piece), py0:Get(piece), x, y)
+                    return k
+                end
+            end
+            k = k + 1
+        end
+        return -1
     end
 
     private action Finish(Contour loop, integer planeIndex, Array<Contour> result)

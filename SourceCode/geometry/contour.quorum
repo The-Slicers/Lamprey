@@ -14,6 +14,11 @@ class Contour
     public integer wallIndex = -1
     public integer role = -1
 
+    // true for thin-island center lines and tip dots: PathOrderer keeps them
+    // even when they are shorter than its minimum line length, since they
+    // are the only thing printed for that island
+    public boolean keepShort = false
+
     action GetSize returns integer
         return xs:GetSize()
     end
@@ -62,6 +67,7 @@ class Contour
         copy:isHole = isHole
         copy:wallIndex = wallIndex
         copy:role = role
+        copy:keepShort = keepShort
         return copy
     end
 

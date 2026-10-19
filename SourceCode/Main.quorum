@@ -26,7 +26,7 @@ class Main
     action Main
         // Load in model from assets folder
         File file
-        file:SetPath("assets\sahuagin-warrior-2-fdm-friendly.stl")
+        file:SetPath("assets\dogs_bishop_v3.stl")
 
         // packages model data into a ModelData class
         ModelLoader loader
@@ -77,9 +77,9 @@ class Main
         output "specks dropped: " + conGen:GetDroppedCount()
         output "points: " + conGen:GetPointsBefore() + " -> " + conGen:GetPointsAfter()
 
-        OverhangGrid overhangs
-        overhangs:SetCellSize(0.1)
-        overhangs:Build(contours, planes:GetSize(), layerHeight * 1.43)
+//        OverhangGrid overhangs
+//        overhangs:SetCellSize(0.1)
+//        overhangs:Build(contours, planes:GetSize(), layerHeight * 1.43)
 
         PathGenerator paths
         paths:SetLineWidth(lineWidth) // nozzle diameter
@@ -125,7 +125,7 @@ class Main
 
         PathOrderer orderer
         orderer:SetSkirt(skirt)
-        orderer:SetSupport(trees:GetPaths())
+        //orderer:SetSupport(trees:GetPaths())
         Array<Contour> ordered = orderer:Order(contours, paths:GetWalls(), paths:GetSkin(), paths:GetInfill(), planes:GetSize())
 
         Gcode gcode
@@ -186,16 +186,16 @@ class Main
         output "specks dropped: " + conGen:GetDroppedCount()
         output "points: " + conGen:GetPointsBefore() + " -> " + conGen:GetPointsAfter()
 
-        OverhangGrid overhangs
-        overhangs:SetCellSize(0.1)
-        overhangs:Build(contours, planes:GetSize(), layerHeight * 1.43)
+//        OverhangGrid overhangs
+//        overhangs:SetCellSize(0.1)
+//        overhangs:Build(contours, planes:GetSize(), layerHeight * 1.43)
 
         PathGenerator paths
         paths:SetLineWidth(lineWidth) // nozzle diameter
         paths:SetWallCount(3)
         paths:SetInfillDensity(0.15) // 70%
-        paths:SetTopLayers(12)
-        paths:SetBottomLayers(12)
+        paths:SetTopLayers(4)
+        paths:SetBottomLayers(3)
         paths:Generate(contours, planes:GetSize())
 
         TreeSupport trees
@@ -220,10 +220,10 @@ class Main
             i = i + 1
         end
 
-        SkirtGenerator skirtGen
-        skirtGen:SetLineWidth(lineWidth)
-        skirtGen:SetBrim(8, 0.0)
-        Array<Contour> skirt = skirtGen:Generate(base)
+//        SkirtGenerator skirtGen
+//        skirtGen:SetLineWidth(lineWidth)
+//        skirtGen:SetBrim(8, 0.0)
+//        Array<Contour> skirt = skirtGen:Generate(base)
 
 //        LineRender lr
 //        lr:SetData(planes, contours)
@@ -233,7 +233,7 @@ class Main
 //        lr:LineRender()
 
         PathOrderer orderer
-        orderer:SetSkirt(skirt)
+//        orderer:SetSkirt(skirt)
         orderer:SetSupport(trees:GetPaths())
         Array<Contour> ordered = orderer:Order(contours, paths:GetWalls(), paths:GetSkin(), paths:GetInfill(), planes:GetSize())
 
@@ -243,17 +243,18 @@ class Main
         gcode:SetNozzleDiameter(0.4)
         gcode:SetFilamentDiameter(1.75)
         gcode:SetFlow(1.0)
-        gcode:SetTemperatures(190, 55)
+        gcode:SetTemperatures(210, 60)
         gcode:SetBed(200.0, 200.0)
         gcode:SetBedHeight(200.0)
         gcode:SetRetraction(6.0, 40.0)
         gcode:SetZHop(0.4)
-        gcode:SetZHopMinTravel(1.5)
-        gcode:SetSpeeds(25, 45, 40, 60, 40, 20)
+        gcode:SetZHopMinTravel(0.8)
+        gcode:SetSpeeds(25, 45, 40, 60, 40, 15)
         gcode:SetTravelSpeed(150)
         gcode:SetMaxFlow(10)
         gcode:SetRetractionLimit(90, 6.0)
-        gcode:SetMinLayerTime(15.0, 10.0)
+        gcode:SetMinLayerTime(8.0, 10.0)
+        gcode:SetFan(255, 1, 3) // for 0.12 layer height change to 255 1 5
         gcode:SetBambuExtras(false)
         gcode:SetStartGCodeFile("Templates\ender3-v2\start.gcode")
         gcode:SetEndGCodeFile("Templates\ender3-v2\end.gcode")
@@ -268,6 +269,74 @@ class Main
         end
         return "yes :)"
     end
+
+    action DescribeContour(Contour c) returns text
+    integer n = c:xs:GetSize()
+    number area = 0
+    integer k = 0
+    repeat while k < n
+        integer k2 = k + 1
+        if k2 = n
+            k2 = 0
+        end
+        area = area + c:xs:Get(k) * c:ys:Get(k2) - c:xs:Get(k2) * c:ys:Get(k)
+        k = k + 1
+    end
+    area = area / 2
+    return "pts=" + n + " area=" + area + " start=(" + c:xs:Get(0) + ", " + c:ys:Get(0) + ")"
+end
+
+action SameLoop(Contour a, Contour b) returns boolean
+    if a:xs:GetSize() not= b:xs:GetSize()
+        return false
+    end
+    integer k = 0
+    repeat while k < a:xs:GetSize()
+        number dx = a:xs:Get(k) - b:xs:Get(k)
+        number dy = a:ys:Get(k) - b:ys:Get(k)
+        if dx > 0.01 or dx < -0.01 or dy > 0.01 or dy < -0.01
+            return false
+        end
+        k = k + 1
+    end
+    return true
+end
+
+action DumpLayer(text label, Array<Contour> list, integer layer)
+    output "---- " + label + ", layer " + layer + " ----"
+    integer count = 0
+    integer i = 0
+    repeat while i < list:GetSize()
+        Contour c = list:Get(i)
+        if c:planeIndex = layer
+            output "  [" + i + "] " + DescribeContour(c)
+            count = count + 1
+        end
+        i = i + 1
+    end
+    output "  total: " + count
+end
+
+action FindDuplicates(text label, Array<Contour> list)
+    integer found = 0
+    integer i = 0
+    repeat while i < list:GetSize()
+        Contour a = list:Get(i)
+        integer j = i + 1
+        repeat while j < list:GetSize()
+            Contour b = list:Get(j)
+            if a:planeIndex = b:planeIndex
+                if SameLoop(a, b)
+                    output label + " DUPLICATE layer " + a:planeIndex + ": [" + i + "] = [" + j + "] " + DescribeContour(a)
+                    found = found + 1
+                end
+            end
+            j = j + 1
+        end
+        i = i + 1
+    end
+    output label + ": " + found + " duplicate pairs"
+end
 
     // Outputs mesh data ignoring materials and animations
     action PrintMeshStats(ModelData data)

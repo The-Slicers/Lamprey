@@ -447,7 +447,9 @@ class PathOrderer
                 if path:closed
                     shortest = minLoopLength
                 end
-                if util:PathLength(path) >= shortest
+                // thin-island lines and tip dots are the only thing printed
+                // for their island, so they are kept however short
+                if path:keepShort or util:PathLength(path) >= shortest
                     layerPaths:Add(path)
                     islandOf:Add(IslandOf(path, islands))
                 else

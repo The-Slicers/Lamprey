@@ -61,15 +61,21 @@ class Gcode
     // Most plastic the hotend can melt, in mm^3/s (0 = no limit). Every
     // speed is capped at maxFlow / (lineWidth * layerHeight * flow).
     number maxFlow = 0.0
+    number firstLayerFlow = 1.15
 
     number retractLength = 1.0       // ~1 mm direct drive, 4-6 mm Bowden
     number retractSpeed = 35.0
     number minTravelForRetract = 1.5
+    number infillTravelLimit = 5.0
 
     // Z hop: on travels that retract, lift the nozzle this many mm, move,
     // then lower it, so it can't drag across the bed or the print (0 = off).
     number zHop = 0.0
     number zHopMinTravel = 1.5    // travels longer than this hop (mm)
+    // true: only hop while the filament is retracted (a lift without a
+    // retract just lets the nozzle ooze in the air). false: hop on every
+    // travel longer than zHopMinTravel, retracted or not (the old behaviour).
+    boolean zHopNeedsRetract = true
 
     // Retraction limit: at most maxRetracts retracts while less than
     // retractWindow mm of filament has been pushed through. Stops the
@@ -79,8 +85,28 @@ class Gcode
 
     // Minimum layer time: small layers (ear tips) are slowed so each layer
     // gets at least this long to cool, but never below minPrintSpeed.
+    // Travel, retracts and Z hops count toward the layer's time.
     number minLayerTime = 10.0
     number minPrintSpeed = 10.0
+
+    // Cooling pause: a layer that is still shorter than minLayerTime at
+    // minPrintSpeed ends with the nozzle lifted coolLift mm, parked
+    // coolClear mm beside the model, waiting out the rest (G4).
+    // coolLift 0 = off (the layer just prints short, as before).
+    number coolLift = 3.0
+    number coolClear = 10.0
+    number minDwell = 0.5         // shorter waits aren't worth the trip
+    Array<number> layerDwell      // seconds to wait after each layer
+    integer dwellLayers = 0
+    number modelMinX = 0.0        // model footprint on the bed (set by CenterOnBed)
+    number modelMaxX = 0.0
+
+    // part cooling fan: off for the first fanOffLayers layers, then ramps
+    // up to fanMax (0-255), reaching it on layer fanFullLayer
+    integer fanMax = 255
+    integer fanOffLayers = 1
+    integer fanFullLayer = 3
+    integer lastFan = 0
 
     text startFile = "start.gcode"
     text endFile = "end.gcode"
@@ -159,6 +185,16 @@ class Gcode
         bedSizeZ = sizeZ
     end
 
+    action SetInfillTravel(number distance)
+        infillTravelLimit = distance
+    end
+
+    action SetFan(integer maxSpeed, integer offLayers, integer fullLayers)
+        fanMax = maxSpeed
+        fanOffLayers = offLayers
+        fanFullLayer = fullLayers
+    end
+
     action SetRetraction(number length, number speed)
         retractLength = length
         retractSpeed = speed
@@ -176,8 +212,24 @@ class Gcode
     // retraction). Lower it (e.g. 0.8) to also lift on the short hops
     // across already-printed lines; neighbouring skin lines (0.57 mm apart
     // on the diagonal) stay unlifted so solid layers don't slow down.
+    // While SetZHopNeedsRetract is on (the default) a travel also has to
+    // retract to hop.
     action SetZHopMinTravel(number distance)
         zHopMinTravel = distance
+    end
+
+    // true (default): hop only on travels that retract. false: hop on every
+    // travel longer than zHopMinTravel, even without a retract.
+    action SetZHopNeedsRetract(boolean toggle)
+        zHopNeedsRetract = toggle
+    end
+
+    // After a layer that is still under the minimum layer time at the
+    // slowest speed, lift `lift` mm, park `clearance` mm beside the model
+    // and wait out the rest. lift 0 turns the pause off.
+    action SetCoolingPause(number lift, number clearance)
+        coolLift = lift
+        coolClear = clearance
     end
 
     // At most `count` retracts within `window` mm of extruded filament.
@@ -295,6 +347,9 @@ class Gcode
         repeat while i < paths:GetSize()
             Contour path = paths:Get(i)
             if path:planeIndex not= layer
+                if layer >= 0
+                    CoolDown(layer)
+                end
                 layer = path:planeIndex
                 ChangeLayer(layer)
             end
@@ -313,6 +368,10 @@ class Gcode
             + minutes + " min of moves (real prints run slower: acceleration isn't counted)"
         if slowedLayers > 0
             output "  " + slowedLayers + " small layers slowed down to get at least " + Fixed(minLayerTime, 0) + " s to cool"
+        end
+        if dwellLayers > 0
+            output "  " + dwellLayers + " layers still too quick at " + Fixed(minPrintSpeed, 0)
+                + " mm/s: the nozzle parks beside the model and waits after them"
         end
         if skippedRetracts > 0
             output "  " + skippedRetracts + " retracts skipped to avoid grinding the filament"
@@ -365,6 +424,7 @@ class Gcode
         Line("M83 ;relative extrusion")
         Line("G92 E0")
         Line("M107 ;fan off for the first layer")
+        lastFan = 0
         // Line("M960 L0 M0 B255 ;filament spool on") need to check if this is actually for spool
         retracted = false
         // unknown position: forces a real travel (and retract) before the first path
@@ -633,13 +693,34 @@ class Gcode
             integer percent = cast(integer, 100.0 * done / utils:Max2(estimatedSeconds, 1.0))
             Line("M73 P" + percent + " R" + MinutesLeft(estimatedSeconds - done))
         end
-        if layer = 1 and not dryRun
-            Line("M106 S255 ;fan on from the second layer")
+        if not dryRun
+            integer fan = FanFor(layer)
+            if fan not= lastFan
+                if fan = 0
+                    Line("M107 ;fan off")
+                else
+                    Line("M106 S" + fan + " ;fan " + (fan * 100 / 255) + "%")
+                end
+            end
+            lastFan = fan
         end
         // the next travel takes the nozzle to this height (up before
         // moving sideways, down only after it has arrived)
         layerZ = z
         zPending = true
+    end
+
+    // Fan speed for a layer: 0 for the first fanOffLayers layers, then an
+    // even ramp that reaches fanMax on layer fanFullLayer.
+    private action FanFor(integer layer) returns integer
+        if layer < fanOffLayers
+            return 0
+        end
+        if layer >= fanFullLayer
+            return fanMax
+        end
+        number fraction = cast(number, layer - fanOffLayers + 1) / cast(number, fanFullLayer - fanOffLayers + 1)
+        return cast(integer, fraction * cast(number, fanMax) + 0.5)
     end
 
     private action WritePath(Contour path, integer layer)
@@ -666,15 +747,19 @@ class Gcode
 
         // a new tine, or a switch between model and support, means crossing
         // an air gap: always retract for it, however short the move
+        boolean infillToInfill = path:role = 3 and lastRole = 3
         boolean supportNow = path:role = 5 or path:role = 6
         boolean supportBefore = lastRole = 5 or lastRole = 6
         boolean newPart = path:role = 5 or (lastRole >= 0 and supportNow not= supportBefore)
         lastRole = path:role
-        TravelTo(path:HeadX() + offsetX, path:HeadY() + offsetY, newPart)
+        TravelTo(path:HeadX() + offsetX, path:HeadY() + offsetY, newPart, infillToInfill)
         Unretract()
         SetAccel(AccelFor(path, layer))
 
         number e = lineWidth * layerHeight / filamentArea * flow
+        if layer = 0
+            e = e * firstLayerFlow
+        end
         integer segments = n - 1
         if path:closed
             segments = n
@@ -745,11 +830,16 @@ class Gcode
         return layerFactor:Get(layer)
     end
 
-    // Works out each layer's printing time at normal speed, and how much to
-    // slow it down (factor < 1) to reach minLayerTime.
+    // Works out each layer's time: printing at normal speed plus everything
+    // else (travel, retracts, Z hops, the layer change). Layers under
+    // minLayerTime have their printing slowed (factor < 1) so the whole
+    // layer reaches it. Whatever the minPrintSpeed floor still leaves short
+    // becomes a cooling pause after the layer (see CoolDown).
     private action PlanLayerSpeeds(Array<Contour> paths)
         layerFactor:Empty()
+        layerDwell:Empty()
         slowedLayers = 0
+        dwellLayers = 0
         integer top = -1
         integer i = 0
         repeat while i < paths:GetSize()
@@ -759,36 +849,164 @@ class Gcode
             end
             i = i + 1
         end
+        // seconds spent extruding, and seconds spent on everything else
         Array<number> seconds
+        Array<number> overhead
         i = 0
         repeat while i <= top
             seconds:Add(0.0)
+            overhead:Add(0.0)
+            i = i + 1
+        end
+
+        // a retract and its unretract
+        number retractTime = 0.0
+        if retractLength > 0 and retractSpeed > 0
+            retractTime = 2.0 * retractLength / retractSpeed
+        end
+        number lastX = 0.0
+        number lastY = 0.0
+        boolean haveLast = false
+        integer lastPlane = -1
+        i = 0
+        repeat while i < paths:GetSize()
+            Contour path2 = paths:Get(i)
+            integer pl = path2:planeIndex
+            if pl >= 0 and path2:GetSize() >= 2
+                number t = seconds:Get(pl) + utils:PathLength(path2) / SpeedFor(path2, pl)
+                seconds:Set(pl, t)
+
+                number extra = 0.0
+                if pl not= lastPlane
+                    // layer change: always retracts, Z moves at 10 mm/s (F600)
+                    extra = extra + retractTime + layerHeight / 10.0
+                    lastPlane = pl
+                end
+                if haveLast
+                    number tdx = path2:HeadX() - lastX
+                    number tdy = path2:HeadY() - lastY
+                    number hop = math:SquareRoot(tdx * tdx + tdy * tdy)
+                    extra = extra + hop / travelSpeed
+                    if hop > minTravelForRetract
+                        extra = extra + retractTime
+                        if zHop > 0 and hop > zHopMinTravel
+                            extra = extra + 2.0 * zHop / 10.0
+                        end
+                    end
+                end
+                overhead:Set(pl, overhead:Get(pl) + extra)
+
+                // closed loops end where they started
+                if path2:closed
+                    lastX = path2:HeadX()
+                    lastY = path2:HeadY()
+                else
+                    lastX = path2:TailX()
+                    lastY = path2:TailY()
+                end
+                haveLast = true
+            end
+            i = i + 1
+        end
+
+        // slow-down factor: printing time stretched to fill what the
+        // overhead leaves of minLayerTime
+        i = 0
+        repeat while i <= top
+            number printing = seconds:Get(i)
+            number other = overhead:Get(i)
+            number factor = 1.0
+            if minLayerTime > 0 and printing > 0 and printing + other < minLayerTime
+                factor = printing / (minLayerTime - other)
+                slowedLayers = slowedLayers + 1
+            end
+            layerFactor:Add(factor)
+            i = i + 1
+        end
+
+        // what the layer really takes once the minPrintSpeed floor is applied
+        // (the same formula WritePath uses)
+        Array<number> actual
+        i = 0
+        repeat while i <= top
+            actual:Add(overhead:Get(i))
             i = i + 1
         end
         i = 0
         repeat while i < paths:GetSize()
-            Contour path2 = paths:Get(i)
-            if path2:planeIndex >= 0
-                number t = seconds:Get(path2:planeIndex) + utils:PathLength(path2) / SpeedFor(path2, path2:planeIndex)
-                seconds:Set(path2:planeIndex, t)
+            Contour path3 = paths:Get(i)
+            integer pl3 = path3:planeIndex
+            if pl3 >= 0 and path3:GetSize() >= 2
+                number slowed = utils:Max2(SpeedFor(path3, pl3) * layerFactor:Get(pl3), minPrintSpeed)
+                actual:Set(pl3, actual:Get(pl3) + utils:PathLength(path3) / slowed)
             end
             i = i + 1
         end
+
         layerTime:Empty()
         estimatedSeconds = 0.0
         i = 0
         repeat while i <= top
-            number layerSeconds = seconds:Get(i)
-            if layerSeconds > 0 and layerSeconds < minLayerTime
-                layerFactor:Add(layerSeconds / minLayerTime)
-                slowedLayers = slowedLayers + 1
-                layerSeconds = minLayerTime
-            else
-                layerFactor:Add(1.0)
+            number layerSeconds = actual:Get(i)
+            number dwell = 0.0
+            // the last layer has nothing above it, so it never waits
+            if coolLift > 0 and minLayerTime > 0 and seconds:Get(i) > 0 and i < top
+                if minLayerTime - layerSeconds >= minDwell
+                    dwell = minLayerTime - layerSeconds
+                    dwellLayers = dwellLayers + 1
+                end
             end
-            layerTime:Add(layerSeconds)
-            estimatedSeconds = estimatedSeconds + layerSeconds
+            layerDwell:Add(dwell)
+            layerTime:Add(layerSeconds + dwell)
+            estimatedSeconds = estimatedSeconds + layerSeconds + dwell
             i = i + 1
+        end
+    end
+
+    private action LayerDwell(integer layer) returns number
+        if layer < 0 or layer >= layerDwell:GetSize()
+            return 0.0
+        end
+        return layerDwell:Get(layer)
+    end
+
+    // Cooling pause after `layer` (planned in PlanLayerSpeeds): retract,
+    // lift, park beside the model so the hot nozzle isn't sitting over the
+    // tiny layer, and wait. The next layer's first travel brings the nozzle
+    // back and down (TravelTo already handles starting high).
+    private action CoolDown(integer layer)
+        if dryRun
+            return now
+        end
+        number dwell = LayerDwell(layer)
+        if dwell <= 0
+            return now
+        end
+        Retract()
+        number upZ = utils:Min2(posZ + coolLift, bedSizeZ)
+        if upZ > posZ
+            MoveZ(upZ)
+        end
+
+        // beside the model, never over it, and always on the bed
+        number parkX = modelMaxX + coolClear
+        if parkX > bedSizeX - 1.0
+            parkX = modelMinX - coolClear
+        end
+        parkX = utils:Max2(1.0, utils:Min2(parkX, bedSizeX - 1.0))
+        number away = utils:AbsNum(parkX - posX)
+        SetAccel(accelTravel)
+        integer feed = Feed(travelSpeed)
+        Line("G0 X" + Fixed(parkX, 3) + " Y" + Fixed(posY, 3) + " F" + feed)
+        lastSpeed = feed
+        totalSeconds = totalSeconds + away / travelSpeed
+        posX = parkX
+
+        // the trip out, the trip back and the lift all count as cooling time
+        number left = dwell - 2.0 * away / travelSpeed - 2.0 * coolLift / 10.0
+        if left > 0
+            Line("G4 P" + cast(integer, left * 1000.0 + 0.5) + " ;let layer " + layer + " cool")
+            totalSeconds = totalSeconds + left
         end
     end
 
@@ -826,10 +1044,11 @@ class Gcode
     //     comes down only AFTER it has arrived, so it never travels low;
     //   - the first move after the start code goes sideways at whatever
     //     height the start code left the nozzle, then down.
-    private action TravelTo(number x, number y, boolean forceRetract)
+    private action TravelTo(number x, number y, boolean forceRetract, boolean insideInfill)
         number dx = x - posX
         number dy = y - posY
         number len = math:SquareRoot(dx * dx + dy * dy)
+        boolean staysInside = insideInfill and len < infillTravelLimit
         if len < 0.0001
             if zPending
                 MoveZ(layerZ)
@@ -838,6 +1057,9 @@ class Gcode
             return now
         end
         boolean longTravel = len > minTravelForRetract or (forceRetract and len > lineWidth)
+        if staysInside
+            longTravel = false
+        end
         if longTravel
             Retract()
         end
@@ -846,8 +1068,13 @@ class Gcode
         number travelZ = layerZ
         if zKnown
             travelZ = utils:Max2(posZ, layerZ)
-            if zHop > 0 and len > zHopMinTravel
-                travelZ = travelZ + zHop
+            // hop only while retracted (unless SetZHopNeedsRetract(false)).
+            // A dry run never retracts, so there a long travel is enough.
+            boolean hopAllowed = retracted or not zHopNeedsRetract or (dryRun and longTravel)
+            if zHop > 0 and len > zHopMinTravel and not staysInside and hopAllowed
+                // the hop is measured from the layer, so a nozzle already
+                // parked higher (cooling pause) doesn't go up again
+                travelZ = utils:Max2(travelZ, layerZ + zHop)
             end
             if travelZ > posZ
                 MoveZ(travelZ)
@@ -980,6 +1207,8 @@ class Gcode
         end
         offsetX = bedCenterX - (lowX + highX) / 2.0
         offsetY = bedCenterY - (lowY + highY) / 2.0
+        modelMinX = lowX + offsetX
+        modelMaxX = highX + offsetX
         if highX - lowX > bedSizeX - 10.0 or highY - lowY > bedSizeY - 10.0
             output "Warning: the model (" + Fixed(highX - lowX, 1) + " x " + Fixed(highY - lowY, 1)
                 + " mm) doesn't fit on the bed with a margin"
