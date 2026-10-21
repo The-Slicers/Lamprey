@@ -1,0 +1,5 @@
+package Libraries.Mine
+
+class ZipPlugin
+    system action zip_file(text inFolder, text filePath) 
+end
