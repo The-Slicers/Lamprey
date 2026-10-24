@@ -1,0 +1,378 @@
+package Lamprey.Packaging
+
+use Libraries.Containers.Array
+
+/*
+    Edits a Bambu Studio project_settings.config without rebuilding it.
+
+    Bambu Studio needs the complete set of ~580 settings in exactly the shape
+    its own version writes, so this class never re-serializes the JSON. It
+    finds where each top-level value starts and ends, and on output replaces
+    only the values that were changed. Every other byte of the template is
+    kept as it was.
+
+    Fill keeps the length of list values: a list of one filament stays a list
+    of one. This matches what the Python packer does.
+*/
+class SettingsTemplate
+    text source = ""
+    Array<text> keys
+    Array<integer> starts
+    Array<integer> ends
+    Array<text> replacements
+    Array<boolean> replaced
+    text additions = ""
+
+    text dq = ""
+    text lf = ""
+    text cr = ""
+    text tab = ""
+
+    on create
+        dq = dq:GetDoubleQuote()
+        lf = lf:GetLineFeed()
+        cr = cr:GetCarriageReturn()
+        tab = tab:GetTab()
+    end
+
+    /* Reads the template's JSON text and finds every top-level key. */
+    action Load(text json)
+        source = json
+        keys:Empty()
+        starts:Empty()
+        ends:Empty()
+        replacements:Empty()
+        replaced:Empty()
+        additions = ""
+
+        integer size = source:GetSize()
+        integer i = source:IndexOf("{")
+        if i < 0
+            alert("settings error: the template isn't a JSON object")
+        end
+        i = i + 1
+        boolean done = false
+        repeat while not done
+            i = SkipSpace(i)
+            if i >= size
+                alert("settings error: the template's JSON ends early")
+            end
+            text c = source:GetCharacter(i)
+            if c = "}"
+                done = true
+            elseif c = ","
+                i = i + 1
+            elseif c = dq
+                integer keyEnd = StringEnd(i)
+                text key = source:GetSubtext(i + 1, keyEnd - 1)
+                i = SkipSpace(keyEnd)
+                if i >= size
+                    alert("settings error: the template's JSON ends after " + key)
+                end
+                text colon = source:GetCharacter(i)
+                if colon not= ":"
+                    alert("settings error: expected : after " + key + " in the template")
+                end
+                i = SkipSpace(i + 1)
+                integer valueEnd = ValueEnd(i)
+                keys:Add(key)
+                starts:Add(i)
+                ends:Add(valueEnd)
+                replacements:Add("")
+                replaced:Add(false)
+                i = valueEnd
+            else
+                alert("settings error: unexpected " + c + " in the template")
+            end
+        end
+    end
+
+    /* True if the template has this top-level key. */
+    action Has(text key) returns boolean
+        return Find(key) >= 0
+    end
+
+    /*
+        The value of a key as text. For a list it is the first item. If the key
+        is missing, or the list is empty, it returns the fallback.
+    */
+    action GetText(text key, text fallback) returns text
+        integer k = Find(key)
+        if k < 0
+            return fallback
+        end
+        integer i = starts:Get(k)
+        integer finish = ends:Get(k)
+        text c = source:GetCharacter(i)
+        if c = "["
+            i = SkipSpace(i + 1)
+            if i < finish
+                text first = source:GetCharacter(i)
+                if first = dq
+                    return Unquote(i)
+                end
+            end
+            return fallback
+        end
+        if c = dq
+            return Unquote(i)
+        end
+        return source:GetSubtext(i, finish)
+    end
+
+    /* The number of items in a list value, 1 for a single value, 0 if missing. */
+    action Count(text key) returns integer
+        integer k = Find(key)
+        if k < 0
+            return 0
+        end
+        integer i = starts:Get(k)
+        integer finish = ends:Get(k)
+        text c = source:GetCharacter(i)
+        if c not= "["
+            return 1
+        end
+        integer count = 0
+        integer depth = 0
+        boolean inItem = false
+        i = i + 1
+        repeat while i < finish - 1
+            c = source:GetCharacter(i)
+            if c = dq
+                if depth = 0 and not inItem
+                    count = count + 1
+                    inItem = true
+                end
+                i = StringEnd(i)
+            elseif c = "[" or c = "{"
+                if depth = 0 and not inItem
+                    count = count + 1
+                    inItem = true
+                end
+                depth = depth + 1
+                i = i + 1
+            elseif c = "]" or c = "}"
+                depth = depth - 1
+                i = i + 1
+            elseif c = "," and depth = 0
+                inItem = false
+                i = i + 1
+            elseif IsSpace(c)
+                i = i + 1
+            else
+                if depth = 0 and not inItem
+                    count = count + 1
+                    inItem = true
+                end
+                i = i + 1
+            end
+        end
+        return count
+    end
+
+    /*
+        Changes an existing key. A list becomes a list of the same length with
+        every item set to the value; a single value is replaced. Keys the
+        template doesn't have are left alone.
+    */
+    action Fill(text key, text value)
+        integer k = Find(key)
+        if k < 0
+            return now
+        end
+        integer i = starts:Get(k)
+        text c = source:GetCharacter(i)
+        text replacement = Quote(value)
+        if c = "["
+            integer count = Count(key)
+            if count = 0
+                replacement = "[]"
+            else
+                replacement = "["
+                integer item = 0
+                repeat while item < count
+                    replacement = replacement + lf + "        " + Quote(value)
+                    if item < count - 1
+                        replacement = replacement + ","
+                    end
+                    item = item + 1
+                end
+                replacement = replacement + lf + "    ]"
+            end
+        end
+        replacements:Set(k, replacement)
+        replaced:Set(k, true)
+    end
+
+    /* Sets a key to a single text value, adding it at the end if it is missing. */
+    action Put(text key, text value)
+        integer k = Find(key)
+        if k < 0
+            additions = additions + "," + lf + "    " + Quote(key) + ": " + Quote(value)
+        else
+            replacements:Set(k, Quote(value))
+            replaced:Set(k, true)
+        end
+    end
+
+    /* The checks Bambu Studio's PresetBundle::load_config_file_config makes. */
+    action Check
+        text name = GetText("name", "")
+        if name not= "project_settings"
+            alert("settings error: the template isn't a Bambu project_settings.config")
+        end
+        integer filaments = Count("filament_colour")
+        if filaments not= 1
+            alert("settings error: the template has " + filaments + " filaments; export one with a single filament")
+        end
+        if Has("extruder_variant_list")
+            integer variants = Count("filament_extruder_variant")
+            integer indexes = Count("filament_self_index")
+            if variants not= indexes or variants < filaments
+                alert("settings error: filament_extruder_variant / filament_self_index don't match")
+            end
+        end
+    end
+
+    /* The template with the changes applied, ending in a line feed. */
+    action ToText returns text
+        text result = ""
+        integer position = 0
+        integer i = 0
+        repeat while i < keys:GetSize()
+            boolean changed = replaced:Get(i)
+            if changed
+                integer valueStart = starts:Get(i)
+                text replacement = replacements:Get(i)
+                result = result + source:GetSubtext(position, valueStart) + replacement
+                position = ends:Get(i)
+            end
+            i = i + 1
+        end
+        if additions not= "" and keys:GetSize() > 0
+            integer insertAt = ends:Get(keys:GetSize() - 1)
+            result = result + source:GetSubtext(position, insertAt) + additions
+            position = insertAt
+        end
+        result = result + source:GetSubtext(position)
+        if not result:EndsWith(lf)
+            result = result + lf
+        end
+        return result
+    end
+
+    private action Find(text key) returns integer
+        integer i = 0
+        repeat while i < keys:GetSize()
+            text candidate = keys:Get(i)
+            if candidate = key
+                return i
+            end
+            i = i + 1
+        end
+        return -1
+    end
+
+    private action Quote(text value) returns text
+        text escaped = value:Replace("\", "\\")
+        escaped = escaped:Replace(dq, "\" + dq)
+        return dq + escaped + dq
+    end
+
+    /* The text inside the quoted string that starts at quoteIndex. */
+    private action Unquote(integer quoteIndex) returns text
+        integer closing = StringEnd(quoteIndex) - 1
+        text result = ""
+        integer i = quoteIndex + 1
+        repeat while i < closing
+            text c = source:GetCharacter(i)
+            if c = "\" and i + 1 < closing
+                text escaped = source:GetCharacter(i + 1)
+                if escaped = "n"
+                    result = result + lf
+                elseif escaped = "t"
+                    result = result + tab
+                else
+                    result = result + escaped
+                end
+                i = i + 2
+            else
+                result = result + c
+                i = i + 1
+            end
+        end
+        return result
+    end
+
+    private action IsSpace(text c) returns boolean
+        return c = " " or c = lf or c = cr or c = tab
+    end
+
+    private action SkipSpace(integer index) returns integer
+        integer i = index
+        integer size = source:GetSize()
+        repeat while i < size and IsSpace(source:GetCharacter(i))
+            i = i + 1
+        end
+        return i
+    end
+
+    /* Given the index of an opening quote, the index just past its closing quote. */
+    private action StringEnd(integer quoteIndex) returns integer
+        integer i = quoteIndex + 1
+        integer size = source:GetSize()
+        repeat while i < size
+            text c = source:GetCharacter(i)
+            if c = "\"
+                i = i + 2
+            elseif c = dq
+                return i + 1
+            else
+                i = i + 1
+            end
+        end
+        alert("settings error: a text value in the template is never closed")
+        return size
+    end
+
+    /* Given the index where a value starts, the index just past its end. */
+    private action ValueEnd(integer index) returns integer
+        integer size = source:GetSize()
+        integer depth = 0
+        integer i = index
+        repeat while i < size
+            text c = source:GetCharacter(i)
+            if c = dq
+                i = StringEnd(i)
+                if depth = 0
+                    return i
+                end
+            elseif c = "{" or c = "["
+                depth = depth + 1
+                i = i + 1
+            elseif c = "}" or c = "]"
+                if depth = 0
+                    return TrimEnd(index, i)
+                end
+                depth = depth - 1
+                i = i + 1
+                if depth = 0
+                    return i
+                end
+            elseif c = "," and depth = 0
+                return TrimEnd(index, i)
+            else
+                i = i + 1
+            end
+        end
+        return TrimEnd(index, size)
+    end
+
+    private action TrimEnd(integer start, integer finish) returns integer
+        integer i = finish
+        repeat while i > start and IsSpace(source:GetCharacter(i - 1))
+            i = i - 1
+        end
+        return i
+    end
+end

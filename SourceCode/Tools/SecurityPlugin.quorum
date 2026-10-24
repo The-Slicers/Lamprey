@@ -1,5 +1,5 @@
 package Libraries.Mine
 
 class SecPlugin
-    system action GenerateSHA(text input) returns text
+    system action GenerateSHA(text karp) returns text
 end

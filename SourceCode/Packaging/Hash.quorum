@@ -1,0 +1,12 @@
+package Lamprey.Packaging
+
+/*
+    Checksums done by java.security.MessageDigest (part of every Java runtime),
+    through the plugin in Plugins/src/plugins/quorum/Lamprey/Packaging/Hash.java.
+*/
+class Hash
+    // MD5 of the text's UTF-8 bytes as 32 uppercase hex digits, the form
+    // Bambu expects in Metadata/plate_1.gcode.md5. ZipWriter:AddText stores
+    // text as UTF-8 too, so the hash matches the stored G-code exactly.
+    system action Md5Hex(text content) returns text
+end

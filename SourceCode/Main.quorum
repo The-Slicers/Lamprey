@@ -8,6 +8,8 @@ use Libraries.Containers.Integer32BitArray
 use Libraries.Compute.Vector4
 use Libraries.System.File
 
+use Lamprey.Packaging.Bambu3mfPacker
+
 use geometry.TestSlicer
 use geometry.Segment
 use geometry.PlaneMesh
@@ -40,6 +42,11 @@ class Main
         boolean bambu = true
         if bambu
             BambuRun(data)
+            
+            Bambu3mfPacker packer
+            packer:SetFilamentColor("#FFFFFF")
+            packer:SetSettingsTemplate("Templates/bambu-p2s/p2s_project_settings.json")
+            packer:Pack("Outputs/dry_cube.gcode")
         else
             EnderRun(data)
         end

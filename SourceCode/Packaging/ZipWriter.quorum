@@ -1,0 +1,31 @@
+package Lamprey.Packaging
+
+/*
+    Writes a ZIP archive (a .gcode.3mf is a ZIP). The work is done by
+    java.util.zip and javax.imageio, which are part of every Java runtime,
+    through the plugin in Plugins/src/plugins/quorum/Lamprey/Packaging/ZipWriter.java.
+
+    Entries are written in the order they are added, and text is stored as UTF-8.
+*/
+class ZipWriter
+    // Creates (or overwrites) the archive at this path.
+    system action Open(text path)
+
+    // Adds one entry whose content is the given text, encoded as UTF-8.
+    system action AddText(text entryName, text content)
+
+    // Starts a blank, fully transparent RGBA image for a thumbnail.
+    system action BeginImage(integer width, integer height)
+
+    // Sets one pixel of the current image. Each channel is 0 to 255.
+    system action SetPixel(integer x, integer y, integer red, integer green, integer blue, integer alpha)
+
+    // Encodes the current image as PNG and adds it as an entry.
+    system action AddImage(text entryName)
+
+    // Adds another entry with exactly the same bytes as one added earlier.
+    system action AddCopy(text entryName, text existingEntryName)
+
+    // Finishes the archive. Nothing is readable until this is called.
+    system action Close
+end

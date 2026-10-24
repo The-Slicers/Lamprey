@@ -1,0 +1,18 @@
+package Lamprey.Packaging
+
+/*
+    Reads text files as UTF-8, through the plugin in
+    Plugins/src/plugins/quorum/Lamprey/Packaging/TextFiles.java (Java standard
+    library only). Relative paths are resolved against the folder the program
+    runs in, the same as ZipWriter.
+*/
+class TextFiles
+    // True if the path is an existing file.
+    system action Exists(text path) returns boolean
+
+    // The whole file as text. Invalid UTF-8 bytes become the replacement character.
+    system action Read(text path) returns text
+
+    // One entry of a ZIP archive (such as a .gcode.3mf) as text.
+    system action ReadFromZip(text zipPath, text entryName) returns text
+end
