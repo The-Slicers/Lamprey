@@ -2,7 +2,7 @@ use Libraries.Containers.Array
 use Libraries.Data.Formats.JavaScriptObjectNotation
 use Libraries.System.File
 
-class ProfileManager
+class ProfilePrinter
 
     Array<Printer> printers
 

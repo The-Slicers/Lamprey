@@ -22,6 +22,11 @@ use geometry.Gcode
 use geometry.SkirtGenerator
 use geometry.TreeSupport
 
+use Lamprey.Profiles.ProfileManager
+use Lamprey.Profiles.Profile
+use Lamprey.Profiles.SliceJob
+use Lamprey.Profiles.BambuSettingsMap
+
 use tool.LineRender
 
 class Main
@@ -39,17 +44,27 @@ class Main
         // simple program to check data in the model
         PrintMeshStats(data)
 
-        boolean bambu = true
-        if bambu
-            BambuRun(data)
-            
-            Bambu3mfPacker packer
-            packer:SetFilamentColor("#FFFFFF")
-            packer:SetSettingsTemplate("Templates/bambu-p2s/p2s_project_settings.json")
-            packer:Pack("Outputs/dry_cube.gcode")
-        else
-            EnderRun(data)
+        // every setting for every printer lives in Profiles/profiles.json
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        Profile profile = profiles:Require("bambu-p2s")   // or "ender3-v2", "ender3-v2-fine", ...
+        profile:SetBoolean("write3mf", true)
+        // change a setting for this run only, without editing the file:
+        // profile:SetNumber("layerHeight", 0.16)
+
+        // slices, writes the G-code, and packs the .gcode.3mf when the profile has write3mf on
+        SliceJob job
+        job:Run(data, profile, "Outputs/dry_cube.gcode")
+
+        // a standalone copy of the Bambu settings that went into the 3MF, to inspect or diff
+        if profile:GetBoolean("write3mf")
+            BambuSettingsMap map
+            map:SetReportMissing(false)
+            map:WriteTemplate(profile, profile:GetText("bambuSettingsTemplate"), "Outputs/project_settings.json")
         end
+
+        // every profile with every setting resolved, to see exactly what a slice uses
+        // profiles:Save("Outputs/profiles_resolved.json", true)
     end
 
     action BambuRun(ModelData data)
@@ -95,7 +110,7 @@ class Main
         paths:SetTopLayers(3)
         paths:SetBottomLayers(3)
         paths:Generate(contours, planes:GetSize())
-        
+
 //        TreeSupport trees
 //        trees:SetLayerHeight(layerHeight)
 //        trees:SetLineWidth(lineWidth)

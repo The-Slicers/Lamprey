@@ -1,0 +1,255 @@
+package Lamprey.Profiles
+
+use Libraries.Containers.Array
+use Libraries.Game.Graphics.Models.Data.ModelData
+
+use Lamprey.Packaging.Bambu3mfPacker
+
+use geometry.TestSlicer
+use geometry.Segment
+use geometry.PlaneMesh
+use geometry.Contour
+use geometry.ContourGenerator
+use geometry.PathGenerator
+use geometry.PathOrderer
+use geometry.Gcode
+use geometry.SkirtGenerator
+use geometry.TreeSupport
+
+/*
+    Runs the whole slicer from one profile: every geometry class gets its
+    settings from the profile, so nothing is hard-coded per printer.
+
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        SliceJob job
+        job:Run(model, profiles:Require("bambu-p2s"), "Outputs/benchy.gcode")
+
+    The Configure actions can also be used one at a time, to set up a single
+    class from a profile in a test.
+*/
+class SliceJob
+    boolean verbose = true
+
+    /* Whether Run prints its progress and statistics (on by default). */
+    action SetVerbose(boolean toggle)
+        verbose = toggle
+    end
+
+    /*
+        Slices the model with the profile and writes the G-code to gcodePath.
+        If the profile has write3mf on, also packages it as a Bambu
+        .gcode.3mf next to it. Returns the path of the last file written.
+    */
+    action Run(ModelData data, Profile profile, text gcodePath) returns text
+        Array<text> problems = profile:Validate()
+        integer p = 0
+        repeat while p < problems:GetSize()
+            output "warning: profile '" + profile:GetName() + "': " + problems:Get(p)
+            p = p + 1
+        end
+        Log("Slicing with " + profile:Describe())
+
+        PlaneMesh meshData
+        meshData:splitCoords(data)
+
+        TestSlicer slicer
+        ConfigureSlicer(profile, slicer)
+        slicer:SetTriangles(meshData)
+        Array<number> planeRange = slicer:GetSliceRange()
+        Log("Plane Low: " + planeRange:Get(0) + " Plane High: " + planeRange:Get(1))
+        number layerHeight = profile:GetNumber("layerHeight")
+        number cutAmount = profile:GetNumber("cutAmount")
+        Array<number> planes = slicer:BuildPlanes(planeRange:Get(0) + cutAmount, planeRange:Get(1), layerHeight)
+        Log("planes: " + planes:GetSize())
+
+        Array<Segment> segments = slicer:Slice(planes)
+        Log("segments: " + segments:GetSize())
+        Log("max crossings: " + slicer:GetMaxCrossingsPerFace())
+        Log("odd faces: " + slicer:GetOddCrossingCount())
+
+        ContourGenerator conGen
+        ConfigureContours(profile, conGen)
+        Array<Contour> contours = conGen:Build(segments, planes:GetSize(), profile:GetNumber("contourMaxGap"))
+        Log("flipped count: " + conGen:GetFlippedCount())
+        Log("specks dropped: " + conGen:GetDroppedCount())
+        Log("points: " + conGen:GetPointsBefore() + " -> " + conGen:GetPointsAfter())
+
+        PathGenerator paths
+        ConfigurePaths(profile, paths)
+        paths:Generate(contours, planes:GetSize())
+
+        // everything on the first layer, for the skirt / brim to go around
+        Array<Contour> base
+        integer i = 0
+        repeat while i < contours:GetSize()
+            base:Add(contours:Get(i))
+            i = i + 1
+        end
+
+        PathOrderer orderer
+        ConfigureOrderer(profile, orderer)
+
+        if profile:GetBoolean("supportsEnabled")
+            TreeSupport trees
+            ConfigureSupports(profile, trees)
+            trees:Generate(contours, planes:GetSize())
+            Log("support tips: " + trees:GetTipCount() + ", reached bed: " + trees:GetReachedBed() + ", rested on model: " + trees:GetRestedOnModel())
+            Array<Contour> supportAreas = trees:GetAreas()
+            i = 0
+            repeat while i < supportAreas:GetSize()
+                base:Add(supportAreas:Get(i))
+                i = i + 1
+            end
+            orderer:SetSupport(trees:GetPaths())
+        end
+
+        if profile:GetText("adhesionType") not= "none"
+            SkirtGenerator skirtGen
+            ConfigureAdhesion(profile, skirtGen)
+            orderer:SetSkirt(skirtGen:Generate(base))
+        end
+
+        Array<Contour> ordered = orderer:Order(contours, paths:GetWalls(), paths:GetSkin(), paths:GetInfill(), planes:GetSize())
+
+        Gcode gcode
+        ConfigureGcode(profile, gcode)
+        gcode:Write(ordered, gcodePath)
+
+        if profile:GetBoolean("write3mf")
+            Bambu3mfPacker packer
+            ConfigurePacker(profile, packer)
+            return packer:Pack(gcodePath)
+        end
+        return gcodePath
+    end
+
+    action ConfigureSlicer(Profile profile, TestSlicer slicer)
+        slicer:SetUnitScale(profile:GetNumber("unitScale"))
+        number width = profile:GetNumber("bedWidth")
+        number depth = profile:GetNumber("bedDepth")
+        if depth > width
+            width = depth
+        end
+        slicer:SetBedSize(width)
+    end
+
+    action ConfigureContours(Profile profile, ContourGenerator conGen)
+        conGen:SetSimplifyTolerance(profile:GetNumber("simplifyTolerance"))
+        conGen:SetMinArea(profile:GetNumber("minContourArea"))
+    end
+
+    action ConfigurePaths(Profile profile, PathGenerator paths)
+        paths:SetLineWidth(profile:GetNumber("lineWidth"))
+        paths:SetWallCount(profile:GetInteger("wallCount"))
+        paths:SetInfillDensity(profile:GetNumber("infillDensity"))
+        paths:SetInfillOverlap(profile:GetNumber("infillOverlap"))
+        paths:SetTopLayers(profile:GetInteger("topLayers"))
+        paths:SetBottomLayers(profile:GetInteger("bottomLayers"))
+        paths:SetJoinFirstLayer(profile:GetBoolean("joinFirstLayer"))
+    end
+
+    action ConfigureSupports(Profile profile, TreeSupport trees)
+        trees:SetLayerHeight(profile:GetNumber("layerHeight"))
+        trees:SetLineWidth(profile:GetNumber("lineWidth"))
+        trees:SetOverhangAngle(profile:GetNumber("supportOverhangAngle"))
+        trees:SetBranchAngle(profile:GetNumber("supportBranchAngle"))
+        trees:SetTipSpacing(profile:GetNumber("supportTipSpacing"))
+        trees:SetBranchGrowth(profile:GetNumber("supportGrowthAngle"), profile:GetNumber("supportMaxRadius"))
+        trees:SetGaps(profile:GetNumber("supportXYGap"), profile:GetNumber("supportTineXYGap"), profile:GetInteger("supportTopGapLayers"))
+        trees:SetBottomGap(profile:GetInteger("supportBottomGapLayers"))
+        trees:SetDensity(profile:GetNumber("supportDensity"))
+        trees:SetRoof(profile:GetInteger("supportRoofLayers"), profile:GetNumber("supportRoofDensity"))
+        trees:SetBase(profile:GetNumber("supportBaseFlare"), profile:GetInteger("supportBaseLayers"))
+        trees:SetTip(profile:GetNumber("supportTipDiameter"), profile:GetNumber("supportTipLength"))
+        trees:SetRestRules(profile:GetNumber("supportRestWidth"), profile:GetNumber("supportRestLookAhead"))
+        trees:SetBedRouting(profile:GetBoolean("supportBedRouting"))
+        trees:SetBridging(profile:GetNumber("supportMaxBridge"))
+        trees:SetMinOverhangArea(profile:GetNumber("supportMinOverhangArea"))
+    end
+
+    action ConfigureAdhesion(Profile profile, SkirtGenerator skirtGen)
+        skirtGen:SetLineWidth(profile:GetNumber("lineWidth"))
+        if profile:GetText("adhesionType") = "brim"
+            skirtGen:SetBrim(profile:GetInteger("brimLoops"), profile:GetNumber("brimGap"))
+        else
+            skirtGen:SetSkirt(profile:GetInteger("skirtLoops"), profile:GetNumber("skirtDistance"), profile:GetInteger("skirtLayers"))
+        end
+    end
+
+    action ConfigureOrderer(Profile profile, PathOrderer orderer)
+        orderer:SetSeamPoint(profile:GetNumber("seamX"), profile:GetNumber("seamY"))
+        orderer:SetCleanup(profile:GetNumber("minLoopLength"), profile:GetNumber("minLineLength"), profile:GetNumber("minSegmentLength"))
+    end
+
+    action ConfigureGcode(Profile profile, Gcode gcode)
+        gcode:SetLayerHeight(profile:GetNumber("layerHeight"))
+        gcode:SetLineWidth(profile:GetNumber("lineWidth"))
+        gcode:SetNozzleDiameter(profile:GetNumber("nozzleDiameter"))
+        gcode:SetFilamentDiameter(profile:GetNumber("filamentDiameter"))
+        gcode:SetFlow(profile:GetNumber("flow"))
+        gcode:SetFirstLayerFlow(profile:GetNumber("firstLayerFlow"))
+        gcode:SetMaxFlow(profile:GetNumber("maxFlow"))
+        gcode:SetTemperatures(profile:GetInteger("nozzleTemperature"), profile:GetInteger("bedTemperature"))
+        gcode:SetBed(profile:GetNumber("bedWidth"), profile:GetNumber("bedDepth"))
+        gcode:SetBedHeight(profile:GetNumber("bedHeight"))
+
+        gcode:SetSpeeds(profile:GetNumber("outerWallSpeed"), profile:GetNumber("innerWallSpeed"),
+            profile:GetNumber("skinSpeed"), profile:GetNumber("infillSpeed"),
+            profile:GetNumber("supportSpeed"), profile:GetNumber("firstLayerSpeed"))
+        gcode:SetTravelSpeed(profile:GetNumber("travelSpeed"))
+        gcode:SetInfillTravel(profile:GetNumber("infillTravelLimit"))
+        gcode:SetAccelerations(profile:GetNumber("accelOuterWall"), profile:GetNumber("accelInnerWall"),
+            profile:GetNumber("accelSkin"), profile:GetNumber("accelInfill"),
+            profile:GetNumber("accelSupport"), profile:GetNumber("accelFirstLayer"),
+            profile:GetNumber("accelTravel"))
+
+        // SetRetraction also resets the retraction window, so the limit comes after it
+        number retractLength = profile:GetNumber("retractLength")
+        gcode:SetRetraction(retractLength, profile:GetNumber("retractSpeed"))
+        gcode:SetMinTravelForRetract(profile:GetNumber("retractMinTravel"))
+        number window = profile:GetNumber("retractLimitWindow")
+        if window <= 0
+            window = retractLength
+        end
+        gcode:SetRetractionLimit(profile:GetInteger("retractLimitCount"), window)
+        gcode:SetZHop(profile:GetNumber("zHop"))
+        gcode:SetZHopMinTravel(profile:GetNumber("zHopMinTravel"))
+        gcode:SetZHopNeedsRetract(profile:GetBoolean("zHopNeedsRetract"))
+
+        gcode:SetMinLayerTime(profile:GetNumber("minLayerTime"), profile:GetNumber("minPrintSpeed"))
+        gcode:SetFan(profile:GetInteger("fanMax"), profile:GetInteger("fanOffLayers"), profile:GetInteger("fanFullLayer"))
+        gcode:SetCoolingPause(profile:GetNumber("coolingLift"), profile:GetNumber("coolingClearance"))
+
+        gcode:SetBambuExtras(profile:GetBoolean("bambuExtras"))
+        gcode:SetStartGCodeFile(profile:GetText("startGcodeFile"))
+        gcode:SetEndGCodeFile(profile:GetText("endGcodeFile"))
+        gcode:SetDryRun(profile:GetBoolean("dryRun"), profile:GetNumber("dryRunLift"))
+    end
+
+    /*
+        Sets up the 3MF packer: its own options from the profile, plus a
+        project_settings template already filled in by BambuSettingsMap, so
+        the 3MF shows the settings Lamprey actually sliced with.
+    */
+    action ConfigurePacker(Profile profile, Bambu3mfPacker packer)
+        text templatePath = profile:GetText("bambuSettingsTemplate")
+        packer:SetSettingsTemplate(templatePath)
+        packer:SetPrinterModelId(profile:GetText("printerModelId"))
+        packer:SetNozzleDiameter(profile:GetNumber("nozzleDiameter"))
+        packer:SetFilamentType(profile:GetText("filamentType"))
+        packer:SetFilamentColor(profile:GetText("filamentColor"))
+        packer:SetFilamentId(profile:GetText("filamentId"))
+        packer:SetBedType(profile:GetText("bedType"))
+        packer:SetLayerHeight(profile:GetNumber("layerHeight"))
+
+        BambuSettingsMap map
+        packer:SetSettingsText(map:FilledTemplate(profile, templatePath))
+    end
+
+    private action Log(text message)
+        if verbose
+            output message
+        end
+    end
+end

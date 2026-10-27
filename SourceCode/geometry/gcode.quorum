@@ -296,6 +296,17 @@ class Gcode
         flow = ratio
     end
 
+    // Extra extrusion multiplier on the first layer (default 1.15), on top
+    // of SetFlow, so the first layer squishes into the bed.
+    action SetFirstLayerFlow(number ratio)
+        firstLayerFlow = ratio
+    end
+
+    // Only travels longer than `distance` mm retract (default 1.5).
+    action SetMinTravelForRetract(number distance)
+        minTravelForRetract = distance
+    end
+
     // Where the printer's own start / end G-code is kept.
     action SetStartGCodeFile(text path)
         startFile = path

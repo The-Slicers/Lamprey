@@ -1,0 +1,284 @@
+package Lamprey.Profiles
+
+use Libraries.Containers.Array
+
+/*
+    A named set of slicer settings. Replaces the old Printer class.
+
+    A profile only stores the settings it sets itself. Anything else comes
+    from its parent profile ("inherits" in the JSON file), and in the end
+    from the defaults in ProfileSchema. So a filament or quality variant can
+    be a few lines that change only what differs:
+
+        "bambu-p2s-petg": {
+            "inherits": "bambu-p2s",
+            "filamentType": "PETG",
+            "nozzleTemperature": 250,
+            "bedTemperature": 70
+        }
+
+        Profile profile = manager:Find("bambu-p2s-petg")
+        number height = profile:GetNumber("layerHeight")
+        profile:SetNumber("layerHeight", 0.16)
+*/
+class Profile
+    text name = ""
+    text inherits = ""
+    Profile parentProfile = undefined
+    ProfileSchema schema
+
+    // only the settings this profile sets itself, as text
+    Array<text> keys
+    Array<text> values
+
+    action GetName returns text
+        return name
+    end
+
+    action SetName(text value)
+        name = value
+    end
+
+    /* The name of the parent profile, or "" for none. */
+    action GetInherits returns text
+        return inherits
+    end
+
+    action SetInherits(text parentName)
+        inherits = parentName
+        if parentName = ""
+            parentProfile = undefined
+        end
+    end
+
+    action GetParent returns Profile
+        return parentProfile
+    end
+
+    /* Links the parent profile. ProfileManager does this after loading. */
+    action SetParent(Profile value)
+        parentProfile = value
+        if value = undefined
+            inherits = ""
+        else
+            inherits = value:GetName()
+        end
+    end
+
+    action GetSchema returns ProfileSchema
+        return schema
+    end
+
+    /* True if this profile sets the key itself (not inherited or default). */
+    action SetsOwn(text key) returns boolean
+        return IndexOf(key) >= 0
+    end
+
+    /* The keys this profile sets itself, in the order they were set. */
+    action GetOwnKeys returns Array<text>
+        Array<text> copy
+        integer i = 0
+        repeat while i < keys:GetSize()
+            copy:Add(keys:Get(i))
+            i = i + 1
+        end
+        return copy
+    end
+
+    /* Where a value comes from: this profile's name, a parent's name, or "default". */
+    action GetSource(text key) returns text
+        RequireKnown(key)
+        if SetsOwn(key)
+            return name
+        end
+        if parentProfile not= undefined
+            return parentProfile:GetSource(key)
+        end
+        return "default"
+    end
+
+    /* The value as text: own value, else the parent's, else the schema default. */
+    action GetText(text key) returns text
+        integer index = IndexOf(key)
+        if index >= 0
+            return values:Get(index)
+        end
+        if parentProfile not= undefined
+            return parentProfile:GetText(key)
+        end
+        ProfileField field = RequireKnown(key)
+        return field:GetDefault()
+    end
+
+    action GetNumber(text key) returns number
+        text value = GetText(key)
+        number result = 0.0
+        check
+            result = cast(number, value)
+        detect e
+            alert("Profile '" + name + "': " + key + " = '" + value + "' isn't a number")
+        end
+        return result
+    end
+
+    action GetInteger(text key) returns integer
+        number amount = GetNumber(key)
+        return cast(integer, amount)
+    end
+
+    action GetBoolean(text key) returns boolean
+        text value = GetText(key)
+        text lower = value:ToLowerCase()
+        return lower = "true" or lower = "1"
+    end
+
+    /*
+        Sets a value written as text. Stops with an alert if the key is unknown
+        or the value doesn't fit the setting.
+    */
+    action Set(text key, text value)
+        text problem = TrySet(key, value)
+        if problem not= ""
+            alert("Profile '" + name + "': " + problem)
+        end
+    end
+
+    /* Like Set, but returns what is wrong ("" when it worked) instead of stopping. */
+    action TrySet(text key, text value) returns text
+        ProfileField field = schema:Find(key)
+        if field = undefined
+            return "unknown setting '" + key + "'"
+        end
+        text clean = value
+        if field:GetKind() = "boolean"
+            text lower = value:ToLowerCase()
+            if lower = "1"
+                clean = "true"
+            elseif lower = "0"
+                clean = "false"
+            else
+                clean = lower
+            end
+        end
+        text problem = field:Check(clean)
+        if problem not= ""
+            return key + ": " + problem
+        end
+        integer index = IndexOf(key)
+        if index >= 0
+            values:Set(index, clean)
+        else
+            keys:Add(key)
+            values:Add(clean)
+        end
+        return ""
+    end
+
+    action SetNumber(text key, number value)
+        NumberText format
+        Set(key, format:Short(value))
+    end
+
+    action SetInteger(text key, integer value)
+        Set(key, "" + value)
+    end
+
+    action SetBoolean(text key, boolean value)
+        if value
+            Set(key, "true")
+        else
+            Set(key, "false")
+        end
+    end
+
+    /* Removes this profile's own value, so the inherited or default one applies again. */
+    action Clear(text key)
+        integer index = IndexOf(key)
+        if index >= 0
+            keys:RemoveAt(index)
+            values:RemoveAt(index)
+        end
+    end
+
+    /*
+        Checks that the settings make sense together. Returns one sentence
+        per problem; an empty array means the profile is fine.
+    */
+    action Validate returns Array<text>
+        Array<text> problems
+
+        // every value, own or inherited, against its own range
+        integer i = 0
+        repeat while i < schema:GetSize()
+            ProfileField field = schema:Get(i)
+            text problem = field:Check(GetText(field:GetKey()))
+            if problem not= ""
+                problems:Add(field:GetKey() + ": " + problem)
+            end
+            i = i + 1
+        end
+
+        number nozzle = GetNumber("nozzleDiameter")
+        number width = GetNumber("lineWidth")
+        number height = GetNumber("layerHeight")
+        if width < nozzle * 0.6 or width > nozzle * 2.0
+            problems:Add("lineWidth " + width + " mm is far from the " + nozzle + " mm nozzle (keep it 0.6x to 2x)")
+        end
+        if height > nozzle * 0.8
+            problems:Add("layerHeight " + height + " mm is more than 80% of the " + nozzle + " mm nozzle")
+        end
+        if GetInteger("nozzleTemperature") > GetInteger("maxNozzleTemperature")
+            problems:Add("nozzleTemperature is above maxNozzleTemperature")
+        end
+        if GetInteger("bedTemperature") > GetInteger("maxBedTemperature")
+            problems:Add("bedTemperature is above maxBedTemperature")
+        end
+        if GetInteger("fanFullLayer") < GetInteger("fanOffLayers")
+            problems:Add("fanFullLayer comes before fanOffLayers")
+        end
+        if GetBoolean("write3mf")
+            if not GetBoolean("bambuExtras")
+                problems:Add("write3mf needs bambuExtras: the 3MF packer reads Bambu's header block")
+            end
+            if GetText("bambuSettingsTemplate") = ""
+                problems:Add("write3mf needs bambuSettingsTemplate")
+            end
+        end
+        text colour = GetText("filamentColor")
+        if colour:GetSize() not= 7 or not colour:StartsWith("#")
+            problems:Add("filamentColor must look like #RRGGBB")
+        end
+        return problems
+    end
+
+    /* A short summary for printing. */
+    action Describe returns text
+        text summary = name
+        if inherits not= ""
+            summary = summary + " (inherits " + inherits + ")"
+        end
+        return summary + ": " + GetText("bedWidth") + " x " + GetText("bedDepth") + " x " + GetText("bedHeight")
+            + " mm, " + GetText("nozzleDiameter") + " mm nozzle, "
+            + GetText("filamentType") + " at " + GetText("nozzleTemperature") + " C, "
+            + GetText("layerHeight") + " mm layers"
+    end
+
+    private action IndexOf(text key) returns integer
+        integer i = 0
+        repeat while i < keys:GetSize()
+            if keys:Get(i) = key
+                return i
+            end
+            i = i + 1
+        end
+        return -1
+    end
+
+    private action RequireKnown(text key) returns ProfileField
+        ProfileField field = schema:Find(key)
+        if field = undefined
+            alert("Profile '" + name + "': unknown setting '" + key + "'. Add it to ProfileSchema first.")
+        end
+        return field
+    end
+end

@@ -1,0 +1,127 @@
+package Lamprey.Profiles
+
+/*
+    One setting a profile can hold: its JSON key, its kind, the value used
+    when no profile in the inheritance chain sets it, and the allowed range.
+
+    kind is one of "number", "integer", "boolean" or "text".
+    For "text" settings with a fixed set of choices, choices holds them
+    separated by "|" (for example "none|skirt|brim").
+*/
+class ProfileField
+    text key = ""
+    text kind = "number"
+    text defaultValue = ""
+    text section = ""
+    text description = ""
+    boolean hasRange = false
+    number minimum = 0.0
+    number maximum = 0.0
+    text choices = ""
+
+    /* Fills in the field. ProfileSchema calls this when it builds the list. */
+    action Setup(text fieldSection, text fieldKey, text fieldKind, text fieldDefault, text fieldDescription)
+        section = fieldSection
+        key = fieldKey
+        kind = fieldKind
+        defaultValue = fieldDefault
+        description = fieldDescription
+    end
+
+    /* Number and integer settings: the smallest and largest allowed value. */
+    action SetRange(number low, number high)
+        hasRange = true
+        minimum = low
+        maximum = high
+    end
+
+    /* Text settings with fixed choices, separated by "|" (for example "none|skirt|brim"). */
+    action SetChoices(text allowed)
+        choices = allowed
+    end
+
+    action GetKey returns text
+        return key
+    end
+
+    action GetKind returns text
+        return kind
+    end
+
+    action GetDefault returns text
+        return defaultValue
+    end
+
+    action GetSection returns text
+        return section
+    end
+
+    action GetDescription returns text
+        return description
+    end
+
+    action HasRange returns boolean
+        return hasRange
+    end
+
+    action GetMinimum returns number
+        return minimum
+    end
+
+    action GetMaximum returns number
+        return maximum
+    end
+
+    action GetChoices returns text
+        return choices
+    end
+
+    /*
+        Checks a value written as text against this field. Returns "" if it is
+        fine, otherwise a sentence saying what is wrong.
+    */
+    action Check(text value) returns text
+        if kind = "text"
+            if choices = ""
+                return ""
+            end
+            text wrapped = "|" + choices + "|"
+            if wrapped:Contains("|" + value + "|")
+                return ""
+            end
+            return "'" + value + "' isn't one of " + choices:Replace("|", ", ")
+        end
+
+        if kind = "boolean"
+            text lower = value:ToLowerCase()
+            if lower = "true" or lower = "false" or lower = "1" or lower = "0"
+                return ""
+            end
+            return "'" + value + "' isn't true or false"
+        end
+
+        number amount = 0.0
+        boolean parsed = true
+        check
+            amount = cast(number, value)
+        detect e
+            parsed = false
+        end
+        if not parsed
+            return "'" + value + "' isn't a number"
+        end
+        if kind = "integer"
+            integer whole = cast(integer, amount)
+            number back = whole
+            if back not= amount
+                return "'" + value + "' isn't a whole number"
+            end
+        end
+        if hasRange
+            if amount < minimum or amount > maximum
+                return value + " is outside " + minimum + " to " + maximum
+            end
+        end
+        return ""
+    end
+end

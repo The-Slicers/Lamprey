@@ -170,6 +170,11 @@ class TreeSupport
         tipSpacing = spacing
     end
 
+    // steepest lean a branch may take from vertical (degrees, default 40)
+    action SetBranchAngle(number degrees)
+        branchAngle = degrees
+    end
+
     action SetBranchGrowth(number degrees, number maxR)
         growthAngle = degrees
         maxRadius = maxR

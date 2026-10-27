@@ -33,6 +33,7 @@ use Libraries.System.DateTime
 class Bambu3mfPacker
     // Options. Change them with the Set actions before calling Pack.
     text settingsPath = "p2s_project_settings.json"
+    text settingsText = ""
     text printerModelId = "N7"
     number nozzleDiameter = 0.4
     text filamentType = "PLA"
@@ -94,6 +95,16 @@ class Bambu3mfPacker
     /* A project_settings JSON file, or a .gcode.3mf exported by Bambu Studio. */
     action SetSettingsTemplate(text path)
         settingsPath = path
+    end
+
+    /*
+        The project_settings JSON itself, already filled in (for example by
+        Lamprey.Profiles.BambuSettingsMap from a profile). When set, Pack uses
+        it instead of reading SetSettingsTemplate's file, and only changes the
+        values it controls itself on top of it. "" goes back to the file.
+    */
+    action SetSettingsText(text json)
+        settingsText = json
     end
 
     /* printer_model_id: P2S = N7, P1S = C12, X1C = BL-P001. */
@@ -166,7 +177,7 @@ class Bambu3mfPacker
         text temperatureKey = bedType + "_temp"
 
         TextFiles files
-        if not files:Exists(settingsPath)
+        if settingsText = "" and not files:Exists(settingsPath)
             alert("settings template not found: " + settingsPath)
         end
         if not files:Exists(gcodePath)
@@ -200,7 +211,9 @@ class Bambu3mfPacker
 
         SettingsTemplate template
         text lowerPath = settingsPath:ToLowerCase()
-        if lowerPath:EndsWith(".3mf")
+        if settingsText not= ""
+            template:Load(settingsText)
+        elseif lowerPath:EndsWith(".3mf")
             template:Load(files:ReadFromZip(settingsPath, "Metadata/project_settings.config"))
         else
             template:Load(files:Read(settingsPath))

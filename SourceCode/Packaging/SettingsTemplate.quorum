@@ -87,6 +87,17 @@ class SettingsTemplate
         end
     end
 
+    /* Every top-level key, in file order. */
+    action GetKeys returns Array<text>
+        Array<text> copy
+        integer i = 0
+        repeat while i < keys:GetSize()
+            copy:Add(keys:Get(i))
+            i = i + 1
+        end
+        return copy
+    end
+
     /* True if the template has this top-level key. */
     action Has(text key) returns boolean
         return Find(key) >= 0
@@ -199,6 +210,33 @@ class SettingsTemplate
                 end
                 replacement = replacement + lf + "    ]"
             end
+        end
+        replacements:Set(k, replacement)
+        replaced:Set(k, true)
+    end
+
+    /*
+        Changes an existing list key to exactly these items, whatever its
+        length was (for values that differ per item, like printable_area's
+        corners). Keys the template doesn't have are left alone.
+    */
+    action FillList(text key, Array<text> items)
+        integer k = Find(key)
+        if k < 0
+            return now
+        end
+        text replacement = "[]"
+        if items:GetSize() > 0
+            replacement = "["
+            integer item = 0
+            repeat while item < items:GetSize()
+                replacement = replacement + lf + "        " + Quote(items:Get(item))
+                if item < items:GetSize() - 1
+                    replacement = replacement + ","
+                end
+                item = item + 1
+            end
+            replacement = replacement + lf + "    ]"
         end
         replacements:Set(k, replacement)
         replaced:Set(k, true)

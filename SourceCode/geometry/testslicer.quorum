@@ -40,6 +40,11 @@ class TestSlicer
         forcedUnitScale = scale
     end
 
+    // Largest bed side (mm), used to warn about models exported in the wrong units.
+    action SetBedSize(number size)
+        bedSize = size
+    end
+
     action SetTriangles(PlaneMesh meshData)
         Number64BitArray srcX = meshData:GetVertexX()
         Number64BitArray srcY = meshData:GetVertexY()
@@ -133,8 +138,8 @@ class TestSlicer
 
     action GetSliceRange returns Array<number>
         Array<number> range
-        
-        number low = vertZ:Get(0) 
+
+        number low = vertZ:Get(0)
         number high = low
         integer i = 1
         repeat while i < vertZ:GetSize()
@@ -143,11 +148,11 @@ class TestSlicer
             i = i + 1
         end
         // returns the min and max Z
-        range:Add(low) 
+        range:Add(low)
         range:Add(high)
         return range
     end
-        
+
     action BuildPlanes(number zMin, number zMax, number delta) returns Array<number>
         Array<number> planes
         firstPlaneZ = zMin + delta / 2.0
@@ -232,7 +237,7 @@ class TestSlicer
         end
         return result
     end
-    
+
     // adds up each of the six sides of the bounding box, then takes areas
     // of triangles from the model and select the base with the highest area
     // coverage
@@ -328,14 +333,14 @@ class TestSlicer
             i = i + 1
         end
     end
-    
+
 
     // guesses the file's units based on the model's size
     private action DetectUnitScale() returns number
         if forcedUnitScale > 0
             return forcedUnitScale
         end
-      
+
         number extent = util:Max2(maxX - minX, util:Max2(maxY - minY, maxZ - minZ))
         output "Model extent in file units: " + extent
 
@@ -351,7 +356,7 @@ class TestSlicer
         end
         return 1.0
     end
-    
+
     // walks the edges of triangle f and records every edge that has
     // one end below the plane and the other at or above it
     private action CollectCrossings(integer f, integer cornersPerFace, number planeValue,
@@ -392,7 +397,7 @@ class TestSlicer
             j = j + 1
         end
     end
-    
+
     // turns a triangle's two crossings into a segment,
     // the rising crossing is always the end. Every segment
     // runs the same way around the solid and orientation
