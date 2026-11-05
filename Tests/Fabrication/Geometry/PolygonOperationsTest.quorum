@@ -1,0 +1,95 @@
+package Tests.Fabrication.Geometry
+
+use Libraries.Containers.Array
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Geometry.PolygonOperations
+use Tests.LampreyTest
+use Tests.TestModels
+
+/*
+Tests Libraries.Fabrication.Geometry.PolygonOperations with shapes whose
+answers are known exactly: two 10 mm squares overlapping by 5 x 5 mm.
+*/
+class PolygonOperationsTest is LampreyTest
+    PolygonOperations ops
+    TestModels models
+
+    on create
+        SetName("PolygonOperations")
+    end
+
+    action Run
+        Overlapping()
+        Disjoint()
+        Holes()
+        Contained()
+    end
+
+    action Overlapping
+        Case("overlapping squares")
+        Array<Contour> a = models:ListOf(models:Square(0, 0, 10, 2))
+        Array<Contour> b = models:ListOf(models:Square(5, 5, 10, 2))
+        Array<Contour> union = ops:Union(a, b, 2)
+        ExpectInteger(union:GetSize(), 1, "the union is one loop")
+        ExpectNumber(models:NetArea(union), 175, 0.0001, "union area 100 + 100 - 25")
+        Array<Contour> both = ops:Intersect(a, b, 2)
+        ExpectNumber(models:NetArea(both), 25, 0.0001, "intersection area")
+        Array<Contour> onlyA = ops:Difference(a, b, 2)
+        ExpectNumber(models:NetArea(onlyA), 75, 0.0001, "difference area")
+        Contour loop = union:Get(0)
+        ExpectInteger(loop:planeIndex, 2, "results are on the requested plane")
+        ExpectTrue(loop:closed and not loop:isHole, "an outer loop")
+        ExpectTrue(loop:SignedArea2() > 0, "outer loops run counter-clockwise")
+        ExpectInteger(ops:GetBrokenChains(), 0, "no broken chains")
+    end
+
+    action Disjoint
+        Case("squares that don't touch")
+        Array<Contour> a = models:ListOf(models:Square(0, 0, 10, 0))
+        Array<Contour> b = models:ListOf(models:Square(20, 0, 10, 0))
+        Array<Contour> union = ops:Union(a, b, 0)
+        ExpectInteger(union:GetSize(), 2, "two loops")
+        ExpectNumber(models:NetArea(union), 200, 0.0001, "both areas")
+        Array<Contour> both = ops:Intersect(a, b, 0)
+        ExpectInteger(both:GetSize(), 0, "nothing in common")
+        Array<Contour> onlyA = ops:Difference(a, b, 0)
+        ExpectNumber(models:NetArea(onlyA), 100, 0.0001, "subtracting something far away changes nothing")
+    end
+
+    action Holes
+        Case("cutting a hole")
+        Array<Contour> outer = models:ListOf(models:Square(0, 0, 20, 0))
+        Array<Contour> inner = models:ListOf(models:Square(5, 5, 10, 0))
+        Array<Contour> ring = ops:Difference(outer, inner, 0)
+        ExpectInteger(ring:GetSize(), 2, "an outline and a hole")
+        ExpectNumber(models:NetArea(ring), 300, 0.0001, "400 - 100")
+        integer holes = 0
+        integer i = 0
+        repeat while i < ring:GetSize()
+            Contour loop = ring:Get(i)
+            if loop:isHole
+                holes = holes + 1
+                ExpectTrue(loop:SignedArea2() < 0, "holes run clockwise")
+            end
+            i = i + 1
+        end
+        ExpectInteger(holes, 1, "one loop is marked as a hole")
+
+        // filling the hole back in gives the whole square
+        Array<Contour> whole = ops:Union(ring, inner, 0)
+        ExpectNumber(models:NetArea(whole), 400, 0.0001, "ring + plug")
+    end
+
+    action Contained
+        Case("one square inside another")
+        Array<Contour> outer = models:ListOf(models:Square(0, 0, 20, 0))
+        Array<Contour> inner = models:ListOf(models:Square(5, 5, 10, 0))
+        ExpectNumber(models:NetArea(ops:Union(outer, inner, 0)), 400, 0.0001, "the union is the big square")
+        ExpectNumber(models:NetArea(ops:Intersect(outer, inner, 0)), 100, 0.0001, "the intersection is the small one")
+        Array<Contour> smallMinusBig = ops:Difference(inner, outer, 0)
+        ExpectInteger(smallMinusBig:GetSize(), 0, "small minus big is empty")
+        Array<Contour> nothing
+        Array<Contour> unionOfNothing = ops:Union(nothing, nothing, 0)
+        ExpectInteger(unionOfNothing:GetSize(), 0, "the union of nothing")
+    end
+end

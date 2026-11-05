@@ -1,0 +1,86 @@
+package Tests.Fabrication.Geometry
+
+use Libraries.Containers.Array
+use Libraries.Containers.Number64BitArray
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Geometry.ConvexHull
+use Tests.LampreyTest
+
+/* Tests Libraries.Fabrication.Geometry.ConvexHull (Andrew's monotone chain). */
+class ConvexHullTest is LampreyTest
+    Number64BitArray xs
+    Number64BitArray ys
+
+    on create
+        SetName("ConvexHull")
+    end
+
+    action Run
+        SquareWithInsidePoints()
+        DuplicatesAndCollinear()
+        TinyInputs()
+    end
+
+    action Points(text pairs)
+        Array<text> values = pairs:Split(" ")
+        integer count = values:GetSize() / 2
+        xs:SetSize(count)
+        ys:SetSize(count)
+        integer i = 0
+        repeat while i < count
+            text x = values:Get(2 * i)
+            text y = values:Get(2 * i + 1)
+            xs:Set(i, x:ParseNumber())
+            ys:Set(i, y:ParseNumber())
+            i = i + 1
+        end
+    end
+
+    action HullContour(ConvexHull hull) returns Contour
+        Contour loop
+        Number64BitArray hx = hull:GetConvexX()
+        Number64BitArray hy = hull:GetConvexY()
+        integer i = 0
+        repeat while i < hx:GetSize()
+            loop:AddPoint(hx:Get(i), hy:Get(i))
+            i = i + 1
+        end
+        loop:closed = true
+        return loop
+    end
+
+    action SquareWithInsidePoints
+        Case("a square with points inside")
+        Points("0 0 10 0 10 10 0 10 5 5 2 7 9 1")
+        ConvexHull hull
+        hull:Compute(xs, ys)
+        ExpectInteger(hull:GetSize(), 4, "only the corners")
+        Contour loop = HullContour(hull)
+        ExpectNumber(loop:SignedArea2(), 200, 0.000001, "counter-clockwise, area 100")
+    end
+
+    action DuplicatesAndCollinear
+        Case("duplicates and points along an edge")
+        Points("0 0 0 0 5 0 10 0 10 10 10 10 0 10")
+        ConvexHull hull
+        hull:Compute(xs, ys)
+        ExpectInteger(hull:GetSize(), 4, "duplicates and the edge midpoint are dropped")
+    end
+
+    action TinyInputs
+        Case("fewer than three distinct points")
+        Points("3 3 3 3")
+        ConvexHull single
+        single:Compute(xs, ys)
+        ExpectInteger(single:GetSize(), 0, "one distinct point has no hull")
+        Number64BitArray noX
+        Number64BitArray noY
+        noX:SetSize(0)
+        noY:SetSize(0)
+        ConvexHull empty
+        empty:Compute(noX, noY)
+        ExpectInteger(empty:GetSize(), 0, "no points")
+        ConvexHull unused
+        ExpectInteger(unused:GetSize(), 0, "GetSize before Compute")
+    end
+end

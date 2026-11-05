@@ -1,0 +1,123 @@
+package Tests.Fabrication.Geometry
+
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Geometry.ContourSimplifier
+use Tests.LampreyTest
+use Tests.TestModels
+
+/* Tests Libraries.Fabrication.Geometry.ContourSimplifier (Ramer-Douglas-Peucker). */
+class ContourSimplifierTest is LampreyTest
+    ContourSimplifier simplifier
+    TestModels models
+
+    on create
+        SetName("ContourSimplifier")
+    end
+
+    action Run
+        DropsNearlyStraightPoints()
+        StartingMidSide()
+        KeepsCorners()
+        SmallInputsUnchanged()
+        SimplifiedLoopDropsSlivers()
+    end
+
+    /* A 10 mm square with an extra, almost straight point in the middle of each side. */
+    action BumpySquare(number bump) returns Contour
+        Contour loop
+        loop:AddPoint(0, 0)
+        loop:AddPoint(5, -bump)
+        loop:AddPoint(10, 0)
+        loop:AddPoint(10 + bump, 5)
+        loop:AddPoint(10, 10)
+        loop:AddPoint(5, 10 + bump)
+        loop:AddPoint(0, 10)
+        loop:AddPoint(-bump, 5)
+        loop:closed = true
+        return loop
+    end
+
+    action DropsNearlyStraightPoints
+        Case("points within the tolerance are dropped")
+        Contour loop = BumpySquare(0.001)
+        simplifier:Simplify(loop, 0.01)
+        ExpectInteger(loop:GetSize(), 4, "only the corners are left")
+        ExpectNumber(loop:Area(), 100, 0.05, "the area hardly changes")
+        ExpectTrue(loop:SignedArea2() > 0, "the direction is kept")
+    end
+
+    action StartingMidSide
+        Case("a loop that starts in the middle of a side")
+        Contour loop
+        loop:AddPoint(5, 0)
+        loop:AddPoint(10, 0)
+        loop:AddPoint(10, 10)
+        loop:AddPoint(0, 10)
+        loop:AddPoint(0, 0)
+        loop:closed = true
+        simplifier:Simplify(loop, 0.01)
+        ExpectInteger(loop:GetSize(), 4, "the starting point on the side is dropped")
+        ExpectNumber(loop:Area(), 100, 0.000001, "the area is unchanged")
+
+        Contour bent
+        bent:AddPoint(5, -1)
+        bent:AddPoint(10, 0)
+        bent:AddPoint(10, 10)
+        bent:AddPoint(0, 10)
+        bent:AddPoint(0, 0)
+        bent:closed = true
+        simplifier:Simplify(bent, 0.01)
+        ExpectInteger(bent:GetSize(), 5, "a real corner at the start stays")
+        ExpectNumber(bent:HeadX(), 5, 0, "and is still the first point")
+    end
+
+    action KeepsCorners
+        Case("points beyond the tolerance are kept")
+        Contour loop = BumpySquare(0.5)
+        simplifier:Simplify(loop, 0.01)
+        ExpectInteger(loop:GetSize(), 8, "every bump stays")
+
+        Contour open
+        open:AddPoint(0, 0)
+        open:AddPoint(5, 0.001)
+        open:AddPoint(10, 0)
+        open:AddPoint(10, 10)
+        simplifier:Simplify(open, 0.01)
+        ExpectInteger(open:GetSize(), 3, "an open path keeps both ends")
+        ExpectNumber(open:TailY(), 10, 0, "the last point of an open path")
+    end
+
+    action SmallInputsUnchanged
+        Case("small inputs are left alone")
+        Contour triangle
+        triangle:AddPoint(0, 0)
+        triangle:AddPoint(10, 0)
+        triangle:AddPoint(5, 0.001)
+        triangle:closed = true
+        simplifier:Simplify(triangle, 1)
+        ExpectInteger(triangle:GetSize(), 3, "fewer than 4 points")
+        Contour square = models:Square(0, 0, 10, 0)
+        simplifier:Simplify(square, 0)
+        ExpectInteger(square:GetSize(), 4, "a tolerance of 0")
+    end
+
+    action SimplifiedLoopDropsSlivers
+        Case("SimplifiedLoop")
+        Contour square = models:Square(0, 0, 10, 4)
+        Contour copy = simplifier:SimplifiedLoop(square, 0.1)
+        ExpectTrue(copy not= undefined, "a real loop survives")
+        if copy not= undefined
+            ExpectInteger(copy:planeIndex, 4, "the plane is kept")
+            ExpectTrue(copy:closed, "the copy is closed")
+        end
+        ExpectInteger(square:GetSize(), 4, "the input isn't changed")
+
+        Contour sliver
+        sliver:AddPoint(0, 0)
+        sliver:AddPoint(10, 0)
+        sliver:AddPoint(10, 0.001)
+        sliver:AddPoint(0, 0.001)
+        sliver:closed = true
+        ExpectTrue(simplifier:SimplifiedLoop(sliver, 0.1) = undefined, "a sliver thinner than the tolerance is dropped")
+    end
+end

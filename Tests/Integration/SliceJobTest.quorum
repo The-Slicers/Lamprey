@@ -1,0 +1,133 @@
+package Tests.Integration
+
+use Libraries.Data.Compression.ZipReader
+use Libraries.Game.Graphics.Models.Data.ModelData
+use Libraries.Fabrication.SliceJob
+use Libraries.Fabrication.Profiles.Profile
+use Libraries.Fabrication.Profiles.ProfileManager
+use Libraries.System.TextFile
+use Tests.LampreyTest
+use Tests.TestModels
+use Tests.TestFiles
+use Tests.GcodeReader
+
+/*
+Integration tests: whole slices, model to G-code, with every shipped profile
+in Profiles/profiles.json, the way Main runs them. These catch stages that
+work alone but not together, and profiles or templates that no longer work.
+*/
+class SliceJobTest is LampreyTest
+    TestModels models
+    TestFiles files
+    ProfileManager profiles
+
+    on create
+        SetName("SliceJob with every shipped profile")
+    end
+
+    action Run
+        profiles:Load("Profiles/profiles.json")
+        EveryProfileSlicesACube()
+        SupportsAndAdhesion()
+        BambuArchive()
+        UnusableInput()
+    end
+
+    /* Slices quietly and reads the G-code back. */
+    action Slice(ModelData model, Profile profile, text name) returns GcodeReader
+        SliceJob job
+        job:SetVerbose(false)
+        text path = files:Path("slice/" + name + ".gcode")
+        text written = job:Run(model, profile, path)
+        GcodeReader reader
+        reader:Read(path)
+        return reader
+    end
+
+    action EveryProfileSlicesACube
+        Case("every profile slices a cube")
+        integer i = 0
+        repeat while i < profiles:GetSize()
+            Profile profile = profiles:Get(i)
+            text name = profile:GetName()
+            GcodeReader reader = Slice(models:Cube(), profile, name + "-cube")
+            number layerHeight = profile:GetNumber("layerHeight")
+            integer layers = reader:GetLayerCount()
+            ExpectNumber(layers * layerHeight, 20, layerHeight, name + ": layers x height covers the 20 mm cube")
+            ExpectNumber(reader:GetLayerZ(layers - 1), 20, layerHeight, name + ": the last layer is at the top")
+            ExpectInteger(reader:GetBadNumberCount(), 0, name + ": every number is plain decimal text")
+            ExpectTrue(reader:GetPrintMoveCount() > 1000, name + ": the cube is printed")
+            number centreX = profile:GetNumber("bedWidth") / 2
+            ExpectNumber((reader:GetMinX() + reader:GetMaxX()) / 2, centreX, 0.5, name + ": centred on the bed")
+            text gcodeText = reader:GetText()
+            ExpectNotContains(gcodeText, "{NOZZLE_TEMP}", name + ": the start G-code placeholders are filled in")
+            ExpectContains(gcodeText, ";TYPE:WALL-OUTER", name + ": walls")
+            ExpectContains(gcodeText, ";TYPE:SKIN", name + ": skin")
+            i = i + 1
+        end
+    end
+
+    action SupportsAndAdhesion
+        Case("supports, skirt and brim on the ledge model")
+        Profile supported = profiles:Derive("ender3-v2", "test-supported")
+        supported:SetBoolean("supportsEnabled", true)
+        supported:Set("adhesionType", "skirt")
+        GcodeReader withSupport = Slice(models:Ledge(), supported, "ledge-supported")
+        text supportedText = withSupport:GetText()
+        ExpectContains(supportedText, ";TYPE:SUPPORT", "the ledge gets support")
+        ExpectContains(supportedText, ";TYPE:SKIRT", "the skirt is printed")
+
+        Profile bare = profiles:Derive("ender3-v2", "test-bare")
+        bare:SetBoolean("supportsEnabled", false)
+        bare:Set("adhesionType", "skirt")
+        GcodeReader withoutSupport = Slice(models:Ledge(), bare, "ledge-bare")
+        text bareText = withoutSupport:GetText()
+        ExpectNotContains(bareText, ";TYPE:SUPPORT", "no support when it's off")
+        ExpectTrue(withSupport:GetExtruded() > withoutSupport:GetExtruded(), "support uses extra filament")
+
+        Profile brimmed = profiles:Derive("ender3-v2", "test-brim")
+        brimmed:SetBoolean("supportsEnabled", false)
+        brimmed:Set("adhesionType", "brim")
+        GcodeReader withBrim = Slice(models:Cube(), brimmed, "cube-brim")
+        text brimText = withBrim:GetText()
+        ExpectContains(brimText, ";TYPE:SKIRT", "the brim is printed (G-code previewers call it SKIRT)")
+        // 8 brim loops 0.4 mm apart touching the cube: the outermost centre line is 3 mm out
+        ExpectNumber(withBrim:GetMaxX() - withBrim:GetMinX(), 20 + 2 * 3.0, 0.1, "the brim's width")
+    end
+
+    action BambuArchive
+        Case("the P2S profile makes a .gcode.3mf")
+        SliceJob job
+        job:SetVerbose(false)
+        text gcodePath = files:Path("slice/p2s-archive.gcode")
+        text archive = job:Run(models:Cube(), profiles:Require("bambu-p2s"), gcodePath)
+        ExpectText(archive, files:Path("slice/p2s-archive.gcode.3mf"), "Run returns the archive")
+        ZipReader zip
+        ExpectTrue(zip:HasEntry(archive, "Metadata/plate_1.gcode"), "the archive holds the G-code")
+        TextFile file
+        text written = file:Read(gcodePath)
+        ExpectTrue(written:StartsWith("; HEADER_BLOCK_START"), "the G-code has Bambu's header")
+    end
+
+    action UnusableInput
+        Case("unusable input stops with a message")
+        boolean flat = false
+        check
+            SliceJob job
+            job:SetVerbose(false)
+            text result = job:Run(models:Box(0, 0, 0, 20, 20, 0.05), profiles:Require("ender3-v2"), files:Path("slice/flat.gcode"))
+        detect e1
+            flat = true
+        end
+        ExpectTrue(flat, "a model thinner than half a layer")
+
+        boolean noPath = false
+        check
+            SliceJob job2
+            text result2 = job2:Run(models:Cube(), profiles:Require("ender3-v2"), "")
+        detect e2
+            noPath = true
+        end
+        ExpectTrue(noPath, "no G-code path")
+    end
+end

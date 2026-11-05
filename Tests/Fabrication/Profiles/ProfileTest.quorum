@@ -1,0 +1,132 @@
+package Tests.Fabrication.Profiles
+
+use Libraries.Containers.Array
+use Libraries.Fabrication.Profiles.Profile
+use Libraries.Fabrication.Profiles.ProfileField
+use Libraries.Fabrication.Profiles.ProfileSchema
+use Tests.LampreyTest
+
+/* Tests Profile, ProfileField and ProfileSchema: settings, defaults, inheritance and validation. */
+class ProfileTest is LampreyTest
+    on create
+        SetName("Profile, ProfileField, ProfileSchema")
+    end
+
+    action Run
+        Defaults()
+        SettingValues()
+        Inheritance()
+        Validation()
+        FieldChecks()
+        SchemaIsConsistent()
+    end
+
+    action Defaults
+        Case("defaults come from the schema")
+        Profile profile
+        profile:SetName("plain")
+        ExpectNumber(profile:GetNumber("layerHeight"), 0.2, 0, "layerHeight")
+        ExpectInteger(profile:GetInteger("wallCount"), 2, "wallCount")
+        ExpectFalse(profile:GetBoolean("supportsEnabled"), "supportsEnabled")
+        ExpectText(profile:GetText("adhesionType"), "none", "adhesionType")
+        ExpectText(profile:GetSource("layerHeight"), "default", "GetSource of a default")
+        ExpectFalse(profile:SetsOwn("layerHeight"), "SetsOwn of a default")
+    end
+
+    action SettingValues
+        Case("Set, TrySet and Clear")
+        Profile profile
+        profile:SetName("custom")
+        profile:SetNumber("layerHeight", 0.16)
+        profile:SetInteger("wallCount", 4)
+        profile:SetBoolean("supportsEnabled", true)
+        profile:Set("adhesionType", "brim")
+        ExpectNumber(profile:GetNumber("layerHeight"), 0.16, 0.0000001, "SetNumber")
+        ExpectText(profile:GetText("layerHeight"), "0.16", "numbers are stored in short form")
+        ExpectInteger(profile:GetInteger("wallCount"), 4, "SetInteger")
+        ExpectTrue(profile:GetBoolean("supportsEnabled"), "SetBoolean")
+        ExpectText(profile:GetText("adhesionType"), "brim", "Set of a choice")
+        ExpectText(profile:GetSource("wallCount"), "custom", "GetSource of an own value")
+
+        profile:Set("bambuExtras", "1")
+        ExpectTrue(profile:GetBoolean("bambuExtras"), "1 means true")
+        ExpectText(profile:TrySet("layerHeight", "5"), "layerHeight: 5 is outside 0.04 to 1.0", "an out-of-range value is refused")
+        ExpectText(profile:TrySet("wallCount", "2.5"), "wallCount: '2.5' isn't a whole number", "a fraction for an integer")
+        ExpectText(profile:TrySet("adhesionType", "raft"), "adhesionType: 'raft' isn't one of none, skirt, brim", "an unknown choice")
+        ExpectText(profile:TrySet("noSuchSetting", "1"), "unknown setting 'noSuchSetting'", "an unknown key")
+        ExpectText(profile:TrySet("supportsEnabled", "yes"), "supportsEnabled: 'yes' isn't true or false", "a bad boolean")
+        ExpectNumber(profile:GetNumber("layerHeight"), 0.16, 0.0000001, "a refused value leaves the old one")
+
+        profile:Clear("layerHeight")
+        ExpectNumber(profile:GetNumber("layerHeight"), 0.2, 0, "Clear goes back to the default")
+
+        boolean stopped = false
+        check
+            profile:Set("layerHeight", "-1")
+        detect e
+            stopped = true
+        end
+        ExpectTrue(stopped, "Set stops on a bad value")
+    end
+
+    action Inheritance
+        Case("inheritance")
+        Profile parentProfile
+        parentProfile:SetName("parent")
+        parentProfile:SetInteger("wallCount", 5)
+        parentProfile:SetNumber("layerHeight", 0.28)
+        Profile child
+        child:SetName("child")
+        child:SetParent(parentProfile)
+        child:SetNumber("layerHeight", 0.12)
+        ExpectInteger(child:GetInteger("wallCount"), 5, "inherited from the parent")
+        ExpectNumber(child:GetNumber("layerHeight"), 0.12, 0.0000001, "the child's own value wins")
+        ExpectText(child:GetSource("wallCount"), "parent", "GetSource names the parent")
+        ExpectText(child:GetInherits(), "parent", "GetInherits")
+        Array<text> own = child:GetOwnKeys()
+        ExpectInteger(own:GetSize(), 1, "only its own keys")
+    end
+
+    action Validation
+        Case("Validate")
+        Profile fine
+        fine:SetName("fine")
+        Array<text> none = fine:Validate()
+        ExpectInteger(none:GetSize(), 0, "the defaults are consistent")
+
+        Profile bad
+        bad:SetName("bad")
+        bad:SetNumber("nozzleDiameter", 0.4)
+        bad:SetNumber("lineWidth", 1.2)
+        bad:SetNumber("layerHeight", 0.4)
+        bad:SetInteger("nozzleTemperature", 300)
+        bad:SetBoolean("write3mf", true)
+        Array<text> problems = bad:Validate()
+        // line width 3x the nozzle, layer height = the nozzle, nozzle over its maximum,
+        // and write3mf without bambuExtras or a template
+        ExpectInteger(problems:GetSize(), 5, "each inconsistency is reported")
+    end
+
+    action FieldChecks
+        Case("ProfileField:Check")
+        ProfileField field
+        field:Setup("test", "speed", "number", "10", "a speed")
+        field:SetRange(1, 100)
+        ExpectText(field:Check("50"), "", "a value in range")
+        ExpectText(field:Check("0"), "0 is outside 1.0 to 100.0", "below the range")
+        ExpectText(field:Check("fast"), "'fast' isn't a number", "not a number")
+    end
+
+    action SchemaIsConsistent
+        Case("every schema default passes its own check")
+        ProfileSchema schema
+        ExpectTrue(schema:GetSize() > 80, "the schema lists the settings")
+        integer i = 0
+        repeat while i < schema:GetSize()
+            ProfileField field = schema:Get(i)
+            ExpectText(field:Check(field:GetDefault()), "", field:GetKey() + " default")
+            i = i + 1
+        end
+        ExpectTrue(schema:Has("layerHeight") and not schema:Has("nope"), "Has")
+    end
+end

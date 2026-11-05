@@ -1,0 +1,37 @@
+package Tests.Fabrication.Geometry
+
+use Libraries.Fabrication.Geometry.PathRole
+use Tests.LampreyTest
+
+/*
+Tests Libraries.Fabrication.Geometry.PathRole. The numbers are part of the
+contract (they used to be bare numbers in PathOrderer and the G-code
+writer), and the feature names are what G-code previewers colour by.
+*/
+class PathRoleTest is LampreyTest
+    PathRole roles
+
+    on create
+        SetName("PathRole")
+    end
+
+    action Run
+        Case("role numbers and feature names")
+        ExpectInteger(roles:OUTER_WALL, 0, "OUTER_WALL")
+        ExpectInteger(roles:INNER_WALL, 1, "INNER_WALL")
+        ExpectInteger(roles:SKIN, 2, "SKIN")
+        ExpectInteger(roles:INFILL, 3, "INFILL")
+        ExpectInteger(roles:SKIRT, 4, "SKIRT")
+        ExpectInteger(roles:SUPPORT_WALL, 5, "SUPPORT_WALL")
+        ExpectInteger(roles:SUPPORT_FILL, 6, "SUPPORT_FILL")
+        ExpectText(roles:GetFeatureName(roles:OUTER_WALL), "WALL-OUTER", "outer wall name")
+        ExpectText(roles:GetFeatureName(roles:INNER_WALL), "WALL-INNER", "inner wall name")
+        ExpectText(roles:GetFeatureName(roles:SKIN), "SKIN", "skin name")
+        ExpectText(roles:GetFeatureName(roles:INFILL), "FILL", "infill name")
+        ExpectText(roles:GetFeatureName(roles:SKIRT), "SKIRT", "skirt name")
+        ExpectText(roles:GetFeatureName(roles:SUPPORT_FILL), "SUPPORT", "support name")
+        ExpectText(roles:GetFeatureName(-1), "FILL", "an unset role")
+        ExpectTrue(roles:IsSupport(roles:SUPPORT_WALL) and roles:IsSupport(roles:SUPPORT_FILL), "IsSupport for support")
+        ExpectFalse(roles:IsSupport(roles:INFILL) or roles:IsSupport(-1), "IsSupport for anything else")
+    end
+end

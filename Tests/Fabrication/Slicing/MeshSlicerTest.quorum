@@ -1,0 +1,147 @@
+package Tests.Fabrication.Slicing
+
+use Libraries.Containers.Array
+use Libraries.Game.Graphics.Models.Data.ModelData
+use Libraries.Language.Errors.InvalidArgumentError
+use Libraries.Fabrication.Geometry.TriangleMesh
+use Libraries.Fabrication.Slicing.MeshSlicer
+use Libraries.Fabrication.Slicing.Segment
+use Tests.LampreyTest
+use Tests.TestModels
+
+/* Tests Libraries.Fabrication.Slicing.MeshSlicer on boxes whose slices are known exactly. */
+class MeshSlicerTest is LampreyTest
+    TestModels models
+
+    on create
+        SetName("MeshSlicer")
+    end
+
+    action Run
+        SlicesACube()
+        DetectsUnits()
+        PutsTheBaseDown()
+        RejectsMisuse()
+    end
+
+    action Prepared(ModelData model) returns MeshSlicer
+        TriangleMesh mesh
+        mesh:Load(model)
+        MeshSlicer slicer
+        slicer:SetTriangles(mesh)
+        return slicer
+    end
+
+    action SlicesACube
+        Case("a 20 mm cube at 0.2 mm layers")
+        MeshSlicer slicer = Prepared(models:Cube())
+        ExpectText(slicer:GetBaseDirection(), "-Z", "an upright cube stays as it is")
+        ExpectNumber(slicer:GetUnitScale(), 1, 0, "millimetres")
+        ExpectInteger(slicer:GetUniqueVertexCount(), 8, "distinct vertices")
+        Array<number> range = slicer:GetSliceRange()
+        ExpectNumber(range:Get(0), 0, 0.000001, "bottom")
+        ExpectNumber(range:Get(1), 20, 0.000001, "top")
+        Array<number> planes = slicer:BuildPlanes(0, 20, 0.2)
+        ExpectInteger(planes:GetSize(), 100, "one plane per layer")
+        ExpectNumber(planes:Get(0), 0.1, 0.000001, "the first plane is mid-layer")
+        Array<Segment> segments = slicer:Slice(planes)
+        // each plane cuts both triangles of each of the 4 sides
+        ExpectInteger(segments:GetSize(), 800, "segments")
+        ExpectInteger(slicer:GetOddCrossingCount(), 0, "a closed mesh has no odd crossings")
+        ExpectInteger(slicer:GetMaxCrossingsPerFace(), 2, "two crossings per triangle")
+        Array<text> warnings = slicer:GetWarnings()
+        ExpectInteger(warnings:GetSize(), 0, "no warnings for a clean 20 mm cube")
+        Segment first = segments:Get(0)
+        ExpectTrue(first:planeIndex >= 0 and first:planeIndex < 100, "segments carry their plane")
+    end
+
+    action DetectsUnits
+        Case("unit detection")
+        MeshSlicer metres = Prepared(models:Box(0, 0, 0, 0.02, 0.02, 0.02))
+        ExpectNumber(metres:GetUnitScale(), 1000, 0, "a 0.02 unit model is taken as metres")
+        Array<number> range = metres:GetSliceRange()
+        ExpectNumber(range:Get(1), 20, 0.001, "scaled to 20 mm")
+        Array<text> metreWarnings = metres:GetWarnings()
+        ExpectInteger(metreWarnings:GetSize(), 1, "the guess is reported")
+
+        MeshSlicer small = Prepared(models:Box(0, 0, 0, 2, 2, 2))
+        Array<text> smallWarnings = small:GetWarnings()
+        ExpectInteger(smallWarnings:GetSize(), 1, "a 2 mm model may be in inches: warned")
+
+        TriangleMesh mesh
+        mesh:Load(models:Box(0, 0, 0, 2, 2, 2))
+        MeshSlicer inches
+        inches:SetUnitScale(25.4)
+        inches:SetTriangles(mesh)
+        Array<number> inchRange = inches:GetSliceRange()
+        ExpectNumber(inchRange:Get(1), 50.8, 0.0001, "SetUnitScale(25.4) turns 2 inches into 50.8 mm")
+        Array<text> inchWarnings = inches:GetWarnings()
+        ExpectInteger(inchWarnings:GetSize(), 0, "no warning when the scale is given")
+
+        MeshSlicer huge = Prepared(models:Box(0, 0, 0, 500, 10, 10))
+        Array<text> hugeWarnings = huge:GetWarnings()
+        ExpectInteger(hugeWarnings:GetSize(), 1, "a model larger than the bed is warned about")
+    end
+
+    action PutsTheBaseDown
+        Case("the largest flat face goes on the bed")
+        // a 30 x 30 plate standing on a 2 mm edge: its big face looks down -Y
+        MeshSlicer slicer = Prepared(models:Box(0, 0, 0, 30, 2, 30))
+        ExpectText(slicer:GetBaseDirection(), "-Y", "the base faced -Y")
+        Array<number> range = slicer:GetSliceRange()
+        ExpectNumber(range:Get(1) - range:Get(0), 2, 0.000001, "lying flat, it is 2 mm tall")
+
+        MeshSlicer raised = Prepared(models:Box(5, 5, 7, 25, 25, 27))
+        Array<number> raisedRange = raised:GetSliceRange()
+        ExpectNumber(raisedRange:Get(0), 0, 0.000001, "a model above Z = 0 is moved down to the bed")
+    end
+
+    action RejectsMisuse
+        Case("misuse stops with a message")
+        boolean emptyMesh = false
+        check
+            TriangleMesh nothing
+            MeshSlicer slicer
+            slicer:SetTriangles(nothing)
+        detect e1
+            emptyMesh = true
+        end
+        ExpectTrue(emptyMesh, "SetTriangles with an empty mesh")
+
+        boolean early = false
+        check
+            MeshSlicer unused
+            Array<number> range = unused:GetSliceRange()
+        detect e2
+            early = true
+        end
+        ExpectTrue(early, "GetSliceRange before SetTriangles")
+
+        boolean zeroLayer = false
+        check
+            MeshSlicer cube = Prepared(models:Cube())
+            Array<number> planes = cube:BuildPlanes(0, 20, 0)
+        detect e3 is InvalidArgumentError
+            zeroLayer = true
+        end
+        ExpectTrue(zeroLayer, "a layer height of 0 (which would loop forever)")
+
+        boolean flat = false
+        check
+            MeshSlicer cube2 = Prepared(models:Cube())
+            Array<number> none = cube2:BuildPlanes(0, 0.05, 0.2)
+        detect e4
+            flat = true
+        end
+        ExpectTrue(flat, "a model thinner than half a layer")
+
+        boolean negativeScale = false
+        check
+            MeshSlicer scaled
+            scaled:SetUnitScale(-1)
+        detect e5 is InvalidArgumentError
+            negativeScale = true
+        end
+        ExpectTrue(negativeScale, "a negative unit scale")
+    end
+end

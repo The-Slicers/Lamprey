@@ -1,0 +1,153 @@
+package Tests.Fabrication.Profiles
+
+use Libraries.Containers.Array
+use Libraries.Language.Errors.FileNotFoundError
+use Libraries.Fabrication.Profiles.Profile
+use Libraries.Fabrication.Profiles.ProfileManager
+use Tests.LampreyTest
+use Tests.TestFiles
+
+/*
+Tests ProfileManager, and the shipped Profiles/profiles.json: every profile
+in it must load without warnings and pass Profile:Validate, so a typo in a
+profile is caught here rather than at the printer.
+*/
+class ProfileManagerTest is LampreyTest
+    TestFiles files
+    text dq = ""
+    text lf = ""
+
+    on create
+        SetName("ProfileManager and Profiles/profiles.json")
+        dq = dq:GetDoubleQuote()
+        lf = lf:GetLineFeed()
+    end
+
+    action Run
+        ShippedProfiles()
+        InheritanceFromFile()
+        SaveAndLoadAgain()
+        FileProblems()
+        WarningsForTypos()
+    end
+
+    /* Turns ' into " so the JSON in these tests stays readable. */
+    action Json(text value) returns text
+        return value:Replace("'", dq)
+    end
+
+    action ShippedProfiles
+        Case("the shipped profiles")
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        Array<text> warnings = profiles:GetWarnings()
+        ExpectInteger(warnings:GetSize(), 0, "profiles.json loads without warnings")
+        Array<text> problems = profiles:ValidateAll()
+        integer i = 0
+        repeat while i < problems:GetSize()
+            Fail(problems:Get(i))
+            i = i + 1
+        end
+        text names = "bambu-p2s bambu-p2s-petg ender3-v2 ender3-v2-fine"
+        Array<text> expected = names:Split(" ")
+        i = 0
+        repeat while i < expected:GetSize()
+            ExpectTrue(profiles:Find(expected:Get(i)) not= undefined, "profile " + expected:Get(i) + " exists")
+            i = i + 1
+        end
+        Profile p2s = profiles:Require("bambu-p2s")
+        ExpectTrue(p2s:GetBoolean("write3mf") and p2s:GetBoolean("bambuExtras"), "the P2S profile makes a 3MF")
+        ExpectNumber(p2s:GetNumber("bedWidth"), 256, 0, "the P2S bed")
+    end
+
+    action InheritanceFromFile
+        Case("inherits in the file")
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        Profile fine = profiles:Require("ender3-v2-fine")
+        ExpectNumber(fine:GetNumber("layerHeight"), 0.12, 0.0000001, "its own layer height")
+        ExpectInteger(fine:GetInteger("wallCount"), 3, "the parent's wall count")
+        ExpectText(fine:GetSource("wallCount"), "ender3-v2", "GetSource")
+        Profile derived = profiles:Derive("ender3-v2", "ender3-test")
+        derived:SetNumber("layerHeight", 0.3)
+        ExpectNumber(derived:GetNumber("retractLength"), 6, 0, "Derive inherits")
+        profiles:Remove("ender3-v2")
+        ExpectText(fine:GetInherits(), "", "removing a parent unlinks its children")
+    end
+
+    action SaveAndLoadAgain
+        Case("Save, then Load again")
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        text saved = files:Path("profiles/saved.json")
+        files:Write("profiles/placeholder.txt", "")
+        profiles:Save(saved)
+        ProfileManager again
+        again:Load(saved)
+        ExpectInteger(again:GetSize(), profiles:GetSize(), "the same number of profiles")
+        Profile before = profiles:Require("bambu-p2s-petg")
+        Profile after = again:Require("bambu-p2s-petg")
+        ExpectText(after:GetText("filamentType"), before:GetText("filamentType"), "own values survive")
+        ExpectText(after:GetText("lineWidth"), before:GetText("lineWidth"), "inherited values survive")
+        ExpectText(after:GetInherits(), "bambu-p2s", "inherits survives")
+
+        text flat = files:Path("profiles/flat.json")
+        profiles:Save(flat, true)
+        ProfileManager flattened
+        flattened:Load(flat)
+        Profile flatPetg = flattened:Require("bambu-p2s-petg")
+        ExpectText(flatPetg:GetInherits(), "", "a flattened profile inherits nothing")
+        ExpectText(flatPetg:GetText("bedWidth"), "256", "and holds every value itself")
+    end
+
+    action FileProblems
+        Case("broken profile files stop with a message")
+        boolean missing = false
+        check
+            ProfileManager profiles
+            profiles:Load("Profiles/no-such-file.json")
+        detect e1 is FileNotFoundError
+            missing = true
+        end
+        ExpectTrue(missing, "a missing file")
+        ExpectTrue(LoadFails("{ 'a': { 'layerHeight': 9 } }"), "a value outside its range")
+        ExpectTrue(LoadFails("{ 'a': { 'inherits': 'b' }, 'b': { 'inherits': 'a' } }"), "an inheritance loop")
+        ExpectTrue(LoadFails("{ 'a': { 'inherits': 'nobody' } }"), "a parent that isn't in the file")
+        ExpectTrue(LoadFails("{ 'a': 5 }"), "a profile that isn't an object")
+        ExpectTrue(LoadFails("{ 'a': { 'layerHeight': 0.2 }"), "JSON that is never closed")
+        ExpectFalse(LoadFails("{ '_comment': 'x', 'a': { 'layerHeight': 0.3 } }"), "a valid file (control)")
+
+        boolean noProfile = false
+        check
+            ProfileManager empty
+            Profile nothing = empty:Require("anything")
+        detect e2
+            noProfile = true
+        end
+        ExpectTrue(noProfile, "Require of a profile that isn't loaded")
+    end
+
+    action WarningsForTypos
+        Case("typos are warned about, not fatal")
+        ProfileManager profiles
+        profiles:Load(files:Write("profiles/typo.json", Json("{ 'a': { 'layerHieght': 0.3, 'wallCount': 3 }, 'b': { } }")))
+        Array<text> warnings = profiles:GetWarnings()
+        // the misspelt key, and profile b which sets nothing
+        ExpectInteger(warnings:GetSize(), 2, "two warnings")
+        if warnings:GetSize() > 0
+            ExpectContains(warnings:Get(0), "layerHieght", "the warning names the key")
+        end
+    end
+
+    action LoadFails(text json) returns boolean
+        text path = files:Write("profiles/broken.json", Json(json))
+        boolean failed = false
+        check
+            ProfileManager profiles
+            profiles:Load(path)
+        detect e
+            failed = true
+        end
+        return failed
+    end
+end

@@ -1,0 +1,70 @@
+package Tests.Fabrication.Geometry
+
+use Libraries.Containers.Array
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Geometry.PolygonOffsetter
+use Tests.LampreyTest
+use Tests.TestModels
+
+/*
+Tests Libraries.Fabrication.Geometry.PolygonOffsetter. Convex corners are
+mitred (stay sharp); corners turning away from the material are rounded in
+16 degree steps, which is why the hole below grows by a little less than a
+quarter circle at each corner (0.776 mm^2 instead of 0.785 for d = 1).
+*/
+class PolygonOffsetterTest is LampreyTest
+    PolygonOffsetter offsetter
+    TestModels models
+
+    on create
+        SetName("PolygonOffsetter")
+    end
+
+    action Run
+        InsetSquare()
+        OutsetSquare()
+        InsetRing()
+        TooFarAndZero()
+    end
+
+    action InsetSquare
+        Case("inset of a square")
+        Array<Contour> inset = offsetter:Offset(models:ListOf(models:Square(0, 0, 20, 3)), 2)
+        ExpectInteger(inset:GetSize(), 1, "one loop")
+        ExpectNumber(models:NetArea(inset), 256, 0.0001, "16 x 16 mm")
+        Contour loop = inset:Get(0)
+        ExpectInteger(loop:planeIndex, 3, "on the input's plane")
+        ExpectTrue(loop:ContainsPoint(10, 10) and not loop:ContainsPoint(1, 1), "inside the original, 2 mm in")
+    end
+
+    action OutsetSquare
+        Case("outset of a square")
+        Array<Contour> outset = offsetter:Offset(models:ListOf(models:Square(0, 0, 20, 0)), -2)
+        ExpectInteger(outset:GetSize(), 1, "one loop")
+        ExpectNumber(models:NetArea(outset), 576, 0.0001, "24 x 24 mm with mitred corners")
+    end
+
+    action InsetRing
+        Case("inset of a square ring")
+        Array<Contour> ring
+        ring:Add(models:Square(0, 0, 20, 0))
+        ring:Add(models:HoleSquare(5, 5, 10, 0))
+        Array<Contour> inset = offsetter:Offset(ring, 1)
+        ExpectInteger(inset:GetSize(), 2, "an outline and a hole")
+        // 18 x 18 outside, minus a 10 mm hole grown by 1 mm with rounded corners
+        ExpectNumber(models:NetArea(inset), 324 - 143.10368, 0.01, "net area")
+    end
+
+    action TooFarAndZero
+        Case("insets that close up, and distance 0")
+        // past the middle the mitred corners fold over into a small inverted
+        // square; PathGenerator throws such loops away (see PathGeneratorTest)
+        Array<Contour> gone = offsetter:Offset(models:ListOf(models:Square(0, 0, 20, 0)), 10)
+        ExpectNumber(models:NetArea(gone), 0, 0.0001, "an inset to the middle leaves nothing")
+        Array<Contour> same = offsetter:Offset(models:ListOf(models:Square(0, 0, 20, 0)), 0)
+        ExpectNumber(models:NetArea(same), 400, 0.0001, "distance 0 copies the loop")
+        Array<Contour> nothing
+        Array<Contour> empty = offsetter:Offset(nothing, 1)
+        ExpectInteger(empty:GetSize(), 0, "no loops in, no loops out")
+    end
+end

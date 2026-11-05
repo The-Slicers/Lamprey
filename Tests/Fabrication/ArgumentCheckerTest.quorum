@@ -1,0 +1,112 @@
+package Tests.Fabrication
+
+use Libraries.Fabrication.ArgumentChecker
+use Libraries.Language.Errors.InvalidArgumentError
+use Libraries.Language.Errors.FileNotFoundError
+use Tests.LampreyTest
+
+/* Tests Libraries.Fabrication.ArgumentChecker, which every Set action relies on to reject bad settings. */
+class ArgumentCheckerTest is LampreyTest
+    ArgumentChecker checker
+
+    on create
+        SetName("ArgumentChecker")
+    end
+
+    action Run
+        Positive()
+        AtLeast()
+        Range()
+        Files()
+    end
+
+    action Positive
+        Case("RequirePositive")
+        ExpectFalse(PositiveFails(0.001), "a small positive number passes")
+        ExpectTrue(PositiveFails(0), "0 is rejected")
+        ExpectTrue(PositiveFails(-1), "a negative number is rejected")
+    end
+
+    action AtLeast
+        Case("RequireAtLeast")
+        ExpectFalse(AtLeastFails(0, 0), "the minimum itself passes")
+        ExpectTrue(AtLeastFails(-0.5, 0), "below the minimum is rejected")
+    end
+
+    action Range
+        Case("RequireRange")
+        ExpectFalse(RangeFails(0, 0, 1), "the lower end passes")
+        ExpectFalse(RangeFails(1, 0, 1), "the upper end passes")
+        ExpectTrue(RangeFails(1.01, 0, 1), "above the range is rejected")
+        ExpectTrue(RangeFails(-0.01, 0, 1), "below the range is rejected")
+
+        text message = ""
+        check
+            checker:RequireRange("Example:SetDensity density", 2, 0, 1)
+        detect e is InvalidArgumentError
+            message = e:GetErrorMessage()
+        end
+        ExpectContains(message, "Example:SetDensity density", "the message names the setting")
+        ExpectContains(message, "2", "the message gives the value")
+    end
+
+    action Files
+        Case("RequireFile")
+        boolean missing = false
+        text message = ""
+        check
+            checker:RequireFile("Test", "no/such/file.txt")
+        detect e is FileNotFoundError
+            missing = true
+            message = e:GetErrorMessage()
+        end
+        ExpectTrue(missing, "a missing file stops with FileNotFoundError")
+        ExpectContains(message, "no/such/file.txt", "the message gives the path")
+
+        boolean empty = false
+        check
+            checker:RequireFile("Test", "")
+        detect emptyError is FileNotFoundError
+            empty = true
+        end
+        ExpectTrue(empty, "an empty path is rejected")
+
+        boolean present = true
+        check
+            checker:RequireFile("Profiles", "Profiles/profiles.json")
+        detect presentError
+            present = false
+        end
+        ExpectTrue(present, "an existing file passes")
+    end
+
+    action PositiveFails(number value) returns boolean
+        boolean failed = false
+        check
+            checker:RequirePositive("value", value)
+        detect e is InvalidArgumentError
+            failed = true
+        end
+        return failed
+    end
+
+    action AtLeastFails(number value, number minimum) returns boolean
+        boolean failed = false
+        check
+            checker:RequireAtLeast("value", value, minimum)
+        detect e is InvalidArgumentError
+            failed = true
+        end
+        return failed
+    end
+
+    action RangeFails(number value, number minimum, number maximum) returns boolean
+        boolean failed = false
+        check
+            checker:RequireRange("value", value, minimum, maximum)
+        detect e is InvalidArgumentError
+            failed = true
+        end
+        return failed
+    end
+end
