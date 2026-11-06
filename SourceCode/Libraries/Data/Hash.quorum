@@ -1,0 +1,29 @@
+package Libraries.Data
+
+/*
+The Hash class computes checksums of text, using Java's
+java.security.MessageDigest through the plugin
+plugins.quorum.Libraries.Data.Hash (Plugins/src).
+
+Attribute: Example
+
+    use Libraries.Data.Hash
+
+    class Main
+        action Main
+            Hash hash
+            output hash:Md5Hex("hello")    // 5D41402ABC4B2A76B9719D911017C592
+        end
+    end
+*/
+class Hash
+    /*
+    The MD5 checksum of the text's UTF-8 bytes. ZipWriter:AddText stores text
+    as UTF-8 too, so the checksum matches an entry written with it.
+
+    Attribute: Parameter content The text to hash.
+
+    Attribute: Returns 32 uppercase hexadecimal digits.
+    */
+    system action Md5Hex(text content) returns text
+end
