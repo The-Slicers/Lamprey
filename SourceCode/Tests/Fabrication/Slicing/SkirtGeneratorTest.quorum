@@ -1,0 +1,99 @@
+package Tests.Fabrication.Slicing
+
+use Libraries.Containers.Array
+use Libraries.Language.Errors.InvalidArgumentError
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Slicing.SkirtGenerator
+use Tests.LampreyTest
+use Tests.TestModels
+
+/* Tests Libraries.Fabrication.Slicing.SkirtGenerator around a 20 mm square first layer. */
+class SkirtGeneratorTest is LampreyTest
+    TestModels models
+
+    on create
+        SetName("SkirtGenerator")
+    end
+
+    action Run
+        Skirt()
+        TallSkirt()
+        Brim()
+        NothingToGoAround()
+    end
+
+    /* A first layer: a 20 mm square with a hole, plus a second layer the skirt must ignore. */
+    action FirstLayer returns Array<Contour>
+        Array<Contour> outlines
+        outlines:Add(models:Square(0, 0, 20, 0))
+        outlines:Add(models:HoleSquare(5, 5, 10, 0))
+        outlines:Add(models:Square(-50, -50, 200, 1))
+        return outlines
+    end
+
+    action Skirt
+        Case("a two-loop skirt 3 mm away")
+        SkirtGenerator skirt
+        skirt:SetLineWidth(0.4)
+        skirt:SetSkirt(2, 3, 1)
+        Array<Contour> loops = skirt:Generate(FirstLayer())
+        ExpectInteger(loops:GetSize(), 2, "two loops")
+        if loops:GetSize() = 2
+            Contour inner = loops:Get(0)
+            Contour outer = loops:Get(1)
+            // loop i is centred (3 + (i + 0.5) * 0.4) mm outside the 20 mm square
+            ExpectNumber(inner:Area(), 26.4 * 26.4, 0.0001, "first loop")
+            ExpectNumber(outer:Area(), 27.2 * 27.2, 0.0001, "second loop")
+            ExpectTrue(inner:closed and inner:planeIndex = 0, "a closed loop on layer 0")
+            ExpectTrue(inner:ContainsPoint(10, 10), "it goes around the model")
+        end
+        Array<text> warnings = skirt:GetWarnings()
+        ExpectInteger(warnings:GetSize(), 0, "no warnings")
+    end
+
+    action TallSkirt
+        Case("a skirt 3 layers tall")
+        SkirtGenerator skirt
+        skirt:SetSkirt(1, 3, 3)
+        Array<Contour> loops = skirt:Generate(FirstLayer())
+        ExpectInteger(loops:GetSize(), 3, "one loop on each of 3 layers")
+        ExpectInteger(models:CountOnPlane(loops, 2), 1, "the third layer has its loop")
+    end
+
+    action Brim
+        Case("a brim touching the model")
+        SkirtGenerator brim
+        brim:SetLineWidth(0.4)
+        brim:SetBrim(3, 0)
+        Array<Contour> loops = brim:Generate(FirstLayer())
+        ExpectInteger(loops:GetSize(), 3, "three loops, all outside (none in the hole)")
+        if loops:GetSize() = 3
+            Contour first = loops:Get(0)
+            ExpectNumber(first:Area(), 20.4 * 20.4, 0.0001, "the first loop is half a line width out")
+        end
+    end
+
+    action NothingToGoAround
+        Case("an empty first layer, and bad settings")
+        SkirtGenerator skirt
+        Array<Contour> upstairs = models:ListOf(models:Square(0, 0, 10, 3))
+        Array<Contour> loops = skirt:Generate(upstairs)
+        ExpectInteger(loops:GetSize(), 0, "no loops")
+        Array<text> warnings = skirt:GetWarnings()
+        ExpectInteger(warnings:GetSize(), 1, "the missing skirt is reported")
+
+        SkirtGenerator none
+        none:SetSkirt(0, 3, 1)
+        Array<Contour> noLoops = none:Generate(FirstLayer())
+        ExpectInteger(noLoops:GetSize(), 0, "0 loops asked for, 0 made")
+
+        boolean refused = false
+        check
+            SkirtGenerator bad
+            bad:SetSkirt(2, 3, 0)
+        detect e is InvalidArgumentError
+            refused = true
+        end
+        ExpectTrue(refused, "a skirt 0 layers tall is refused")
+    end
+end

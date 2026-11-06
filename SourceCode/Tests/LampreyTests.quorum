@@ -1,0 +1,184 @@
+package Tests
+
+use Libraries.Containers.Array
+use Libraries.Language.Errors.Error
+use Libraries.Testing.Tester
+use Tests.Data.NumberFormatterTest
+use Tests.Data.JavaScriptObjectNotationTemplateTest
+use Tests.Data.FilePluginTest
+use Tests.Fabrication.ArgumentCheckerTest
+use Tests.Fabrication.Geometry.ContourTest
+use Tests.Fabrication.Geometry.GeometryUtilitiesTest
+use Tests.Fabrication.Geometry.ContourLayersTest
+use Tests.Fabrication.Geometry.ContourSimplifierTest
+use Tests.Fabrication.Geometry.ConvexHullTest
+use Tests.Fabrication.Geometry.PolygonOperationsTest
+use Tests.Fabrication.Geometry.PolygonOffsetterTest
+use Tests.Fabrication.Geometry.LineFillTest
+use Tests.Fabrication.Geometry.PathRoleTest
+use Tests.Fabrication.Geometry.TriangleMeshTest
+use Tests.Fabrication.Slicing.MeshSlicerTest
+use Tests.Fabrication.Slicing.ContourGeneratorTest
+use Tests.Fabrication.Slicing.PathGeneratorTest
+use Tests.Fabrication.Slicing.PathOrdererTest
+use Tests.Fabrication.Slicing.SkirtGeneratorTest
+use Tests.Fabrication.Slicing.TreeSupportTest
+use Tests.Fabrication.Printing.GcodeWriterTest
+use Tests.Fabrication.Printing.BambuTest
+use Tests.Fabrication.Profiles.ProfileTest
+use Tests.Fabrication.Profiles.ProfileManagerTest
+use Tests.Integration.SliceJobTest
+use Tests.Integration.RegressionTest
+
+/*
+The LampreyTests class runs every Lamprey test and prints a report: one line
+per test, every failed expectation under it, and a total. It is organised
+like the Quorum library's own tests (Library/Tests/<Area>): unit tests per
+library package, then integration tests that slice whole models, then
+regression tests that compare full slices against recorded baselines.
+
+Run it by setting runTests to true at the top of Main, or from code:
+
+    use Tests.LampreyTests
+
+    class Main
+        action Main
+            LampreyTests tests
+            integer failed = tests:Run()
+        end
+    end
+
+Tests write their scratch files under Outputs/tests/.
+*/
+class LampreyTests
+    Tester tester
+    integer failedChecks = 0
+    integer totalChecks = 0
+
+    /*
+    Runs every test.
+
+    Attribute: Returns How many tests failed (0 when everything passed).
+    */
+    action Run returns integer
+        output "Lamprey tests"
+
+        output ""
+        output "Data"
+        NumberFormatterTest numberFormatterTest
+        RunTest(numberFormatterTest)
+        JavaScriptObjectNotationTemplateTest javaScriptObjectNotationTemplateTest
+        RunTest(javaScriptObjectNotationTemplateTest)
+        FilePluginTest filePluginTest
+        RunTest(filePluginTest)
+
+        output ""
+        output "Fabrication"
+        ArgumentCheckerTest argumentCheckerTest
+        RunTest(argumentCheckerTest)
+
+        output ""
+        output "Fabrication.Geometry"
+        ContourTest contourTest
+        RunTest(contourTest)
+        GeometryUtilitiesTest geometryUtilitiesTest
+        RunTest(geometryUtilitiesTest)
+        ContourLayersTest contourLayersTest
+        RunTest(contourLayersTest)
+        ContourSimplifierTest contourSimplifierTest
+        RunTest(contourSimplifierTest)
+        ConvexHullTest convexHullTest
+        RunTest(convexHullTest)
+        PolygonOperationsTest polygonOperationsTest
+        RunTest(polygonOperationsTest)
+        PolygonOffsetterTest polygonOffsetterTest
+        RunTest(polygonOffsetterTest)
+        LineFillTest lineFillTest
+        RunTest(lineFillTest)
+        PathRoleTest pathRoleTest
+        RunTest(pathRoleTest)
+        TriangleMeshTest triangleMeshTest
+        RunTest(triangleMeshTest)
+
+        output ""
+        output "Fabrication.Slicing"
+        MeshSlicerTest meshSlicerTest
+        RunTest(meshSlicerTest)
+        ContourGeneratorTest contourGeneratorTest
+        RunTest(contourGeneratorTest)
+        PathGeneratorTest pathGeneratorTest
+        RunTest(pathGeneratorTest)
+        PathOrdererTest pathOrdererTest
+        RunTest(pathOrdererTest)
+        SkirtGeneratorTest skirtGeneratorTest
+        RunTest(skirtGeneratorTest)
+        TreeSupportTest treeSupportTest
+        RunTest(treeSupportTest)
+
+        output ""
+        output "Fabrication.Printing"
+        GcodeWriterTest gcodeWriterTest
+        RunTest(gcodeWriterTest)
+        BambuTest bambuTest
+        RunTest(bambuTest)
+
+        output ""
+        output "Fabrication.Profiles"
+        ProfileTest profileTest
+        RunTest(profileTest)
+        ProfileManagerTest profileManagerTest
+        RunTest(profileManagerTest)
+
+        output ""
+        output "Integration"
+        SliceJobTest sliceJobTest
+        RunTest(sliceJobTest)
+        RegressionTest regressionTest
+        RunTest(regressionTest)
+
+        return Report()
+    end
+
+    private action Report returns integer
+        output ""
+        output tester:GetPassingSize() + " of " + tester:GetSize() + " tests passed (" + totalChecks + " checks, "
+            + failedChecks + " failed)"
+        if tester:GetFailingSize() = 0
+            output "ALL TESTS PASSED"
+        else
+            output "FAILED: " + tester:GetFailingSize() + " tests"
+        end
+        return tester:GetFailingSize()
+    end
+
+    /* Runs one test, catching an error so the remaining tests still run. */
+    action RunTest(LampreyTest test)
+        check
+            test:Run()
+        detect e
+            test:RecordError(e:GetErrorMessage())
+        end
+        test:Finish()
+        tester:Add(test)
+
+        Array<text> failures = test:GetFailures()
+        totalChecks = totalChecks + test:GetCheckCount()
+        failedChecks = failedChecks + failures:GetSize()
+        if test:IsPassed()
+            output "  pass  " + test:GetName() + " (" + test:GetCheckCount() + " checks)"
+        else
+            output "  FAIL  " + test:GetName()
+            integer i = 0
+            repeat while i < failures:GetSize()
+                output "          " + failures:Get(i)
+                i = i + 1
+            end
+        end
+        Array<text> notes = test:GetNotes()
+        integer n = 0
+        repeat while n < notes:GetSize()
+            output "          note: " + notes:Get(n)
+            n = n + 1
+        end
+    end
+end

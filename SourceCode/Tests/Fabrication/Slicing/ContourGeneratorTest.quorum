@@ -1,0 +1,213 @@
+package Tests.Fabrication.Slicing
+
+use Libraries.Containers.Array
+use Libraries.Language.Errors.InvalidArgumentError
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Geometry.TriangleMesh
+use Libraries.Fabrication.Slicing.MeshSlicer
+use Libraries.Fabrication.Slicing.Segment
+use Libraries.Fabrication.Slicing.ContourGenerator
+use Tests.LampreyTest
+use Tests.TestModels
+
+/*
+Tests Libraries.Fabrication.Slicing.ContourGenerator: from a sliced cube,
+and from hand-made segments for the cases a clean cube never hits (holes,
+wrong winding, gaps, specks).
+*/
+class ContourGeneratorTest is LampreyTest
+    TestModels models
+    integer nextEdge = 1
+
+    on create
+        SetName("ContourGenerator")
+    end
+
+    action Run
+        CubeOutlines()
+        TouchingIslands()
+        HolesAndWinding()
+        Gaps()
+        Specks()
+        RejectsBadSettings()
+    end
+
+    action CubeOutlines
+        Case("outlines of a sliced cube")
+        TriangleMesh mesh
+        mesh:Load(models:Cube())
+        MeshSlicer slicer
+        slicer:SetTriangles(mesh)
+        Array<number> planes = slicer:BuildPlanes(0, 20, 0.2)
+        ContourGenerator generator
+        Array<Contour> contours = generator:Build(slicer:Slice(planes), planes:GetSize(), 0.2)
+        ExpectInteger(contours:GetSize(), 100, "one loop per layer")
+        boolean allGood = true
+        integer i = 0
+        repeat while i < contours:GetSize()
+            Contour loop = contours:Get(i)
+            if not loop:closed or loop:isHole or loop:SignedArea2() <= 0 or loop:planeIndex not= i
+                allGood = false
+            end
+            ExpectNumber(loop:Area(), 400, 0.0001, "layer " + i + " area")
+            i = i + 1
+        end
+        ExpectTrue(allGood, "every loop is closed, outer, counter-clockwise and on its own layer")
+        ExpectInteger(generator:GetPointsBefore(), 800, "points before simplifying (corners and side midpoints)")
+        ExpectInteger(generator:GetPointsAfter(), 400, "points after simplifying (just the corners)")
+        ExpectInteger(generator:GetOpenCount(), 0, "nothing left open")
+    end
+
+    /* Adds a loop of segments through the points, linked by shared edge keys. */
+    action AddLoop(Array<Segment> segments, text points, integer plane)
+        Array<text> values = points:Split(" ")
+        integer count = values:GetSize() / 2
+        integer firstEdge = nextEdge
+        integer i = 0
+        repeat while i < count
+            integer j = i + 1
+            if j = count
+                j = 0
+            end
+            text x0 = values:Get(2 * i)
+            text y0 = values:Get(2 * i + 1)
+            text x1 = values:Get(2 * j)
+            text y1 = values:Get(2 * j + 1)
+            Segment s
+            s:planeIndex = plane
+            s:x0 = x0:ParseNumber()
+            s:y0 = y0:ParseNumber()
+            s:x1 = x1:ParseNumber()
+            s:y1 = y1:ParseNumber()
+            s:aLow = firstEdge + i
+            s:aHigh = firstEdge + i
+            s:bLow = firstEdge + j
+            s:bHigh = firstEdge + j
+            segments:Add(s)
+            i = i + 1
+        end
+        nextEdge = nextEdge + count
+    end
+
+    /*
+    The ledge model's two boxes touch at x = 20 on the ledge layers. Neither
+    loop is inside the other, however the loops start: a loop whose first
+    point lies on the other loop's edge was once taken for a hole.
+    */
+    action TouchingIslands
+        Case("islands that touch along an edge")
+        Array<Contour> contours = models:Outlines(models:Ledge(), 0.2)
+        integer holes = 0
+        integer twoLoopLayers = 0
+        integer p = 0
+        repeat while p < models:GetLastPlaneCount()
+            integer onPlane = 0
+            integer i = 0
+            repeat while i < contours:GetSize()
+                Contour loop = contours:Get(i)
+                if loop:planeIndex = p
+                    onPlane = onPlane + 1
+                    if loop:isHole or loop:SignedArea2() <= 0
+                        holes = holes + 1
+                    end
+                end
+                i = i + 1
+            end
+            if onPlane = 2
+                twoLoopLayers = twoLoopLayers + 1
+            end
+            p = p + 1
+        end
+        ExpectInteger(holes, 0, "no loop is taken for a hole")
+        ExpectAtLeast(twoLoopLayers, 9, "the ledge layers have the block and the ledge")
+        ExpectAtMost(twoLoopLayers, 11, "only the ledge layers have two loops")
+    end
+
+    action HolesAndWinding
+        Case("a ring given with both loops clockwise")
+        Array<Segment> segments
+        AddLoop(segments, "0 0 0 20 20 20 20 0", 0)
+        AddLoop(segments, "5 5 5 15 15 15 15 5", 0)
+        ContourGenerator generator
+        generator:SetSimplifyTolerance(0)
+        Array<Contour> contours = generator:Build(segments, 1, 0.2)
+        ExpectInteger(contours:GetSize(), 2, "two loops")
+        integer holes = 0
+        integer i = 0
+        repeat while i < contours:GetSize()
+            Contour loop = contours:Get(i)
+            if loop:isHole
+                holes = holes + 1
+                ExpectTrue(loop:SignedArea2() < 0, "the hole runs clockwise")
+                ExpectInteger(loop:depth, 1, "the hole is inside one loop")
+            else
+                ExpectTrue(loop:SignedArea2() > 0, "the outline runs counter-clockwise")
+                ExpectInteger(loop:depth, 0, "the outline is inside nothing")
+            end
+            i = i + 1
+        end
+        ExpectInteger(holes, 1, "the inner loop is the hole")
+        ExpectInteger(generator:GetFlippedCount(), 1, "only the outline had to be reversed")
+    end
+
+    action Gaps
+        Case("chains with gaps")
+        // a square whose last segment doesn't share its edge key with the first:
+        // the chain ends exactly where it began, a gap of 0 mm
+        Array<Segment> nearlyClosed
+        AddLoop(nearlyClosed, "0 0 10 0 10 10 0 10", 0)
+        Segment last = nearlyClosed:Get(3)
+        last:bLow = 999
+        last:bHigh = 999
+        ContourGenerator bridging
+        Array<Contour> bridged = bridging:Build(nearlyClosed, 1, 0.2)
+        ExpectInteger(bridged:GetSize(), 1, "one loop")
+        Contour loop = bridged:Get(0)
+        ExpectTrue(loop:closed, "a zero gap is bridged")
+        ExpectInteger(bridging:GetOpenCount(), 0, "nothing left open")
+
+        // three sides of a square: the 10 mm gap is far beyond maxGap
+        Array<Segment> threeSides
+        AddLoop(threeSides, "0 0 10 0 10 10 0 10", 0)
+        threeSides:RemoveAt(3)
+        ContourGenerator open
+        Array<Contour> result = open:Build(threeSides, 1, 0.2)
+        ExpectInteger(open:GetOpenCount(), 1, "the chain stays open and is counted")
+        Contour chain = result:Get(0)
+        ExpectFalse(chain:closed, "an open chain is returned as an open path")
+    end
+
+    action Specks
+        Case("specks and out-of-range planes")
+        Array<Segment> segments
+        AddLoop(segments, "0 0 10 0 10 10 0 10", 0)
+        AddLoop(segments, "20 20 20.1 20 20.1 20.1 20 20.1", 0)
+        AddLoop(segments, "0 0 10 0 10 10 0 10", 5)
+        ContourGenerator generator
+        generator:SetMinArea(0.05)
+        Array<Contour> contours = generator:Build(segments, 2, 0.2)
+        ExpectInteger(contours:GetSize(), 1, "the 0.01 mm^2 speck and the loop on plane 5 are left out")
+        ExpectInteger(generator:GetDroppedCount(), 1, "one speck dropped")
+    end
+
+    action RejectsBadSettings
+        Case("bad settings are refused")
+        boolean negativeArea = false
+        check
+            ContourGenerator generator
+            generator:SetMinArea(-1)
+        detect e1 is InvalidArgumentError
+            negativeArea = true
+        end
+        ExpectTrue(negativeArea, "a negative minimum area")
+        boolean negativeGap = false
+        check
+            ContourGenerator generator2
+            Array<Segment> none
+            Array<Contour> result = generator2:Build(none, 1, -1)
+        detect e2 is InvalidArgumentError
+            negativeGap = true
+        end
+        ExpectTrue(negativeGap, "a negative maxGap")
+    end
+end

@@ -1,0 +1,133 @@
+package Tests.Data
+
+use Libraries.System.File
+use Libraries.Language.Errors.Error
+use Libraries.System.TextFile
+use Libraries.Data.Hash
+use Libraries.Data.Compression.ZipWriter
+use Libraries.Data.Compression.ZipReader
+use Tests.LampreyTest
+
+/*
+Tests the classes backed by Java plugins (Plugins/lamprey-plugins.jar):
+Hash, TextFile, ZipWriter and ZipReader. If these fail with
+NoClassDefFoundError, the jar in Plugins/ (or the copy in Run/) is out of
+date: rebuild it with Plugins/build.sh and clean the project.
+*/
+class FilePluginTest is LampreyTest
+    text folder = "Outputs/tests/plugins"
+
+    on create
+        SetName("Plugins: Hash, TextFile, ZipWriter, ZipReader")
+    end
+
+    action Run
+        Md5()
+        TextFiles()
+        ZipRoundTrip()
+        ZipErrors()
+    end
+
+    action Md5
+        Case("Hash:Md5Hex")
+        Hash hash
+        ExpectText(hash:Md5Hex(""), "D41D8CD98F00B204E9800998ECF8427E", "MD5 of empty text")
+        ExpectText(hash:Md5Hex("hello"), "5D41402ABC4B2A76B9719D911017C592", "MD5 of hello")
+    end
+
+    action TextFiles
+        Case("TextFile")
+        File file
+        file:SetPath(folder + "/text.txt")
+        File parentFolder = file:GetParentDirectory()
+        parentFolder:CreateDirectories()
+        file:Write("line one")
+
+        TextFile reader
+        ExpectTrue(reader:Exists(folder + "/text.txt"), "Exists for a file")
+        ExpectFalse(reader:Exists(folder), "Exists is false for a folder")
+        ExpectFalse(reader:Exists(folder + "/missing.txt"), "Exists for a missing file")
+        ExpectText(reader:Read(folder + "/text.txt"), "line one", "Read")
+        text absolute = reader:GetAbsolutePath(folder + "/text.txt")
+        ExpectTrue(absolute:EndsWith("text.txt") and absolute:GetSize() > 20, "GetAbsolutePath")
+
+        boolean failed = false
+        check
+            text nothing = reader:Read(folder + "/missing.txt")
+        detect missing
+            failed = true
+            text message = missing:GetErrorMessage()
+            ExpectContains(message, "missing.txt", "the error names the file")
+        end
+        ExpectTrue(failed, "Read of a missing file stops")
+    end
+
+    action ZipRoundTrip
+        Case("ZipWriter then ZipReader")
+        text archive = folder + "/round-trip/test.zip"
+        ZipWriter zip
+        zip:Open(archive)
+        zip:AddText("a.txt", "plain text")
+        zip:AddText("Metadata/b.txt", "second entry")
+        zip:BeginImage(4, 4)
+        zip:SetPixel(1, 1, 255, 0, 0, 255)
+        zip:SetPixel(99, 99, 0, 0, 0, 255)
+        zip:AddImage("image.png")
+        zip:AddCopy("copy.png", "image.png")
+        zip:Close()
+        zip:Close()
+
+        ZipReader reader
+        ExpectTrue(reader:HasEntry(archive, "a.txt"), "HasEntry a.txt")
+        ExpectTrue(reader:HasEntry(archive, "Metadata/b.txt"), "HasEntry in a folder")
+        ExpectTrue(reader:HasEntry(archive, "image.png"), "HasEntry for the image")
+        ExpectTrue(reader:HasEntry(archive, "copy.png"), "HasEntry for the copy")
+        ExpectFalse(reader:HasEntry(archive, "nope.txt"), "HasEntry for a missing entry")
+        ExpectFalse(reader:HasEntry(folder + "/missing.zip", "a.txt"), "HasEntry on a missing archive")
+        ExpectText(reader:ReadText(archive, "a.txt"), "plain text", "ReadText")
+        ExpectText(reader:ReadText(archive, "Metadata/b.txt"), "second entry", "ReadText in a folder")
+
+        Hash hash
+        ExpectText(hash:Md5Hex(reader:ReadText(archive, "a.txt")), hash:Md5Hex("plain text"), "text survives as UTF-8")
+    end
+
+    action ZipErrors
+        Case("ZipWriter misuse stops with a clear error")
+        ZipWriter notOpen
+        boolean addBeforeOpen = false
+        check
+            notOpen:AddText("a.txt", "x")
+        detect first
+            addBeforeOpen = true
+        end
+        ExpectTrue(addBeforeOpen, "adding before Open")
+
+        ZipWriter zip
+        zip:Open(folder + "/errors.zip")
+        zip:AddText("a.txt", "x")
+        boolean duplicate = false
+        check
+            zip:AddText("a.txt", "y")
+        detect second
+            duplicate = true
+        end
+        ExpectTrue(duplicate, "adding the same entry twice")
+        boolean badCopy = false
+        check
+            zip:AddCopy("b.txt", "never-added.txt")
+        detect third
+            badCopy = true
+        end
+        ExpectTrue(badCopy, "copying an entry that was never added")
+        zip:Close()
+
+        ZipReader reader
+        boolean missingEntry = false
+        check
+            text nothing = reader:ReadText(folder + "/errors.zip", "missing.txt")
+        detect fourth
+            missingEntry = true
+        end
+        ExpectTrue(missingEntry, "reading a missing entry")
+    end
+end

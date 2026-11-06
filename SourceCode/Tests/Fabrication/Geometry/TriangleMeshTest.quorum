@@ -1,0 +1,106 @@
+package Tests.Fabrication.Geometry
+
+use Libraries.Containers.Array
+use Libraries.Containers.Number32BitArray
+use Libraries.Containers.Number64BitArray
+use Libraries.Containers.Integer32BitArray
+use Libraries.Game.Graphics.Models.Data.ModelData
+use Libraries.Game.Graphics.Models.Data.MeshData
+use Libraries.Fabrication.Geometry.TriangleMesh
+use Tests.LampreyTest
+use Tests.TestModels
+
+/* Tests Libraries.Fabrication.Geometry.TriangleMesh: flattening a model's meshes, and rejecting broken ones. */
+class TriangleMeshTest is LampreyTest
+    TestModels models
+
+    on create
+        SetName("TriangleMesh")
+    end
+
+    action Run
+        OneBox()
+        TwoMeshesAreJoined()
+        BrokenMeshes()
+    end
+
+    action OneBox
+        Case("one box")
+        TriangleMesh mesh
+        mesh:Load(models:Cube())
+        ExpectInteger(mesh:GetTriangleCount(), 12, "triangles")
+        ExpectInteger(mesh:GetVertexCount(), 8, "vertices")
+        Number64BitArray xs = mesh:GetVertexX()
+        Number64BitArray zs = mesh:GetVertexZ()
+        ExpectNumber(xs:Get(1), 20, 0, "vertex 1 is the +X corner")
+        ExpectNumber(zs:Get(7), 20, 0, "vertex 7 is the top corner")
+    end
+
+    action TwoMeshesAreJoined
+        Case("two meshes")
+        TriangleMesh mesh
+        mesh:Load(models:Ledge())
+        ExpectInteger(mesh:GetTriangleCount(), 24, "triangles of both boxes")
+        ExpectInteger(mesh:GetVertexCount(), 16, "vertices of both boxes")
+        Integer32BitArray corners = mesh:GetCorners()
+        integer smallest = corners:Get(36)
+        integer i = 36
+        repeat while i < 72
+            if corners:Get(i) < smallest
+                smallest = corners:Get(i)
+            end
+            i = i + 1
+        end
+        ExpectInteger(smallest, 8, "the second mesh's indices are shifted past the first mesh's vertices")
+
+        mesh:Load(models:Cube())
+        ExpectInteger(mesh:GetTriangleCount(), 12, "loading again replaces what was loaded before")
+        ExpectInteger(mesh:GetVertexCount(), 8, "vertices after loading again")
+    end
+
+    action BrokenMeshes
+        Case("broken meshes stop with a message")
+        ExpectFalse(LoadFails(Broken(24, "0 1 2")), "a valid triangle loads")
+        ExpectTrue(LoadFails(Broken(24, "0 1 9")), "an index past the last vertex")
+        ExpectTrue(LoadFails(Broken(24, "0 1")), "an index count that isn't a multiple of 3")
+        ExpectTrue(LoadFails(Broken(23, "0 1 2")), "a vertex count that isn't a multiple of 3")
+        ModelData empty
+        Array<MeshData> none
+        empty:SetMeshes(none)
+        ExpectTrue(LoadFails(empty), "a model with no meshes")
+    end
+
+    /* A one-mesh model with coordinateCount vertex coordinates and the given indices. */
+    action Broken(integer coordinateCount, text indexList) returns ModelData
+        Number32BitArray vertices
+        vertices:SetSize(coordinateCount)
+        Array<text> parts = indexList:Split(" ")
+        Integer32BitArray indices
+        indices:SetSize(parts:GetSize())
+        integer i = 0
+        repeat while i < parts:GetSize()
+            text part = parts:Get(i)
+            indices:Set(i, part:ParseInteger())
+            i = i + 1
+        end
+        MeshData mesh
+        mesh:SetVertices(vertices)
+        mesh:SetIndices(indices)
+        ModelData model
+        Array<MeshData> meshes
+        meshes:Add(mesh)
+        model:SetMeshes(meshes)
+        return model
+    end
+
+    action LoadFails(ModelData model) returns boolean
+        boolean failed = false
+        check
+            TriangleMesh mesh
+            mesh:Load(model)
+        detect e
+            failed = true
+        end
+        return failed
+    end
+end

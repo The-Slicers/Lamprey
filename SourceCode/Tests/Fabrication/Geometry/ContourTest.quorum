@@ -1,0 +1,145 @@
+package Tests.Fabrication.Geometry
+
+use Libraries.Fabrication.Geometry.Contour
+use Tests.LampreyTest
+use Tests.TestModels
+
+/* Tests Libraries.Fabrication.Geometry.Contour, the path type every stage passes around. */
+class ContourTest is LampreyTest
+    TestModels models
+
+    on create
+        SetName("Contour")
+    end
+
+    action Run
+        AddPointSkipsRepeats()
+        AreaAndOrientation()
+        ReverseFlipsOrientation()
+        ContainsPoint()
+        IsInside()
+        CopyIsIndependent()
+        ClosingDuplicate()
+        NearestVertex()
+    end
+
+    action AddPointSkipsRepeats
+        Case("AddPoint")
+        Contour line
+        line:AddPoint(0, 0)
+        line:AddPoint(0, 0)
+        line:AddPoint(1, 0)
+        ExpectInteger(line:GetSize(), 2, "a repeated point is skipped")
+        ExpectNumber(line:HeadX(), 0, 0, "HeadX")
+        ExpectNumber(line:TailX(), 1, 0, "TailX")
+
+        Contour following
+        following:AddPoint(1, 0)
+        following:AddPoint(2, 0)
+        Contour joined
+        joined:AppendAll(line)
+        joined:AppendAll(following)
+        ExpectInteger(joined:GetSize(), 3, "AppendAll skips the shared join point")
+    end
+
+    action AreaAndOrientation
+        Case("SignedArea2 and Area")
+        Contour square = models:Square(0, 0, 10, 0)
+        ExpectNumber(square:SignedArea2(), 200, 0.000001, "twice the area of a CCW 10 mm square")
+        ExpectNumber(square:Area(), 100, 0.000001, "Area")
+        Contour triangle
+        triangle:AddPoint(0, 0)
+        triangle:AddPoint(4, 0)
+        triangle:AddPoint(0, 3)
+        ExpectNumber(triangle:Area(), 6, 0.000001, "a 3-4-5 triangle")
+    end
+
+    action ReverseFlipsOrientation
+        Case("Reverse")
+        Contour square = models:Square(0, 0, 10, 0)
+        square:Reverse()
+        ExpectNumber(square:SignedArea2(), -200, 0.000001, "reversed, the area is negative")
+        ExpectNumber(square:Area(), 100, 0.000001, "Area doesn't depend on direction")
+        ExpectNumber(square:HeadY(), 10, 0, "the last point comes first")
+    end
+
+    action ContainsPoint
+        Case("ContainsPoint")
+        Contour square = models:Square(0, 0, 10, 0)
+        ExpectTrue(square:ContainsPoint(5, 5), "the centre")
+        ExpectFalse(square:ContainsPoint(15, 5), "a point outside")
+        ExpectFalse(square:ContainsPoint(-0.001, 5), "just outside the left edge")
+        Contour line
+        line:AddPoint(0, 0)
+        line:AddPoint(10, 10)
+        ExpectFalse(line:ContainsPoint(5, 5), "two points enclose nothing")
+    end
+
+    action IsInside
+        Case("IsInside")
+        Contour outer = models:Square(0, 0, 20, 0)
+        Contour hole = models:HoleSquare(5, 5, 10, 0)
+        Contour inner = models:Square(5, 5, 10, 0)
+        ExpectTrue(hole:IsInside(outer), "a clockwise hole inside")
+        ExpectTrue(inner:IsInside(outer), "a counter-clockwise loop inside")
+        ExpectFalse(outer:IsInside(inner), "the bigger loop isn't inside the smaller one")
+
+        // side by side, sharing the edge x = 20 and its corners, starting on the shared corner
+        Contour block
+        block:AddPoint(20, 0)
+        block:AddPoint(20, 20)
+        block:AddPoint(0, 20)
+        block:AddPoint(0, 0)
+        block:closed = true
+        Contour ledge = models:Rectangle(20, 0, 30, 20, 0)
+        ExpectTrue(ledge:ContainsPoint(20, 0), "(why IsInside exists) a shared corner counts as inside the ledge")
+        ExpectFalse(block:IsInside(ledge), "the block isn't inside the ledge")
+        ExpectFalse(ledge:IsInside(block), "the ledge isn't inside the block")
+
+        Contour line
+        line:AddPoint(1, 1)
+        line:AddPoint(2, 2)
+        ExpectFalse(line:IsInside(outer), "fewer than 3 points")
+    end
+
+    action CopyIsIndependent
+        Case("Copy")
+        Contour square = models:Square(0, 0, 10, 3)
+        square:wallIndex = 2
+        square:role = 1
+        square:keepShort = true
+        Contour copy = square:Copy()
+        ExpectInteger(copy:GetSize(), 4, "same points")
+        ExpectInteger(copy:planeIndex, 3, "planeIndex copied")
+        ExpectInteger(copy:wallIndex, 2, "wallIndex copied")
+        ExpectInteger(copy:role, 1, "role copied")
+        ExpectTrue(copy:closed and copy:keepShort, "closed and keepShort copied")
+        copy:AddPoint(50, 50)
+        copy:Reverse()
+        ExpectInteger(square:GetSize(), 4, "changing the copy leaves the original alone")
+        ExpectNumber(square:HeadX(), 0, 0, "the original's first point")
+    end
+
+    action ClosingDuplicate
+        Case("DropClosingDuplicate")
+        Contour loop
+        loop:AddPoint(0, 0)
+        loop:AddPoint(5, 0)
+        loop:AddPoint(5, 5)
+        loop:AddPoint(0, 0)
+        loop:DropClosingDuplicate()
+        ExpectInteger(loop:GetSize(), 3, "the repeated first point is removed")
+        loop:DropClosingDuplicate()
+        ExpectInteger(loop:GetSize(), 3, "nothing else is removed")
+    end
+
+    action NearestVertex
+        Case("NearestVertexIndex")
+        Contour square = models:Square(0, 0, 10, 0)
+        ExpectInteger(square:NearestVertexIndex(9, 9), 2, "nearest to the far corner")
+        ExpectNumber(square:NearestVertexDistance2(10, 13), 9, 0.000001, "squared distance to it")
+        Contour empty
+        ExpectInteger(empty:NearestVertexIndex(1, 1), 0, "0 for an empty contour")
+        ExpectNumber(empty:NearestVertexDistance2(1, 1), 0, 0, "0 distance for an empty contour")
+    end
+end

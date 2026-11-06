@@ -1,0 +1,100 @@
+package Tests.Fabrication.Geometry
+
+use Libraries.Containers.Array
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Geometry.GeometryUtilities
+use Tests.LampreyTest
+use Tests.TestModels
+
+/* Tests Libraries.Fabrication.Geometry.GeometryUtilities. */
+class GeometryUtilitiesTest is LampreyTest
+    GeometryUtilities util
+    TestModels models
+
+    on create
+        SetName("GeometryUtilities")
+    end
+
+    action Run
+        Rounding()
+        Sorting()
+        Distances()
+        Lengths()
+        Buckets()
+    end
+
+    action Rounding
+        Case("FloorToInt and CeilingToInt")
+        ExpectInteger(util:FloorToInt(2.7), 2, "FloorToInt(2.7)")
+        ExpectInteger(util:FloorToInt(-2.3), -3, "FloorToInt(-2.3)")
+        ExpectInteger(util:FloorToInt(-2.0), -2, "FloorToInt(-2)")
+        ExpectInteger(util:CeilingToInt(2.1), 3, "CeilingToInt(2.1)")
+        ExpectInteger(util:CeilingToInt(-2.7), -2, "CeilingToInt(-2.7)")
+        ExpectInteger(util:CeilingToInt(4.0), 4, "CeilingToInt(4)")
+        ExpectNumber(util:Min2(3, -1), -1, 0, "Min2")
+        ExpectNumber(util:Max2(3, -1), 3, 0, "Max2")
+        ExpectNumber(util:AbsNum(-4.5), 4.5, 0, "AbsNum")
+    end
+
+    action Sorting
+        Case("SortNumbers")
+        Array<number> values
+        values:Add(3)
+        values:Add(-1)
+        values:Add(2.5)
+        values:Add(-1)
+        values:Add(0)
+        util:SortNumbers(values)
+        boolean sorted = true
+        integer i = 1
+        repeat while i < values:GetSize()
+            if values:Get(i - 1) > values:Get(i)
+                sorted = false
+            end
+            i = i + 1
+        end
+        ExpectTrue(sorted, "ascending order")
+        ExpectNumber(values:Get(0), -1, 0, "smallest first")
+        ExpectNumber(values:Get(4), 3, 0, "largest last")
+        Array<number> empty
+        util:SortNumbers(empty)
+        ExpectInteger(empty:GetSize(), 0, "an empty list")
+    end
+
+    action Distances
+        Case("SegmentDistance2")
+        ExpectNumber(util:SegmentDistance2(5, 3, 0, 0, 10, 0), 9, 0.000001, "above the middle")
+        ExpectNumber(util:SegmentDistance2(13, 4, 0, 0, 10, 0), 25, 0.000001, "past the end: distance to the end point")
+        ExpectNumber(util:SegmentDistance2(3, 4, 0, 0, 0, 0), 25, 0.000001, "a zero-length segment")
+    end
+
+    action Lengths
+        Case("PathLength")
+        Contour square = models:Square(0, 0, 10, 0)
+        ExpectNumber(util:PathLength(square), 40, 0.000001, "a closed square includes its closing edge")
+        square:closed = false
+        ExpectNumber(util:PathLength(square), 30, 0.000001, "the same points open")
+        ExpectTrue(util:IsUsableLoop(models:Square(0, 0, 1, 2), 5), "a closed loop on a valid plane")
+        ExpectFalse(util:IsUsableLoop(models:Square(0, 0, 1, 5), 5), "a loop past the last plane")
+    end
+
+    action Buckets
+        Case("BucketByPlane")
+        Array<integer> planeOf
+        planeOf:Add(2)
+        planeOf:Add(0)
+        planeOf:Add(2)
+        planeOf:Add(-1)
+        planeOf:Add(9)
+        planeOf:Add(1)
+        Array<integer> starts
+        Array<integer> order
+        util:BucketByPlane(planeOf, 3, starts, order)
+        ExpectInteger(starts:GetSize(), 4, "planeCount + 1 starts")
+        ExpectInteger(order:GetSize(), 4, "out-of-range planes are left out")
+        ExpectInteger(order:Get(0), 1, "plane 0 holds item 1")
+        ExpectInteger(order:Get(1), 5, "plane 1 holds item 5")
+        ExpectInteger(order:Get(2), 0, "plane 2 holds item 0 first")
+        ExpectInteger(order:Get(3), 2, "then item 2, keeping the original order")
+    end
+end

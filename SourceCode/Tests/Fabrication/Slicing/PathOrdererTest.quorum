@@ -1,0 +1,127 @@
+package Tests.Fabrication.Slicing
+
+use Libraries.Containers.Array
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Geometry.PathRole
+use Libraries.Fabrication.Slicing.PathGenerator
+use Libraries.Fabrication.Slicing.PathOrderer
+use Tests.LampreyTest
+use Tests.TestModels
+
+/* Tests Libraries.Fabrication.Slicing.PathOrderer: printing order, roles, seams and cleanup. */
+class PathOrdererTest is LampreyTest
+    TestModels models
+    PathRole roles
+
+    on create
+        SetName("PathOrderer")
+    end
+
+    action Run
+        CubeOrder()
+        SkirtFirst()
+        Cleanup()
+    end
+
+    action CubeOrder
+        Case("a sliced cube")
+        Array<Contour> outlines = models:Outlines(models:Cube(), 0.2)
+        integer planes = models:GetLastPlaneCount()
+        PathGenerator paths
+        paths:SetWallCount(3)
+        paths:Generate(outlines, planes)
+        PathOrderer orderer
+        orderer:SetSeamPoint(0, 1000000)
+        Array<Contour> ordered = orderer:Order(outlines, paths:GetWalls(), paths:GetSkin(), paths:GetInfill(), planes)
+        ExpectTrue(ordered:GetSize() > 0, "paths come out")
+
+        boolean layersInOrder = true
+        boolean rolesSet = true
+        integer previous = 0
+        integer i = 0
+        repeat while i < ordered:GetSize()
+            Contour path = ordered:Get(i)
+            if path:planeIndex < previous
+                layersInOrder = false
+            end
+            previous = path:planeIndex
+            if path:role < 0
+                rolesSet = false
+            end
+            i = i + 1
+        end
+        ExpectTrue(layersInOrder, "layer by layer, bottom up")
+        ExpectTrue(rolesSet, "every path has a role")
+
+        // layer 50: walls from the inside out, then sparse infill
+        Array<Contour> layer
+        i = 0
+        repeat while i < ordered:GetSize()
+            Contour candidate = ordered:Get(i)
+            if candidate:planeIndex = 50
+                layer:Add(candidate)
+            end
+            i = i + 1
+        end
+        ExpectTrue(layer:GetSize() > 3, "layer 50 has walls and infill")
+        if layer:GetSize() > 3
+            Contour first = layer:Get(0)
+            Contour second = layer:Get(1)
+            Contour third = layer:Get(2)
+            ExpectInteger(first:role, roles:INNER_WALL, "the innermost wall first")
+            ExpectInteger(first:wallIndex, 2, "the innermost wall is wall 2")
+            ExpectInteger(second:wallIndex, 1, "then wall 1")
+            ExpectInteger(third:role, roles:OUTER_WALL, "the outer wall third")
+            ExpectTrue(third:HeadY() > 19 and third:HeadX() < 1, "the seam is at the back left corner, nearest the seam point")
+            boolean restInfill = true
+            i = 3
+            repeat while i < layer:GetSize()
+                Contour rest = layer:Get(i)
+                if rest:role not= roles:INFILL
+                    restInfill = false
+                end
+                i = i + 1
+            end
+            ExpectTrue(restInfill, "the rest of layer 50 is infill")
+        end
+    end
+
+    action SkirtFirst
+        Case("the skirt comes first on its layer")
+        Array<Contour> outlines = models:ListOf(models:Square(0, 0, 10, 0))
+        Array<Contour> walls = models:ListOf(models:Square(0.2, 0.2, 9.6, 0))
+        Array<Contour> none
+        PathOrderer orderer
+        orderer:SetSkirt(models:ListOf(models:Square(-5, -5, 20, 0)))
+        Array<Contour> ordered = orderer:Order(outlines, walls, none, none, 1)
+        ExpectInteger(ordered:GetSize(), 2, "the skirt and the wall")
+        Contour first = ordered:Get(0)
+        Contour second = ordered:Get(1)
+        ExpectInteger(first:role, roles:SKIRT, "skirt first")
+        ExpectInteger(second:role, roles:OUTER_WALL, "then the wall")
+    end
+
+    action Cleanup
+        Case("paths too short to print are dropped")
+        Array<Contour> outlines = models:ListOf(models:Square(0, 0, 10, 0))
+        Array<Contour> walls
+        walls:Add(models:Square(0.2, 0.2, 9.6, 0))
+        walls:Add(models:Square(5, 5, 0.1, 0))
+        Array<Contour> skin
+        Contour stub
+        stub:AddPoint(1, 1)
+        stub:AddPoint(1.1, 1)
+        skin:Add(stub)
+        Contour kept
+        kept:AddPoint(2, 2)
+        kept:AddPoint(2.1, 2)
+        kept:keepShort = true
+        skin:Add(kept)
+        Array<Contour> none
+        PathOrderer orderer
+        orderer:SetCleanup(1.0, 0.4, 0.05)
+        Array<Contour> ordered = orderer:Order(outlines, walls, skin, none, 1)
+        ExpectInteger(ordered:GetSize(), 2, "the wall and the keepShort line remain")
+        ExpectInteger(orderer:GetDroppedCount(), 2, "the 0.4 mm loop and the 0.1 mm line are dropped")
+    end
+end

@@ -1,0 +1,63 @@
+package Tests.Fabrication.Geometry
+
+use Libraries.Containers.Array
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Geometry.ContourLayers
+use Tests.LampreyTest
+use Tests.TestModels
+
+/* Tests Libraries.Fabrication.Geometry.ContourLayers. */
+class ContourLayersTest is LampreyTest
+    TestModels models
+
+    on create
+        SetName("ContourLayers")
+    end
+
+    action Run
+        Grouping()
+        UsableLoopsOnly()
+    end
+
+    action Mixed returns Array<Contour>
+        Array<Contour> all
+        all:Add(models:Square(0, 0, 1, 1))
+        all:Add(models:Square(5, 0, 1, 0))
+        all:Add(models:Square(9, 0, 1, 1))
+        Contour line
+        line:AddPoint(0, 0)
+        line:AddPoint(1, 1)
+        line:planeIndex = 1
+        all:Add(line)
+        all:Add(models:Square(0, 0, 1, 7))
+        return all
+    end
+
+    action Grouping
+        Case("Index and GetLayer")
+        ContourLayers layers
+        layers:Index(Mixed(), 3, false)
+        ExpectInteger(layers:GetPlaneCount(), 3, "GetPlaneCount")
+        Array<Contour> zero = layers:GetLayer(0)
+        Array<Contour> one = layers:GetLayer(1)
+        Array<Contour> two = layers:GetLayer(2)
+        ExpectInteger(zero:GetSize(), 1, "plane 0")
+        ExpectInteger(one:GetSize(), 3, "plane 1, open paths included")
+        ExpectInteger(two:GetSize(), 0, "an empty plane")
+        Contour first = one:Get(0)
+        Contour second = one:Get(1)
+        ExpectNumber(first:HeadX(), 0, 0, "plane 1 keeps the original order (first)")
+        ExpectNumber(second:HeadX(), 9, 0, "plane 1 keeps the original order (second)")
+        Array<Contour> outside = layers:GetLayer(7)
+        Array<Contour> negative = layers:GetLayer(-1)
+        ExpectInteger(outside:GetSize() + negative:GetSize(), 0, "planes outside the range are empty")
+    end
+
+    action UsableLoopsOnly
+        Case("Index with usableLoopsOnly")
+        ContourLayers layers
+        layers:Index(Mixed(), 3, true)
+        Array<Contour> one = layers:GetLayer(1)
+        ExpectInteger(one:GetSize(), 2, "the open line is left out")
+    end
+end
