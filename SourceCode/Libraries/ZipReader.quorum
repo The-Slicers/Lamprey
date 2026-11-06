@@ -1,0 +1,43 @@
+package Libraries.Data.Compression
+
+/*
+The ZipReader class reads single entries of a ZIP archive (a .3mf file is a
+ZIP archive) without unpacking it, through the plugin
+plugins.quorum.Libraries.Data.Compression.ZipReader (Plugins/src).
+
+Attribute: Example
+
+    use Libraries.Data.Compression.ZipReader
+
+    class Main
+        action Main
+            ZipReader zip
+            if zip:HasEntry("print.gcode.3mf", "Metadata/project_settings.config")
+                output zip:ReadText("print.gcode.3mf", "Metadata/project_settings.config")
+            end
+        end
+    end
+*/
+class ZipReader
+    /*
+    Checks whether an archive has an entry. A missing archive has no entries;
+    a file that is not a ZIP archive stops with an error.
+
+    Attribute: Parameter zipPath The archive.
+    Attribute: Parameter entryName The entry to look for.
+
+    Attribute: Returns True if the entry exists.
+    */
+    system action HasEntry(text zipPath, text entryName) returns boolean
+
+    /*
+    Reads one entry as UTF-8 text. Stops with an error naming the archive if
+    it or the entry is missing.
+
+    Attribute: Parameter zipPath The archive.
+    Attribute: Parameter entryName The entry to read.
+
+    Attribute: Returns The entry's text.
+    */
+    system action ReadText(text zipPath, text entryName) returns text
+end

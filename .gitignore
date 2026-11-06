@@ -8,3 +8,4 @@ assets/*.stl
 *.png
 Outputs/*.gcode
 *.3mf
+Tests/Baselines/*.txt

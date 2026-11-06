@@ -1,0 +1,89 @@
+package Libraries.Data.Compression
+
+/*
+The ZipWriter class writes a ZIP archive entry by entry. Entries are written
+in the order they are added, text is stored as UTF-8, and PNG images can be
+drawn pixel by pixel and added as entries. The work is done by java.util.zip
+and javax.imageio through the plugin
+plugins.quorum.Libraries.Data.Compression.ZipWriter (Plugins/src).
+
+Every action stops with an error that names the archive and the entry when
+something goes wrong: adding before Open, adding the same entry twice,
+copying an entry that was never added, or a file system error.
+
+Attribute: Example
+
+    use Libraries.Data.Compression.ZipWriter
+
+    class Main
+        action Main
+            ZipWriter zip
+            zip:Open("Outputs/example.zip")
+            zip:AddText("readme.txt", "Hello")
+            zip:BeginImage(2, 2)
+            zip:SetPixel(0, 0, 255, 0, 0, 255)
+            zip:AddImage("red-dot.png")
+            zip:AddCopy("copy-of-red-dot.png", "red-dot.png")
+            zip:Close()
+        end
+    end
+*/
+class ZipWriter
+    /*
+    Creates (or overwrites) the archive, creating its folder if needed. An
+    archive that was still open is finished first.
+
+    Attribute: Parameter path Where to write the archive.
+    */
+    system action Open(text path)
+
+    /*
+    Adds one entry whose content is the text, encoded as UTF-8.
+
+    Attribute: Parameter entryName The name inside the archive, such as "Metadata/plate_1.gcode".
+    Attribute: Parameter content The text to store.
+    */
+    system action AddText(text entryName, text content)
+
+    /*
+    Starts a blank, fully transparent RGBA image. Sizes below 1 become 1.
+
+    Attribute: Parameter width The width in pixels.
+    Attribute: Parameter height The height in pixels.
+    */
+    system action BeginImage(integer width, integer height)
+
+    /*
+    Sets one pixel of the current image. Pixels outside the image are
+    ignored, and each channel is clamped to 0 to 255.
+
+    Attribute: Parameter x The column, from the left.
+    Attribute: Parameter y The row, from the top.
+    Attribute: Parameter red The red channel.
+    Attribute: Parameter green The green channel.
+    Attribute: Parameter blue The blue channel.
+    Attribute: Parameter alpha The opacity, 255 being opaque.
+    */
+    system action SetPixel(integer x, integer y, integer red, integer green, integer blue, integer alpha)
+
+    /*
+    Encodes the current image as PNG and adds it as an entry.
+
+    Attribute: Parameter entryName The name inside the archive.
+    */
+    system action AddImage(text entryName)
+
+    /*
+    Adds another entry with exactly the same bytes as an entry added earlier.
+
+    Attribute: Parameter entryName The name of the new entry.
+    Attribute: Parameter existingEntryName The entry to copy.
+    */
+    system action AddCopy(text entryName, text existingEntryName)
+
+    /*
+    Finishes the archive. Nothing in it can be read until this is called.
+    Calling it again does nothing.
+    */
+    system action Close
+end

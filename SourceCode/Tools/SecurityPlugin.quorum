@@ -1,5 +1,0 @@
-package Libraries.Mine
-
-class SecPlugin
-    system action GenerateSHA(text input) returns text
-end
