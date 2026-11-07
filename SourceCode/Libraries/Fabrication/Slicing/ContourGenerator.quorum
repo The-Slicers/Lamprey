@@ -51,6 +51,18 @@ class ContourGenerator
     every point.
 
     Attribute: Parameter tolerance The distance (mm).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.ContourGenerator
+        use Libraries.Fabrication.Slicing.Segment
+
+        Array<Segment> segments     // from MeshSlicer:Slice(planes)
+        ContourGenerator generator
+        generator:SetSimplifyTolerance(0.02)      // points may move 0.02 mm
+        Array<Contour> outlines = generator:Build(segments, 100, 0.2)
     */
     action SetSimplifyTolerance(number tolerance)
         checker:RequireAtLeast("ContourGenerator:SetSimplifyTolerance tolerance", tolerance, 0)
@@ -61,33 +73,127 @@ class ContourGenerator
     Loops smaller than this are dropped as specks; 0 keeps them all.
 
     Attribute: Parameter area The area (mm^2).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.ContourGenerator
+        use Libraries.Fabrication.Slicing.Segment
+
+        Array<Segment> segments     // from MeshSlicer:Slice(planes)
+        ContourGenerator generator
+        generator:SetMinArea(0.05)      // drop loops under 0.05 mm^2
+        Array<Contour> outlines = generator:Build(segments, 100, 0.2)
     */
     action SetMinArea(number area)
         checker:RequireAtLeast("ContourGenerator:SetMinArea area", area, 0)
         minArea = area
     end
 
-    /* The number of loop points before simplification in the last Build. */
+    /*
+    The number of loop points before simplification in the last Build.
+
+    Attribute: Returns The number of loop points before simplification in the last Build.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.ContourGenerator
+        use Libraries.Fabrication.Slicing.Segment
+
+        Array<Segment> segments     // from MeshSlicer:Slice(planes)
+        ContourGenerator generator
+        Array<Contour> outlines = generator:Build(segments, 100, 0.2)
+        output generator:GetPointsBefore() + " points, " + generator:GetPointsAfter() + " after simplifying"
+    */
     action GetPointsBefore returns integer
         return pointsBefore
     end
 
-    /* The number of loop points after simplification in the last Build. */
+    /*
+    The number of loop points after simplification in the last Build.
+
+    Attribute: Returns The number of loop points after simplification in the last Build.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.ContourGenerator
+        use Libraries.Fabrication.Slicing.Segment
+
+        Array<Segment> segments     // from MeshSlicer:Slice(planes)
+        ContourGenerator generator
+        Array<Contour> outlines = generator:Build(segments, 100, 0.2)
+        output generator:GetPointsAfter() + " points are left"
+    */
     action GetPointsAfter returns integer
         return pointsAfter
     end
 
-    /* How many specks the last Build dropped. */
+    /*
+    How many specks the last Build dropped.
+
+    Attribute: Returns How many specks the last Build dropped.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.ContourGenerator
+        use Libraries.Fabrication.Slicing.Segment
+
+        Array<Segment> segments     // from MeshSlicer:Slice(planes)
+        ContourGenerator generator
+        Array<Contour> outlines = generator:Build(segments, 100, 0.2)
+        output generator:GetDroppedCount() + " specks dropped"
+    */
     action GetDroppedCount returns integer
         return droppedCount
     end
 
-    /* How many loops the last Build reversed to orient them. */
+    /*
+    How many loops the last Build reversed to orient them.
+
+    Attribute: Returns How many loops the last Build reversed to orient them.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.ContourGenerator
+        use Libraries.Fabrication.Slicing.Segment
+
+        Array<Segment> segments     // from MeshSlicer:Slice(planes)
+        ContourGenerator generator
+        Array<Contour> outlines = generator:Build(segments, 100, 0.2)
+        output generator:GetFlippedCount() + " loops were reversed"
+    */
     action GetFlippedCount returns integer
         return flippedCount
     end
 
-    /* How many chains the last Build couldn't close, even across a gap (0 for a clean mesh). */
+    /*
+    How many chains the last Build couldn't close, even across a gap (0 for a clean mesh).
+
+    Attribute: Returns How many chains the last Build couldn't close, even across a gap (0 for a clean mesh).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.ContourGenerator
+        use Libraries.Fabrication.Slicing.Segment
+
+        Array<Segment> segments     // from MeshSlicer:Slice(planes)
+        ContourGenerator generator
+        Array<Contour> outlines = generator:Build(segments, 100, 0.2)
+        if generator:GetOpenCount() > 0
+            output "The mesh has holes: some outlines couldn't be closed."
+        end
+    */
     action GetOpenCount returns integer
         return openCount
     end
@@ -98,8 +204,19 @@ class ContourGenerator
     Attribute: Parameter segments The segments from MeshSlicer:Slice.
     Attribute: Parameter planeCount The number of planes sliced.
     Attribute: Parameter maxGap The largest gap (mm) bridged to close a chain.
-
     Attribute: Returns The loops of every plane (plane by plane), plus any chains that stayed open.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.ContourGenerator
+        use Libraries.Fabrication.Slicing.Segment
+
+        Array<Segment> segments     // from MeshSlicer:Slice(planes)
+        ContourGenerator generator
+        Array<Contour> outlines = generator:Build(segments, 100, 0.2)
+        output outlines:GetSize() + " loops"
     */
     action Build(Array<Segment> segments, integer planeCount, number maxGap) returns Array<Contour>
         checker:RequireAtLeast("ContourGenerator:Build planeCount", planeCount, 0)

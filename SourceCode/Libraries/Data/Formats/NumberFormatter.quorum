@@ -31,8 +31,15 @@ class NumberFormatter
 
     Attribute: Parameter value The number to write.
     Attribute: Parameter decimals How many digits after the point (0 for none).
-
     Attribute: Returns The number as text.
+
+    Attribute: Example
+
+        use Libraries.Data.Formats.NumberFormatter
+
+        NumberFormatter format
+        output format:Fixed(3.14159, 2)     // 3.14
+        output format:Fixed(0.0001, 3)      // 0.000, never 1.0E-4
     */
     action Fixed(number value, integer decimals) returns text
         boolean negative = value < 0
@@ -81,8 +88,15 @@ class NumberFormatter
     200 rather than 200.0.
 
     Attribute: Parameter value The number to write.
-
     Attribute: Returns The number as text.
+
+    Attribute: Example
+
+        use Libraries.Data.Formats.NumberFormatter
+
+        NumberFormatter format
+        output format:Short(0.2)            // 0.2
+        output format:Short(200.0)          // 200
     */
     action Short(number value) returns text
         integer decimals = 6
@@ -110,8 +124,14 @@ class NumberFormatter
     A fraction as a percentage, the way Bambu Studio writes it.
 
     Attribute: Parameter fraction The fraction, such as 0.15.
-
     Attribute: Returns The percentage, such as "15%".
+
+    Attribute: Example
+
+        use Libraries.Data.Formats.NumberFormatter
+
+        NumberFormatter format
+        output format:Percent(0.15)         // 15%
     */
     action Percent(number fraction) returns text
         return Short(fraction * 100.0) + "%"
@@ -121,8 +141,14 @@ class NumberFormatter
     The value rounded to the nearest whole number, without ".0".
 
     Attribute: Parameter value The number to round.
-
     Attribute: Returns The rounded number as text.
+
+    Attribute: Example
+
+        use Libraries.Data.Formats.NumberFormatter
+
+        NumberFormatter format
+        output format:Rounded(209.6)        // 210
     */
     action Rounded(number value) returns text
         return Short(math:Round(value))

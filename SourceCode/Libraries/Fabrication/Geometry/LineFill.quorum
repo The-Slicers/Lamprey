@@ -53,6 +53,25 @@ class LineFill
     Attribute: Parameter spacing The distance between line centres (mm); must be greater than 0.
     Attribute: Parameter minLength Lines shorter than this (mm) are left out.
     Attribute: Parameter target The lines are added to this list as open contours.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Geometry.LineFill
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        Array<Contour> region
+        region:Add(square)
+        LineFill fill
+        Array<Contour> lines
+        fill:Fill(region, 0, 2.0, 0.4, lines)      // 2 mm apart, none shorter than 0.4 mm
+        output lines:GetSize() + " lines"
     */
     action Fill(Array<Contour> region, integer planeIndex, number spacing, number minLength, Array<Contour> target)
         Hatch(region, planeIndex, spacing, minLength, target, false)
@@ -67,6 +86,25 @@ class LineFill
     Attribute: Parameter spacing The distance between line centres (mm); must be greater than 0.
     Attribute: Parameter minLength Lines shorter than this (mm) are left out.
     Attribute: Parameter target The zigzags are added to this list as open contours.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Geometry.LineFill
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        Array<Contour> region
+        region:Add(square)
+        LineFill fill
+        Array<Contour> zigzags
+        fill:FillJoined(region, 0, 0.4, 0.4, zigzags)     // solid first-layer fill
+        output zigzags:GetSize() + " continuous paths"
     */
     action FillJoined(Array<Contour> region, integer planeIndex, number spacing, number minLength, Array<Contour> target)
         Hatch(region, planeIndex, spacing, minLength, target, true)

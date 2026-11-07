@@ -77,6 +77,16 @@ class MeshSlicer
     model's size.
 
     Attribute: Parameter scale The factor, or 0 to detect it.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.TriangleMesh
+        use Libraries.Fabrication.Slicing.MeshSlicer
+
+        TriangleMesh mesh       // filled with mesh:Load(modelData)
+        MeshSlicer slicer
+        slicer:SetUnitScale(25.4)      // the file is in inches
+        slicer:SetTriangles(mesh)
     */
     action SetUnitScale(number scale)
         checker:RequireAtLeast("MeshSlicer:SetUnitScale scale", scale, 0)
@@ -88,6 +98,16 @@ class MeshSlicer
     wrong units.
 
     Attribute: Parameter size The bed size (mm).
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.TriangleMesh
+        use Libraries.Fabrication.Slicing.MeshSlicer
+
+        TriangleMesh mesh       // filled with mesh:Load(modelData)
+        MeshSlicer slicer
+        slicer:SetBedSize(256)      // warn about models bigger than a Bambu P2S bed
+        slicer:SetTriangles(mesh)
     */
     action SetBedSize(number size)
         checker:RequirePositive("MeshSlicer:SetBedSize size", size)
@@ -100,6 +120,16 @@ class MeshSlicer
     at exactly the same spot (so neighbouring triangles share edges).
 
     Attribute: Parameter mesh The loaded mesh.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.TriangleMesh
+        use Libraries.Fabrication.Slicing.MeshSlicer
+
+        TriangleMesh mesh       // filled with mesh:Load(modelData)
+        MeshSlicer slicer
+        slicer:SetTriangles(mesh)
+        output "The model's base faced " + slicer:GetBaseDirection()
     */
     action SetTriangles(TriangleMesh mesh)
         Number64BitArray srcX = mesh:GetVertexX()
@@ -196,6 +226,18 @@ class MeshSlicer
     The lowest and highest Z of the mesh after SetTriangles (mm).
 
     Attribute: Returns An array of two numbers: the lowest Z, then the highest.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.TriangleMesh
+        use Libraries.Fabrication.Slicing.MeshSlicer
+
+        TriangleMesh mesh       // filled with mesh:Load(modelData)
+        MeshSlicer slicer
+        slicer:SetTriangles(mesh)
+        Array<number> range = slicer:GetSliceRange()
+        output "The model is " + (range:Get(1) - range:Get(0)) + " mm tall"
     */
     action GetSliceRange returns Array<number>
         RequireLoaded("GetSliceRange")
@@ -219,8 +261,19 @@ class MeshSlicer
     Attribute: Parameter zMin The bottom of the first layer (mm).
     Attribute: Parameter zMax The top of the model (mm).
     Attribute: Parameter delta The layer height (mm).
-
     Attribute: Returns One plane height per layer, from the bottom up.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.TriangleMesh
+        use Libraries.Fabrication.Slicing.MeshSlicer
+
+        TriangleMesh mesh       // filled with mesh:Load(modelData)
+        MeshSlicer slicer
+        slicer:SetTriangles(mesh)
+        Array<number> planes = slicer:BuildPlanes(0, 20, 0.2)
+        output planes:Get(0)       // 0.1, the middle of the first layer
     */
     action BuildPlanes(number zMin, number zMax, number delta) returns Array<number>
         checker:RequirePositive("MeshSlicer:BuildPlanes layer height", delta)
@@ -245,8 +298,22 @@ class MeshSlicer
     GetOddCrossingCount and skipped.
 
     Attribute: Parameter planeZ The plane heights, from BuildPlanes.
-
     Attribute: Returns The segments of every plane, in no particular order.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.TriangleMesh
+        use Libraries.Fabrication.Slicing.MeshSlicer
+        use Libraries.Fabrication.Slicing.Segment
+
+        TriangleMesh mesh       // filled with mesh:Load(modelData)
+        MeshSlicer slicer
+        slicer:SetTriangles(mesh)
+        Array<number> range = slicer:GetSliceRange()
+        Array<number> planes = slicer:BuildPlanes(range:Get(0), range:Get(1), 0.2)
+        Array<Segment> segments = slicer:Slice(planes)
+        output segments:GetSize() + " segments on " + planes:GetSize() + " planes"
     */
     action Slice(Array<number> planeZ) returns Array<Segment>
         RequireLoaded("Slice")
@@ -310,22 +377,90 @@ class MeshSlicer
         return result
     end
 
-    /* The most crossings any triangle had with one plane in the last Slice (2 for a clean mesh). */
+    /*
+    The most crossings any triangle had with one plane in the last Slice (2 for a clean mesh).
+
+    Attribute: Returns The most crossings any triangle had with one plane in the last Slice (2 for a clean mesh).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.TriangleMesh
+        use Libraries.Fabrication.Slicing.MeshSlicer
+        use Libraries.Fabrication.Slicing.Segment
+
+        TriangleMesh mesh       // filled with mesh:Load(modelData)
+        MeshSlicer slicer
+        slicer:SetTriangles(mesh)
+        Array<number> range = slicer:GetSliceRange()
+        Array<number> planes = slicer:BuildPlanes(range:Get(0), range:Get(1), 0.2)
+        Array<Segment> segments = slicer:Slice(planes)
+        if slicer:GetMaxCrossingsPerFace() > 2
+            output "Some triangles overlap themselves."
+        end
+    */
     action GetMaxCrossingsPerFace returns integer
         return maxCrossingsPerFace
     end
 
-    /* How many triangle / plane cuts were skipped in the last Slice for having an odd number of crossings. */
+    /*
+    How many triangle / plane cuts were skipped in the last Slice for having an odd number of crossings.
+
+    Attribute: Returns How many triangle / plane cuts were skipped in the last Slice for having an odd number of crossings.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.TriangleMesh
+        use Libraries.Fabrication.Slicing.MeshSlicer
+        use Libraries.Fabrication.Slicing.Segment
+
+        TriangleMesh mesh       // filled with mesh:Load(modelData)
+        MeshSlicer slicer
+        slicer:SetTriangles(mesh)
+        Array<number> range = slicer:GetSliceRange()
+        Array<number> planes = slicer:BuildPlanes(range:Get(0), range:Get(1), 0.2)
+        Array<Segment> segments = slicer:Slice(planes)
+        output slicer:GetOddCrossingCount() + " cuts skipped (0 for a closed mesh)"
+    */
     action GetOddCrossingCount returns integer
         return oddCount
     end
 
-    /* The factor SetTriangles scaled the model by (25.4 for inches, 1000 for metres, 1 for millimetres). */
+    /*
+    The factor SetTriangles scaled the model by (25.4 for inches, 1000 for metres, 1 for millimetres).
+
+    Attribute: Returns The factor SetTriangles scaled the model by (25.4 for inches, 1000 for metres, 1 for millimetres).
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.TriangleMesh
+        use Libraries.Fabrication.Slicing.MeshSlicer
+
+        TriangleMesh mesh       // filled with mesh:Load(modelData)
+        MeshSlicer slicer
+        slicer:SetTriangles(mesh)
+        output "Scaled by " + slicer:GetUnitScale()      // 25.4 for a model in inches
+    */
     action GetUnitScale returns number
         return unitScale
     end
 
-    /* How many distinct vertex positions the mesh has after merging duplicates. */
+    /*
+    How many distinct vertex positions the mesh has after merging duplicates.
+
+    Attribute: Returns How many distinct vertex positions the mesh has after merging duplicates.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.TriangleMesh
+        use Libraries.Fabrication.Slicing.MeshSlicer
+
+        TriangleMesh mesh       // filled with mesh:Load(modelData)
+        MeshSlicer slicer
+        slicer:SetTriangles(mesh)
+        output slicer:GetUniqueVertexCount() + " vertices after merging duplicates"
+    */
     action GetUniqueVertexCount returns integer
         return uniqueVertices
     end
@@ -334,6 +469,18 @@ class MeshSlicer
     Which way the model's base faced in the file.
 
     Attribute: Returns One of "-X", "+X", "-Y", "+Y", "-Z" (already upright) or "+Z".
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.TriangleMesh
+        use Libraries.Fabrication.Slicing.MeshSlicer
+
+        TriangleMesh mesh       // filled with mesh:Load(modelData)
+        MeshSlicer slicer
+        slicer:SetTriangles(mesh)
+        if slicer:GetBaseDirection() not= "-Z"
+            output "The model was turned upright."
+        end
     */
     action GetBaseDirection returns text
         if baseDirection = 0
@@ -350,7 +497,31 @@ class MeshSlicer
         return "-Z"
     end
 
-    /* Warnings from the last SetTriangles and Slice, as sentences. */
+    /*
+    Warnings from the last SetTriangles and Slice, as sentences.
+
+    Attribute: Returns Warnings from the last SetTriangles and Slice, as sentences.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.TriangleMesh
+        use Libraries.Fabrication.Slicing.MeshSlicer
+        use Libraries.Fabrication.Slicing.Segment
+
+        TriangleMesh mesh       // filled with mesh:Load(modelData)
+        MeshSlicer slicer
+        slicer:SetTriangles(mesh)
+        Array<number> range = slicer:GetSliceRange()
+        Array<number> planes = slicer:BuildPlanes(range:Get(0), range:Get(1), 0.2)
+        Array<Segment> segments = slicer:Slice(planes)
+        Array<text> warnings = slicer:GetWarnings()
+        integer i = 0
+        repeat while i < warnings:GetSize()
+            output "warning: " + warnings:Get(i)
+            i = i + 1
+        end
+    */
     action GetWarnings returns Array<text>
         return warnings
     end

@@ -44,6 +44,17 @@ class SkirtGenerator
     The extrusion width, which is also the spacing of the loops.
 
     Attribute: Parameter width The width (mm), greater than 0.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.SkirtGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        SkirtGenerator skirt
+        skirt:SetLineWidth(0.4)
+        Array<Contour> loops = skirt:Generate(outlines)
     */
     action SetLineWidth(number width)
         checker:RequirePositive("SkirtGenerator:SetLineWidth width", width)
@@ -56,6 +67,17 @@ class SkirtGenerator
     Attribute: Parameter count The number of loops (0 for none).
     Attribute: Parameter gap The gap between the model and the first loop (mm).
     Attribute: Parameter layers How many layers tall the skirt is.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.SkirtGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        SkirtGenerator skirt
+        skirt:SetSkirt(2, 3.0, 1)      // 2 loops, 3 mm away, 1 layer tall
+        Array<Contour> loops = skirt:Generate(outlines)
     */
     action SetSkirt(integer count, number gap, integer layers)
         checker:RequireAtLeast("SkirtGenerator:SetSkirt count", count, 0)
@@ -73,6 +95,17 @@ class SkirtGenerator
 
     Attribute: Parameter count The number of loops (0 for none).
     Attribute: Parameter gap The gap between the model and the first loop (mm), usually 0.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.SkirtGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        SkirtGenerator skirt
+        skirt:SetBrim(8, 0)      // 8 loops touching the model
+        Array<Contour> loops = skirt:Generate(outlines)
     */
     action SetBrim(integer count, number gap)
         checker:RequireAtLeast("SkirtGenerator:SetBrim count", count, 0)
@@ -87,8 +120,19 @@ class SkirtGenerator
     Makes the skirt or brim loops.
 
     Attribute: Parameter contours The model's outlines (only plane 0 is used).
-
     Attribute: Returns Closed loops on planes 0 up to the skirt height; empty if the first layer is empty.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.SkirtGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        SkirtGenerator skirt
+        skirt:SetSkirt(1, 5.0, 1)
+        Array<Contour> loops = skirt:Generate(outlines)
+        output loops:GetSize() + " skirt loops"
     */
     action Generate(Array<Contour> contours) returns Array<Contour>
         warnings:Empty()
@@ -136,7 +180,25 @@ class SkirtGenerator
         return result
     end
 
-    /* Problems from the last Generate, as sentences. */
+    /*
+    Problems from the last Generate, as sentences.
+
+    Attribute: Returns Problems from the last Generate, as sentences.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.SkirtGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        SkirtGenerator skirt
+        Array<Contour> loops = skirt:Generate(outlines)
+        Array<text> warnings = skirt:GetWarnings()
+        if warnings:GetSize() > 0
+            output "warning: " + warnings:Get(0)
+        end
+    */
     action GetWarnings returns Array<text>
         return warnings
     end

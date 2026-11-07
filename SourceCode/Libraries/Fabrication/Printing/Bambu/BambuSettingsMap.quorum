@@ -50,14 +50,44 @@ class BambuSettingsMap
     integer filled = 0
     boolean reportMissing = true
 
-    /* Whether keys missing from the template are listed as a warning (on by default). */
+    /*
+    Whether keys missing from the template are listed as a warning (on by default).
+
+    Attribute: Parameter toggle True to list missing keys as a warning.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Profiles.ProfileManager
+        use Libraries.Fabrication.Printing.Bambu.BambuSettingsMap
+
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        BambuSettingsMap map
+        map:SetReportMissing(false)
+        text json = map:FilledTemplate(profiles:Require("bambu-p2s"), "Templates/bambu-p2s/p2s_project_settings.json")
+    */
     action SetReportMissing(boolean toggle)
         reportMissing = toggle
     end
 
     /*
-        Reads the template (a project_settings JSON, or a .gcode.3mf exported
-        by Bambu Studio), fills in the profile and returns the JSON text.
+    Reads the template (a project_settings JSON, or a .gcode.3mf exported
+    by Bambu Studio), fills in the profile and returns the JSON text.
+
+    Attribute: Parameter profile The profile to copy the settings from.
+    Attribute: Parameter templatePath The template exported by Bambu Studio.
+    Attribute: Returns The filled project_settings JSON.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Profiles.ProfileManager
+        use Libraries.Fabrication.Printing.Bambu.BambuSettingsMap
+
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        BambuSettingsMap map
+        text json = map:FilledTemplate(profiles:Require("bambu-p2s"), "Templates/bambu-p2s/p2s_project_settings.json")
+        output map:GetFilledCount() + " settings filled in"
     */
     action FilledTemplate(Profile profile, text templatePath) returns text
         if templatePath = ""
@@ -69,7 +99,24 @@ class BambuSettingsMap
         return template:ToText()
     end
 
-    /* Like FilledTemplate, and writes the result to outputPath. Returns outputPath. */
+    /*
+    Like FilledTemplate, and writes the result to outputPath. Returns outputPath.
+
+    Attribute: Parameter profile The profile to copy the settings from.
+    Attribute: Parameter templatePath The template exported by Bambu Studio.
+    Attribute: Parameter outputPath Where to write the filled JSON.
+    Attribute: Returns outputPath.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Profiles.ProfileManager
+        use Libraries.Fabrication.Printing.Bambu.BambuSettingsMap
+
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        BambuSettingsMap map
+        text written = map:WriteTemplate(profiles:Require("bambu-p2s"), "Templates/bambu-p2s/p2s_project_settings.json", "Outputs/project_settings.json")
+    */
     action WriteTemplate(Profile profile, text templatePath, text outputPath) returns text
         text json = FilledTemplate(profile, templatePath)
         File file
@@ -79,7 +126,7 @@ class BambuSettingsMap
     end
 
     /* Fills the template that is already loaded with the profile's settings. */
-    action Apply(Profile profile)
+    private action Apply(Profile profile)
         missing:Empty()
         warnings:Empty()
         filled = 0
@@ -221,17 +268,70 @@ class BambuSettingsMap
         end
     end
 
-    /* How many keys the last Apply changed. */
+    /*
+    How many keys the last FilledTemplate changed.
+
+    Attribute: Returns How many keys the last FilledTemplate changed.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Profiles.ProfileManager
+        use Libraries.Fabrication.Printing.Bambu.BambuSettingsMap
+
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        BambuSettingsMap map
+        text json = map:FilledTemplate(profiles:Require("bambu-p2s"), "Templates/bambu-p2s/p2s_project_settings.json")
+        output map:GetFilledCount() + " settings changed"
+    */
     action GetFilledCount returns integer
         return filled
     end
 
-    /* The keys the last Apply wanted but the template doesn't have. */
+    /*
+    The keys the last FilledTemplate wanted but the template doesn't have.
+
+    Attribute: Returns The keys the last FilledTemplate wanted but the template doesn't have.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Profiles.ProfileManager
+        use Libraries.Fabrication.Printing.Bambu.BambuSettingsMap
+
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        BambuSettingsMap map
+        text json = map:FilledTemplate(profiles:Require("bambu-p2s"), "Templates/bambu-p2s/p2s_project_settings.json")
+        Array<text> missing = map:GetMissingKeys()
+        output missing:GetSize() + " settings the template doesn't have"
+    */
     action GetMissingKeys returns Array<text>
         return missing
     end
 
-    /* Warnings from the last Apply (missing keys, a template for another nozzle or filament), as sentences. */
+    /*
+    Warnings from the last FilledTemplate (missing keys, a template for another nozzle or filament), as sentences.
+
+    Attribute: Returns Warnings from the last FilledTemplate (missing keys, a template for another nozzle or filament), as sentences.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Profiles.ProfileManager
+        use Libraries.Fabrication.Printing.Bambu.BambuSettingsMap
+
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        BambuSettingsMap map
+        text json = map:FilledTemplate(profiles:Require("bambu-p2s"), "Templates/bambu-p2s/p2s_project_settings.json")
+        Array<text> warnings = map:GetWarnings()
+        integer i = 0
+        repeat while i < warnings:GetSize()
+            output "warning: " + warnings:Get(i)
+            i = i + 1
+        end
+    */
     action GetWarnings returns Array<text>
         return warnings
     end

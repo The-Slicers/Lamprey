@@ -2,7 +2,7 @@ package Tests
 
 use Libraries.Containers.Array
 use Libraries.Compute.Math
-use Libraries.System.TextFile
+use Libraries.System.File
 
 /*
 The GcodeReader class reads back a G-code file the way a printer would
@@ -34,8 +34,9 @@ class GcodeReader
     Math math
 
     action Read(text path)
-        TextFile file
-        Parse(file:Read(path))
+        File file
+        file:SetPath(path)
+        Parse(file:Read())
     end
 
     action Parse(text gcode)

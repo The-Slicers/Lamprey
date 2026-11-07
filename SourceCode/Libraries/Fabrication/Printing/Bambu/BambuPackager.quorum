@@ -4,8 +4,7 @@ use Libraries.Compute.Math
 use Libraries.Containers.Array
 use Libraries.Containers.Number64BitArray
 use Libraries.System.DateTime
-use Libraries.System.TextFile
-use Libraries.Data.Hash
+use Libraries.System.File
 use Libraries.Data.Compression.ZipWriter
 use Libraries.Data.Formats.NumberFormatter
 use Libraries.Fabrication.ArgumentChecker
@@ -110,72 +109,229 @@ class BambuPackager
         dq = dq:GetDoubleQuote()
     end
 
-    /* A project_settings JSON file, or a .gcode.3mf exported by Bambu Studio. */
+    /*
+    A project_settings JSON file, or a .gcode.3mf exported by Bambu Studio.
+
+    Attribute: Parameter path The JSON file or the .gcode.3mf.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Printing.Bambu.BambuPackager
+
+        BambuPackager packer
+        packer:SetSettingsTemplate("Templates/bambu-p2s/p2s_project_settings.json")
+        text archive = packer:Pack("Outputs/cube.gcode")
+    */
     action SetSettingsTemplate(text path)
         settingsPath = path
     end
 
     /*
-        The project_settings JSON itself, already filled in (for example by
-        BambuSettingsMap from a profile). When set, Pack uses it instead of
-        reading SetSettingsTemplate's file, and only changes the values it
-        controls itself on top of it. "" goes back to the file.
+    The project_settings JSON itself, already filled in (for example by
+    BambuSettingsMap from a profile). When set, Pack uses it instead of
+    reading SetSettingsTemplate's file, and only changes the values it
+    controls itself on top of it. "" goes back to the file.
+
+    Attribute: Parameter json The settings as JSON text; "" goes back to SetSettingsTemplate's file.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Profiles.ProfileManager
+        use Libraries.Fabrication.Printing.Bambu.BambuSettingsMap
+        use Libraries.Fabrication.Printing.Bambu.BambuPackager
+
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        BambuSettingsMap map
+        BambuPackager packer
+        packer:SetSettingsText(map:FilledTemplate(profiles:Require("bambu-p2s"), "Templates/bambu-p2s/p2s_project_settings.json"))
+        text archive = packer:Pack("Outputs/cube.gcode")
     */
     action SetSettingsText(text json)
         settingsText = json
     end
 
-    /* printer_model_id: P2S = N7, P1S = C12, X1C = BL-P001. */
+    /*
+    printer_model_id: P2S = N7, P1S = C12, X1C = BL-P001.
+
+    Attribute: Parameter id The printer model ID.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Printing.Bambu.BambuPackager
+
+        BambuPackager packer
+        packer:SetSettingsTemplate("Templates/bambu-p2s/p2s_project_settings.json")
+        packer:SetPrinterModelId("N7")      // a P2S
+        text archive = packer:Pack("Outputs/cube.gcode")
+    */
     action SetPrinterModelId(text id)
         printerModelId = id
     end
 
-    /* The nozzle diameter (mm) recorded in the archive. */
+    /*
+    The nozzle diameter (mm) recorded in the archive.
+
+    Attribute: Parameter diameter The diameter (mm).
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Printing.Bambu.BambuPackager
+
+        BambuPackager packer
+        packer:SetSettingsTemplate("Templates/bambu-p2s/p2s_project_settings.json")
+        packer:SetNozzleDiameter(0.4)
+        text archive = packer:Pack("Outputs/cube.gcode")
+    */
     action SetNozzleDiameter(number diameter)
         checker:RequirePositive("BambuPackager:SetNozzleDiameter diameter", diameter)
         nozzleDiameter = diameter
     end
 
-    /* PLA, PETG, ABS, ASA, TPU, PC or PA. */
+    /*
+    PLA, PETG, ABS, ASA, TPU, PC or PA.
+
+    Attribute: Parameter type The material.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Printing.Bambu.BambuPackager
+
+        BambuPackager packer
+        packer:SetSettingsTemplate("Templates/bambu-p2s/p2s_project_settings.json")
+        packer:SetFilamentType("PETG")
+        text archive = packer:Pack("Outputs/cube.gcode")
+    */
     action SetFilamentType(text type)
         filamentType = type
     end
 
-    /* The colour shown on the filament mapping screen, as #RRGGBB. */
+    /*
+    The colour shown on the filament mapping screen, as #RRGGBB.
+
+    Attribute: Parameter color The colour, such as "#FF8000".
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Printing.Bambu.BambuPackager
+
+        BambuPackager packer
+        packer:SetSettingsTemplate("Templates/bambu-p2s/p2s_project_settings.json")
+        packer:SetFilamentColor("#FF8000")
+        text archive = packer:Pack("Outputs/cube.gcode")
+    */
     action SetFilamentColor(text color)
         filamentColor = color
     end
 
-    /* Bambu filament ID. If not set, the generic ID for the filament type is used. */
+    /*
+    Bambu filament ID. If not set, the generic ID for the filament type is used.
+
+    Attribute: Parameter id The filament ID, such as "GFA00".
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Printing.Bambu.BambuPackager
+
+        BambuPackager packer
+        packer:SetSettingsTemplate("Templates/bambu-p2s/p2s_project_settings.json")
+        packer:SetFilamentId("GFA00")      // Bambu PLA Basic
+        text archive = packer:Pack("Outputs/cube.gcode")
+    */
     action SetFilamentId(text id)
         filamentId = id
     end
 
-    /* textured_plate, hot_plate, eng_plate, cool_plate or supertack_plate. */
+    /*
+    textured_plate, hot_plate, eng_plate, cool_plate or supertack_plate.
+
+    Attribute: Parameter type The plate.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Printing.Bambu.BambuPackager
+
+        BambuPackager packer
+        packer:SetSettingsTemplate("Templates/bambu-p2s/p2s_project_settings.json")
+        packer:SetBedType("textured_plate")
+        text archive = packer:Pack("Outputs/cube.gcode")
+    */
     action SetBedType(text type)
         bedType = type
     end
 
-    /* If not set (or 0), the layer height is read from the G-code's "Layer height:" comment. */
+    /*
+    If not set (or 0), the layer height is read from the G-code's "Layer height:" comment.
+
+    Attribute: Parameter height The layer height (mm); 0 reads it from the G-code.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Printing.Bambu.BambuPackager
+
+        BambuPackager packer
+        packer:SetSettingsTemplate("Templates/bambu-p2s/p2s_project_settings.json")
+        packer:SetLayerHeight(0.16)
+        text archive = packer:Pack("Outputs/cube.gcode")
+    */
     action SetLayerHeight(number height)
         checker:RequireAtLeast("BambuPackager:SetLayerHeight height", height, 0)
         layerHeight = height
     end
 
     /*
-        Whether Pack prints a timed line after each step (off by default). If
-        a run seems stuck, the step after the last line printed is the slow one.
+    Whether Pack prints a timed line after each step (off by default). If
+    a run seems stuck, the step after the last line printed is the slow one.
+
+    Attribute: Parameter report True to print a line per step.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Printing.Bambu.BambuPackager
+
+        BambuPackager packer
+        packer:SetSettingsTemplate("Templates/bambu-p2s/p2s_project_settings.json")
+        packer:SetReportProgress(true)
+        text archive = packer:Pack("Outputs/cube.gcode")
     */
     action SetReportProgress(boolean report)
         reportProgress = report
     end
 
-    /* Packages gcodePath as gcodePath without ".gcode", plus ".gcode.3mf". Returns the output path. */
+    /*
+    Packages gcodePath as gcodePath without ".gcode", plus ".gcode.3mf". Returns the output path.
+
+    Attribute: Parameter gcodePath The G-code file, written with Bambu extras on.
+    Attribute: Returns The path of the archive written.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Printing.Bambu.BambuPackager
+
+        BambuPackager packer
+        packer:SetSettingsTemplate("Templates/bambu-p2s/p2s_project_settings.json")
+        text archive = packer:Pack("Outputs/cube.gcode")
+        output "Wrote " + archive
+    */
     action Pack(text gcodePath) returns text
         return Pack(gcodePath, WithoutGcodeExtension(gcodePath) + ".gcode.3mf")
     end
 
-    /* Packages gcodePath as outputPath. Returns the output path. */
+    /*
+    Packages gcodePath as outputPath. Returns the output path.
+
+    Attribute: Parameter gcodePath The G-code file, written with Bambu extras on.
+    Attribute: Parameter outputPath Where to write the archive.
+    Attribute: Returns outputPath.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Printing.Bambu.BambuPackager
+
+        BambuPackager packer
+        packer:SetSettingsTemplate("Templates/bambu-p2s/p2s_project_settings.json")
+        text archive = packer:Pack("Outputs/cube.gcode", "Outputs/plates/cube.gcode.3mf")
+    */
     action Pack(text gcodePath, text outputPath) returns text
         warnings:Empty()
         packStartTime = timer:Now()
@@ -205,9 +361,9 @@ class BambuPackager
             end
             checker:RequireFile("Bambu settings template", settingsPath)
         end
-        TextFile files
-
-        text gcode = files:Read(gcodePath)
+        File gcodeFile
+        gcodeFile:SetPath(gcodePath)
+        text gcode = gcodeFile:Read()
         Report("read the G-code (" + gcode:GetSize() + " characters)")
         text top = Beginning(gcode, 2000)
         if not top:Contains("; HEADER_BLOCK_START")
@@ -276,7 +432,6 @@ class BambuPackager
 
         // same entries, same order as Bambu Studio's own export
         ZipWriter zip
-        Hash hash
         zip:Open(outputPath)
         zip:AddText("[Content_Types].xml", ContentTypes())
         RenderThumbnail(zip, 512, colour)
@@ -292,7 +447,7 @@ class BambuPackager
         zip:AddText("Metadata/plate_1.json", PlateJson(colour, height, name))
         zip:AddText("3D/3dmodel.model", Model(version, today))
         zip:AddText("Metadata/project_settings.config", settings)
-        zip:AddText("Metadata/plate_1.gcode.md5", hash:Md5Hex(newGcode))
+        zip:AddMd5("Metadata/plate_1.gcode.md5", newGcode)
         zip:AddText("Metadata/plate_1.gcode", newGcode)
         Report("added the G-code and its MD5")
         zip:AddText("Metadata/_rels/model_settings.config.rels", ModelSettingsRels())
@@ -310,37 +465,134 @@ class BambuPackager
         return outputPath
     end
 
-    /* The print time the last Pack read from the G-code header (s). */
+    /*
+    The print time the last Pack read from the G-code header (s).
+
+    Attribute: Returns The print time the last Pack read from the G-code header (s).
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Printing.Bambu.BambuPackager
+
+        BambuPackager packer
+        packer:SetSettingsTemplate("Templates/bambu-p2s/p2s_project_settings.json")
+        text archive = packer:Pack("Outputs/cube.gcode")
+        output packer:GetPrintSeconds() + " s"
+    */
     action GetPrintSeconds returns integer
         return seconds
     end
 
-    /* The print time as text, such as "1h 2m 3s". */
+    /*
+    The print time as text, such as "1h 2m 3s".
+
+    Attribute: Returns The print time as text, such as "1h 2m 3s".
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Printing.Bambu.BambuPackager
+
+        BambuPackager packer
+        packer:SetSettingsTemplate("Templates/bambu-p2s/p2s_project_settings.json")
+        text archive = packer:Pack("Outputs/cube.gcode")
+        output "Printing takes " + packer:GetPrintTime()
+    */
     action GetPrintTime returns text
         return FormatTime(seconds)
     end
 
-    /* The number of layers the last Pack read from the G-code header. */
+    /*
+    The number of layers the last Pack read from the G-code header.
+
+    Attribute: Returns The number of layers the last Pack read from the G-code header.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Printing.Bambu.BambuPackager
+
+        BambuPackager packer
+        packer:SetSettingsTemplate("Templates/bambu-p2s/p2s_project_settings.json")
+        text archive = packer:Pack("Outputs/cube.gcode")
+        output packer:GetLayerCount() + " layers"
+    */
     action GetLayerCount returns integer
         return layers
     end
 
-    /* The filament the last Pack's G-code extrudes (mm). */
+    /*
+    The filament the last Pack's G-code extrudes (mm).
+
+    Attribute: Returns The filament the last Pack's G-code extrudes (mm).
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Printing.Bambu.BambuPackager
+
+        BambuPackager packer
+        packer:SetSettingsTemplate("Templates/bambu-p2s/p2s_project_settings.json")
+        text archive = packer:Pack("Outputs/cube.gcode")
+        output packer:GetFilamentLength() + " mm of filament"
+    */
     action GetFilamentLength returns number
         return lengthMm
     end
 
-    /* The filament's weight (g), from its length, diameter and type. */
+    /*
+    The filament's weight (g), from its length, diameter and type.
+
+    Attribute: Returns The filament's weight (g), from its length, diameter and type.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Printing.Bambu.BambuPackager
+
+        BambuPackager packer
+        packer:SetSettingsTemplate("Templates/bambu-p2s/p2s_project_settings.json")
+        text archive = packer:Pack("Outputs/cube.gcode")
+        output packer:GetFilamentGrams() + " g of filament"
+    */
     action GetFilamentGrams returns number
         return filamentGrams
     end
 
-    /* The Bambu Studio version the settings template came from. */
+    /*
+    The Bambu Studio version the settings template came from.
+
+    Attribute: Returns The Bambu Studio version the settings template came from.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Printing.Bambu.BambuPackager
+
+        BambuPackager packer
+        packer:SetSettingsTemplate("Templates/bambu-p2s/p2s_project_settings.json")
+        text archive = packer:Pack("Outputs/cube.gcode")
+        output "Settings from Bambu Studio " + packer:GetSettingsVersion()
+    */
     action GetSettingsVersion returns text
         return settingsVersion
     end
 
-    /* Warnings from the last Pack, as sentences. */
+    /*
+    Warnings from the last Pack, as sentences.
+
+    Attribute: Returns Warnings from the last Pack, as sentences.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Printing.Bambu.BambuPackager
+
+        BambuPackager packer
+        packer:SetSettingsTemplate("Templates/bambu-p2s/p2s_project_settings.json")
+        text archive = packer:Pack("Outputs/cube.gcode")
+        Array<text> warnings = packer:GetWarnings()
+        integer i = 0
+        repeat while i < warnings:GetSize()
+            output "warning: " + warnings:Get(i)
+            i = i + 1
+        end
+    */
     action GetWarnings returns Array<text>
         return warnings
     end
@@ -355,9 +607,22 @@ class BambuPackager
     end
 
     /*
-        Reads time, layers, height, filament use, temperatures, first-layer time
-        and XY extrusion segments (for the thumbnail and bounding box) from the
-        G-code. Pack calls this; it is public so the numbers can be inspected.
+    Reads time, layers, height, filament use, temperatures, first-layer time
+    and XY extrusion segments (for the thumbnail and bounding box) from the
+    G-code. Pack calls this; it is public so the numbers can be inspected.
+
+    Attribute: Parameter gcode The G-code text.
+
+    Attribute: Example
+
+        use Libraries.System.File
+        use Libraries.Fabrication.Printing.Bambu.BambuPackager
+
+        File file
+        file:SetPath("Outputs/cube.gcode")
+        BambuPackager packer
+        packer:Scan(file:Read())
+        output packer:GetLayerCount() + " layers, " + packer:GetFilamentLength() + " mm of filament"
     */
     action Scan(text gcode)
         seconds = 0

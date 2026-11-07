@@ -5,7 +5,7 @@ use Libraries.Language.Errors.Error
 use Libraries.Testing.Tester
 use Tests.Data.NumberFormatterTest
 use Tests.Data.JavaScriptObjectNotationTemplateTest
-use Tests.Data.FilePluginTest
+use Tests.Data.ZipTest
 use Tests.Fabrication.ArgumentCheckerTest
 use Tests.Fabrication.Geometry.ContourTest
 use Tests.Fabrication.Geometry.GeometryUtilitiesTest
@@ -69,8 +69,8 @@ class LampreyTests
         RunTest(numberFormatterTest)
         JavaScriptObjectNotationTemplateTest javaScriptObjectNotationTemplateTest
         RunTest(javaScriptObjectNotationTemplateTest)
-        FilePluginTest filePluginTest
-        RunTest(filePluginTest)
+        ZipTest zipTest
+        RunTest(zipTest)
 
         output ""
         output "Fabrication"

@@ -2,7 +2,7 @@ package Libraries.Fabrication.Profiles
 
 use Libraries.Containers.Array
 use Libraries.System.File
-use Libraries.System.TextFile
+use Libraries.System.File
 use Libraries.Data.Formats.JavaScriptObjectNotationTemplate
 use Libraries.Fabrication.ArgumentChecker
 
@@ -57,7 +57,22 @@ class ProfileManager
         lf = lf:GetLineFeed()
     end
 
-    /* Adds a profile and links it to its parent. Stops if the name is empty or taken. */
+    /*
+    Adds a profile and links it to its parent. Stops if the name is empty or taken.
+
+    Attribute: Parameter profile The profile; its name must be new.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Profiles.ProfileManager
+        use Libraries.Fabrication.Profiles.Profile
+
+        ProfileManager profiles
+        Profile mine
+        mine:SetName("my-printer")
+        mine:SetNumber("bedWidth", 235)
+        profiles:Add(mine)
+    */
     action Add(Profile profile)
         if profile = undefined
             alert("Cannot add an undefined profile.")
@@ -72,7 +87,19 @@ class ProfileManager
         LinkParents()
     end
 
-    /* Removes the named profile. Profiles that inherited from it stop inheriting. */
+    /*
+    Removes the named profile. Profiles that inherited from it stop inheriting.
+
+    Attribute: Parameter name The profile's name.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Profiles.ProfileManager
+
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        profiles:Remove("ender3-v2-fine")
+    */
     action Remove(text name)
         integer i = 0
         repeat while i < profiles:GetSize()
@@ -93,20 +120,88 @@ class ProfileManager
         end
     end
 
+    /*
+    The number of profiles loaded.
+
+    Attribute: Returns The number of profiles.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Profiles.ProfileManager
+
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        output profiles:GetSize() + " profiles"
+    */
     action GetSize returns integer
         return profiles:GetSize()
     end
 
-    /* Problems found while loading that didn't stop the load (unknown settings, empty profiles). */
+    /*
+    Problems found while loading that didn't stop the load (unknown settings, empty profiles).
+
+    Attribute: Returns Problems found while loading that didn't stop the load (unknown settings, empty profiles).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Profiles.ProfileManager
+
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        Array<text> warnings = profiles:GetWarnings()
+        integer i = 0
+        repeat while i < warnings:GetSize()
+            output "warning: " + warnings:Get(i)
+            i = i + 1
+        end
+    */
     action GetWarnings returns Array<text>
         return warnings
     end
 
+    /*
+    A profile by position, in the order they were loaded or added.
+
+    Attribute: Parameter index The position, from 0 to GetSize() - 1.
+    Attribute: Returns The profile.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Profiles.ProfileManager
+        use Libraries.Fabrication.Profiles.Profile
+
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        integer i = 0
+        repeat while i < profiles:GetSize()
+            Profile profile = profiles:Get(i)
+            output profile:GetName()
+            i = i + 1
+        end
+    */
     action Get(integer index) returns Profile
         return profiles:Get(index)
     end
 
-    /* The profile with this name, or undefined. */
+    /*
+    The profile with this name, or undefined.
+
+    Attribute: Parameter name The profile's name.
+    Attribute: Returns The profile with this name, or undefined.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Profiles.ProfileManager
+        use Libraries.Fabrication.Profiles.Profile
+
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        Profile maybe = profiles:Find("prusa-mk4")
+        if maybe = undefined
+            output "No such profile."
+        end
+    */
     action Find(text name) returns Profile
         integer i = 0
         repeat while i < profiles:GetSize()
@@ -119,7 +214,21 @@ class ProfileManager
         return undefined
     end
 
-    /* The profile with this name; stops with an alert if there isn't one. */
+    /*
+    The profile with this name; stops with an alert if there isn't one.
+
+    Attribute: Parameter name The profile's name.
+    Attribute: Returns The profile.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Profiles.ProfileManager
+        use Libraries.Fabrication.Profiles.Profile
+
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        Profile p2s = profiles:Require("bambu-p2s")
+    */
     action Require(text name) returns Profile
         Profile found = Find(name)
         if found = undefined
@@ -141,7 +250,23 @@ class ProfileManager
         return found
     end
 
-    /* Makes a new profile that inherits from an existing one, and adds it. */
+    /*
+    Makes a new profile that inherits from an existing one, and adds it.
+
+    Attribute: Parameter parentName The profile to inherit from.
+    Attribute: Parameter newName The new profile's name.
+    Attribute: Returns The new profile, already added.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Profiles.ProfileManager
+        use Libraries.Fabrication.Profiles.Profile
+
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        Profile draft = profiles:Derive("ender3-v2", "ender3-v2-draft")
+        draft:SetNumber("layerHeight", 0.28)
+    */
     action Derive(text parentName, text newName) returns Profile
         Profile parentProfile = Require(parentName)
         Profile child
@@ -151,7 +276,19 @@ class ProfileManager
         return child
     end
 
-    /* Replaces the loaded profiles with the ones in the file. */
+    /*
+    Replaces the loaded profiles with the ones in the file.
+
+    Attribute: Parameter path The profiles JSON file.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Profiles.ProfileManager
+
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        output profiles:GetSize() + " profiles loaded"
+    */
     action Load(text path)
         ArgumentChecker checker
         checker:RequireFile("Profile", path)
@@ -161,19 +298,30 @@ class ProfileManager
     end
 
     /*
-        Adds the profiles in the file to the ones already loaded.
+    Adds the profiles in the file to the ones already loaded.
 
-        The file is read with JavaScriptObjectNotationTemplate (the reader
-        that edits Bambu's settings) rather than JavaScriptObjectNotation,
-        whose Read doesn't parse a nested object handed back as text.
+    The file is read with JavaScriptObjectNotationTemplate (the reader
+    that edits Bambu's settings) rather than JavaScriptObjectNotation,
+    whose Read doesn't parse a nested object handed back as text.
+
+    Attribute: Parameter path The profiles JSON file.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Profiles.ProfileManager
+
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        profiles:Include("Profiles/my-printers.json")
     */
     action Include(text path)
         ArgumentChecker checker
         checker:RequireFile("Profile", path)
-        TextFile files
+        File file
+        file:SetPath(path)
 
         JavaScriptObjectNotationTemplate root
-        root:Load(files:Read(path))
+        root:Load(file:Read())
 
         Array<text> names = root:GetKeys()
         integer i = 0
@@ -226,15 +374,41 @@ class ProfileManager
         LinkParents()
     end
 
-    /* Writes every profile, each with only the settings it sets itself. */
+    /*
+    Writes every profile, each with only the settings it sets itself.
+
+    Attribute: Parameter path Where to write the JSON.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Profiles.ProfileManager
+        use Libraries.Fabrication.Profiles.Profile
+
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        Profile draft = profiles:Derive("ender3-v2", "ender3-v2-draft")
+        draft:SetNumber("layerHeight", 0.28)
+        profiles:Save("Profiles/profiles.json")
+    */
     action Save(text path)
         Save(path, false)
     end
 
     /*
-        Writes every profile. With flatten = true each profile is written with
-        every setting resolved (no "inherits"), which shows the complete set
-        a slice will use.
+    Writes every profile. With flatten = true each profile is written with
+    every setting resolved (no "inherits"), which shows the complete set
+    a slice will use.
+
+    Attribute: Parameter path Where to write the JSON.
+    Attribute: Parameter flatten True to write every setting of every profile.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Profiles.ProfileManager
+
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        profiles:Save("Outputs/every-setting.json", true)
     */
     action Save(text path, boolean flatten)
         if path = ""
@@ -258,9 +432,23 @@ class ProfileManager
     end
 
     /*
-        Checks every profile with Profile:Validate.
-        Returns one sentence per problem, each naming its profile; an empty
-        array means every profile is fine.
+    Checks every profile with Profile:Validate.
+    Returns one sentence per problem, each naming its profile; an empty
+    array means every profile is fine.
+
+    Attribute: Returns One sentence per problem, each naming its profile; empty if every profile is fine.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Profiles.ProfileManager
+
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        Array<text> problems = profiles:ValidateAll()
+        if problems:GetSize() = 0
+            output "Every profile is fine."
+        end
     */
     action ValidateAll returns Array<text>
         Array<text> problems
@@ -279,7 +467,7 @@ class ProfileManager
     end
 
     /* One profile as a JSON object, settings in ProfileSchema order. */
-    action ProfileJson(Profile profile, boolean flatten) returns text
+    private action ProfileJson(Profile profile, boolean flatten) returns text
         text json = "{"
         boolean first = true
         if not flatten and profile:GetInherits() not= ""

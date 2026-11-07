@@ -193,31 +193,106 @@ class TreeSupport
     ContourSimplifier simplifier
     ArgumentChecker checker
 
-    /* The layer height (mm), which turns the angles into per-layer steps. */
+    /*
+    The layer height (mm), which turns the angles into per-layer steps.
+
+    Attribute: Parameter height The layer height (mm), greater than 0.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetLayerHeight(0.16)
+        trees:Generate(outlines, 125)
+    */
     action SetLayerHeight(number height)
         checker:RequirePositive("TreeSupport:SetLayerHeight height", height)
         layerHeight = height
     end
 
-    /* The extrusion width (mm), for the support walls and fill. */
+    /*
+    The extrusion width (mm), for the support walls and fill.
+
+    Attribute: Parameter width The width (mm), greater than 0.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetLineWidth(0.42)
+        trees:Generate(outlines, 100)
+    */
     action SetLineWidth(number width)
         checker:RequirePositive("TreeSupport:SetLineWidth width", width)
         lineWidth = width
     end
 
-    /* Overhangs leaning further than this from vertical get supports (degrees, 0 to 90). */
+    /*
+    Overhangs leaning further than this from vertical get supports (degrees, 0 to 90).
+
+    Attribute: Parameter degrees The angle (degrees, 0 to 90).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetOverhangAngle(50)
+        trees:Generate(outlines, 100)
+    */
     action SetOverhangAngle(number degrees)
         checker:RequireRange("TreeSupport:SetOverhangAngle degrees", degrees, 0, 90)
         supportAngle = degrees
     end
 
-    /* The distance between neighbouring tines (mm). */
+    /*
+    The distance between neighbouring tines (mm).
+
+    Attribute: Parameter spacing The spacing (mm), greater than 0.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetTipSpacing(4.0)
+        trees:Generate(outlines, 100)
+    */
     action SetTipSpacing(number spacing)
         checker:RequirePositive("TreeSupport:SetTipSpacing spacing", spacing)
         tipSpacing = spacing
     end
 
-    /* The steepest lean a branch may take from vertical (degrees, 0 to 89; default 40). */
+    /*
+    The steepest lean a branch may take from vertical (degrees, 0 to 89; default 40).
+
+    Attribute: Parameter degrees The angle (degrees, 0 to 89).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetBranchAngle(40)
+        trees:Generate(outlines, 100)
+    */
     action SetBranchAngle(number degrees)
         checker:RequireRange("TreeSupport:SetBranchAngle degrees", degrees, 0, 89)
         branchAngle = degrees
@@ -228,6 +303,17 @@ class TreeSupport
 
     Attribute: Parameter degrees The growth angle (degrees, 0 to 89).
     Attribute: Parameter maxR The largest branch radius (mm).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetBranchGrowth(5, 4.0)      // thicken 5 degrees, at most 4 mm radius
+        trees:Generate(outlines, 100)
     */
     action SetBranchGrowth(number degrees, number maxR)
         checker:RequireRange("TreeSupport:SetBranchGrowth degrees", degrees, 0, 89)
@@ -242,6 +328,17 @@ class TreeSupport
     Attribute: Parameter branchGap Sideways gap for branches (mm).
     Attribute: Parameter tineGap Sideways gap for tines, which hold up edges (mm).
     Attribute: Parameter topLayers Empty layers between a tip and the model above it.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetGaps(0.8, 0.4, 1)
+        trees:Generate(outlines, 100)
     */
     action SetGaps(number branchGap, number tineGap, integer topLayers)
         checker:RequireAtLeast("TreeSupport:SetGaps branchGap", branchGap, 0)
@@ -252,13 +349,43 @@ class TreeSupport
         topGapLayers = topLayers
     end
 
-    /* Empty layers between a branch and the model surface it rests on. */
+    /*
+    Empty layers between a branch and the model surface it rests on.
+
+    Attribute: Parameter layers The number of layers (0 or more).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetBottomGap(1)
+        trees:Generate(outlines, 100)
+    */
     action SetBottomGap(integer layers)
         checker:RequireAtLeast("TreeSupport:SetBottomGap layers", layers, 0)
         bottomGapLayers = layers
     end
 
-    /* The fill density inside branches (0 for walls only, up to 1). */
+    /*
+    The fill density inside branches (0 for walls only, up to 1).
+
+    Attribute: Parameter value The density, 0 to 1.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetDensity(0.15)
+        trees:Generate(outlines, 100)
+    */
     action SetDensity(number value)
         checker:RequireRange("TreeSupport:SetDensity value", value, 0, 1)
         density = value
@@ -269,6 +396,17 @@ class TreeSupport
 
     Attribute: Parameter layers How many (0 for none).
     Attribute: Parameter value Their fill density (0 to 1).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetRoof(2, 0.8)      // two dense layers under the model
+        trees:Generate(outlines, 100)
     */
     action SetRoof(integer layers, number value)
         checker:RequireAtLeast("TreeSupport:SetRoof layers", layers, 0)
@@ -282,6 +420,17 @@ class TreeSupport
 
     Attribute: Parameter flare The extra radius on the first layer (mm).
     Attribute: Parameter layers How many layers it narrows over.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetBase(1.5, 3)      // 1.5 mm wider on the bed, narrowing over 3 layers
+        trees:Generate(outlines, 100)
     */
     action SetBase(number flare, integer layers)
         checker:RequireAtLeast("TreeSupport:SetBase flare", flare, 0)
@@ -293,6 +442,20 @@ class TreeSupport
     /*
     Contact tip diameter (mm) and how far it runs straight down before it
     may lean (mm). Smaller tips break off cleaner and mark less.
+
+    Attribute: Parameter diameter The tip diameter (mm), greater than 0.
+    Attribute: Parameter length The straight length (mm), 0 or more.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetTip(0.8, 1.0)
+        trees:Generate(outlines, 100)
     */
     action SetTip(number diameter, number length)
         checker:RequirePositive("TreeSupport:SetTip diameter", diameter)
@@ -305,6 +468,20 @@ class TreeSupport
     Branches rest on the model only where it's at least `width` mm wide
     under them; they look `lookAhead` mm down to steer off narrower parts in
     time. width 0 = rest anywhere.
+
+    Attribute: Parameter width The narrowest place a branch may rest (mm); 0 lets it rest anywhere.
+    Attribute: Parameter lookAhead How far below to look for narrow parts (mm).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetRestRules(3.0, 5.0)
+        trees:Generate(outlines, 100)
     */
     action SetRestRules(number width, number lookAhead)
         checker:RequireAtLeast("TreeSupport:SetRestRules width", width, 0)
@@ -313,59 +490,226 @@ class TreeSupport
         avoidDistance = lookAhead
     end
 
-    /* true (the default): route branches around the model to the bed where possible. */
+    /*
+    true (the default): route branches around the model to the bed where possible.
+
+    Attribute: Parameter enabled True to route branches to the bed.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetBedRouting(false)      // branches may rest on the model
+        trees:Generate(outlines, 100)
+    */
     action SetBedRouting(boolean enabled)
         bedRouting = enabled
     end
 
-    /* The longest span (mm) left to bridge instead of supported; 0 = off. */
+    /*
+    The longest span (mm) left to bridge instead of supported; 0 = off.
+
+    Attribute: Parameter maxLength The longest bridge (mm); 0 turns bridging off.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetBridging(5.0)      // spans up to 5 mm bridge unsupported
+        trees:Generate(outlines, 100)
+    */
     action SetBridging(number maxLength)
         checker:RequireAtLeast("TreeSupport:SetBridging maxLength", maxLength, 0)
         maxBridge = maxLength
     end
 
-    /* Overhang islands smaller than this (mm^2) get no tines; 0 = off. */
+    /*
+    Overhang islands smaller than this (mm^2) get no tines; 0 = off.
+
+    Attribute: Parameter area The smallest overhang island supported (mm^2); 0 supports all.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetMinOverhangArea(1.0)
+        trees:Generate(outlines, 100)
+    */
     action SetMinOverhangArea(number area)
         checker:RequireAtLeast("TreeSupport:SetMinOverhangArea area", area, 0)
         minOverhangArea = area
     end
 
-    /* The support's outline on each layer from the last Generate (for a brim to go around). */
+    /*
+    The support's outline on each layer from the last Generate (for a brim to go around).
+
+    Attribute: Returns The support's outline on each layer from the last Generate (for a brim to go around).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:Generate(outlines, 100)
+        Array<Contour> areas = trees:GetAreas()
+        output areas:GetSize() + " support outlines"
+    */
     action GetAreas returns Array<Contour>
         return areas
     end
 
-    /* The support walls (closed) and fill lines (open) to print, for PathOrderer:SetSupport. */
+    /*
+    The support walls (closed) and fill lines (open) to print, for PathOrderer:SetSupport.
+
+    Attribute: Returns The support walls (closed) and fill lines (open) to print, for PathOrderer:SetSupport.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:Generate(outlines, 100)
+        Array<Contour> paths = trees:GetPaths()
+        output paths:GetSize() + " support paths to print"
+    */
     action GetPaths returns Array<Contour>
         return paths
     end
 
-    /* How many tines the last Generate seeded. */
+    /*
+    How many tines the last Generate seeded.
+
+    Attribute: Returns How many tines the last Generate seeded.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:Generate(outlines, 100)
+        output trees:GetTipCount() + " tines"
+    */
     action GetTipCount returns integer
         return tipX:GetSize()
     end
 
-    /* How many tines had no room next to the model and were dropped. */
+    /*
+    How many tines had no room next to the model and were dropped.
+
+    Attribute: Returns How many tines had no room next to the model and were dropped.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:Generate(outlines, 100)
+        output trees:GetDroppedTips() + " tines had no room"
+    */
     action GetDroppedTips returns integer
         return droppedTips
     end
 
-    /* How many trunks reached the bed. */
+    /*
+    How many trunks reached the bed.
+
+    Attribute: Returns How many trunks reached the bed.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:Generate(outlines, 100)
+        output trees:GetReachedBed() + " trunks reach the bed"
+    */
     action GetReachedBed returns integer
         return reachedBed
     end
 
-    /* How many branches came to rest on the model instead. */
+    /*
+    How many branches came to rest on the model instead.
+
+    Attribute: Returns How many branches came to rest on the model instead.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:Generate(outlines, 100)
+        output trees:GetRestedOnModel() + " branches rest on the model"
+    */
     action GetRestedOnModel returns integer
         return restedOnModel
     end
 
-    /* How many tine spots the last Generate skipped because the overhang could bridge. */
+    /*
+    How many tine spots the last Generate skipped because the overhang could bridge.
+
+    Attribute: Returns How many tine spots the last Generate skipped because the overhang could bridge.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:Generate(outlines, 100)
+        output trees:GetSkippedBridgeCount() + " spots left to bridge"
+    */
     action GetSkippedBridgeCount returns integer
         return skippedBridges
     end
 
-    /* How many tine spots the last Generate skipped for lying in a tiny overhang island. */
+    /*
+    How many tine spots the last Generate skipped for lying in a tiny overhang island.
+
+    Attribute: Returns How many tine spots the last Generate skipped for lying in a tiny overhang island.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:Generate(outlines, 100)
+        output trees:GetSkippedSmallCount() + " spots in tiny islands"
+    */
     action GetSkippedSmallCount returns integer
         return skippedSmall
     end
@@ -376,6 +720,19 @@ class TreeSupport
 
     Attribute: Parameter contours The oriented outlines from ContourGenerator:Build.
     Attribute: Parameter planeCount The number of planes sliced.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetLayerHeight(0.2)
+        trees:SetOverhangAngle(50)
+        trees:Generate(outlines, 100)
+        output trees:GetTipCount() + " tines, " + trees:GetReachedBed() + " reach the bed"
     */
     action Generate(Array<Contour> contours, integer planeCount)
         areas:Empty()

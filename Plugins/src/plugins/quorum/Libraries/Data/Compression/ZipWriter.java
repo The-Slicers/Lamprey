@@ -6,6 +6,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.zip.ZipOutputStream;
@@ -13,8 +15,9 @@ import java.util.zip.ZipEntry;
 import javax.imageio.ImageIO;
 
 /**
- * Java side of Libraries.Data.Compression.ZipWriter. Uses only java.util.zip
- * and javax.imageio, which are part of every Java runtime.
+ * Java side of Libraries.Data.Compression.ZipWriter. Uses only java.util.zip,
+ * javax.imageio and java.security.MessageDigest, which are part of every Java
+ * runtime.
  */
 public class ZipWriter {
     public java.lang.Object me_ = null;
@@ -76,6 +79,19 @@ public class ZipWriter {
                 + ", which has not been added to " + archivePath + " yet");
         }
         addBytes(entryName, bytes);
+    }
+
+    public void AddMd5(String entryName, String content) {
+        try {
+            byte[] digest = MessageDigest.getInstance("MD5").digest(content.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(32);
+            for (byte b : digest) {
+                hex.append(String.format("%02X", b & 0xFF));
+            }
+            addBytes(entryName, hex.toString().getBytes(StandardCharsets.US_ASCII));
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("ZipWriter: this Java runtime has no MD5 support", e);
+        }
     }
 
     public void Close() {

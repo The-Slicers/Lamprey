@@ -5,7 +5,7 @@ use Libraries.Game.Graphics.Models.Data.ModelData
 use Libraries.Fabrication.SliceJob
 use Libraries.Fabrication.Profiles.Profile
 use Libraries.Fabrication.Profiles.ProfileManager
-use Libraries.System.TextFile
+use Libraries.System.File
 use Tests.LampreyTest
 use Tests.TestModels
 use Tests.TestFiles
@@ -104,8 +104,9 @@ class SliceJobTest is LampreyTest
         ExpectText(archive, files:Path("slice/p2s-archive.gcode.3mf"), "Run returns the archive")
         ZipReader zip
         ExpectTrue(zip:HasEntry(archive, "Metadata/plate_1.gcode"), "the archive holds the G-code")
-        TextFile file
-        text written = file:Read(gcodePath)
+        File file
+        file:SetPath(gcodePath)
+        text written = file:Read()
         ExpectTrue(written:StartsWith("; HEADER_BLOCK_START"), "the G-code has Bambu's header")
     end
 

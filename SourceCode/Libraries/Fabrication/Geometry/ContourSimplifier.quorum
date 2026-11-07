@@ -37,6 +37,20 @@ class ContourSimplifier
 
     Attribute: Parameter contour The contour to simplify.
     Attribute: Parameter tolerance How far (mm) the path may move.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Geometry.ContourSimplifier
+
+        Contour edge
+        edge:AddPoint(0, 0)
+        edge:AddPoint(5, 0.001)
+        edge:AddPoint(10, 0)
+        edge:AddPoint(10, 10)
+        ContourSimplifier simplifier
+        simplifier:Simplify(edge, 0.01)
+        output edge:GetSize()       // 3: the nearly straight point is gone
     */
     action Simplify(Contour contour, number tolerance)
         integer n = contour:GetSize()
@@ -77,8 +91,22 @@ class ContourSimplifier
 
     Attribute: Parameter loop The loop to simplify (not changed).
     Attribute: Parameter tolerance How far (mm) the outline may move.
-
     Attribute: Returns A new closed loop on the same plane, or undefined if fewer than 3 points remain or its area is below tolerance squared.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Geometry.ContourSimplifier
+
+        Contour sliver
+        sliver:AddPoint(0, 0)
+        sliver:AddPoint(10, 0)
+        sliver:AddPoint(10, 0.001)
+        sliver:AddPoint(0, 0.001)
+        sliver:closed = true
+        ContourSimplifier simplifier
+        Contour kept = simplifier:SimplifiedLoop(sliver, 0.1)
+        output kept = undefined        // true: too thin to keep
     */
     action SimplifiedLoop(Contour loop, number tolerance) returns Contour
         integer n = loop:GetSize()

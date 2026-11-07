@@ -53,6 +53,25 @@ class ConvexHull
 
     Attribute: Parameter xs The x coordinates.
     Attribute: Parameter ys The y coordinates, as many as xs.
+
+    Attribute: Example
+
+        use Libraries.Containers.Number64BitArray
+        use Libraries.Fabrication.Geometry.ConvexHull
+
+        Number64BitArray xs
+        Number64BitArray ys
+        xs:SetSize(5)
+        ys:SetSize(5)
+        xs:Set(1, 10)
+        xs:Set(2, 10)
+        ys:Set(2, 10)
+        ys:Set(3, 10)
+        xs:Set(4, 5)
+        ys:Set(4, 5)          // inside the square of the other four
+        ConvexHull hull
+        hull:Compute(xs, ys)
+        output hull:GetSize()       // 4
     */
     action Compute(Number64BitArray xs, Number64BitArray ys)
         if xs:GetSize() not= ys:GetSize()
@@ -135,17 +154,73 @@ class ConvexHull
         end
     end
 
-    /* The number of points on the hull found by the last Compute. */
+    /*
+    The number of points on the hull found by the last Compute.
+
+    Attribute: Returns The number of points on the hull found by the last Compute.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.ConvexHull
+
+        ConvexHull hull
+        output hull:GetSize()       // 0 before Compute
+    */
     action GetSize returns integer
         return hullX:GetSize()
     end
 
-    /* The hull's x coordinates, counter-clockwise. */
+    /*
+    The hull's x coordinates, counter-clockwise.
+
+    Attribute: Returns The hull's x coordinates, counter-clockwise.
+
+    Attribute: Example
+
+        use Libraries.Containers.Number64BitArray
+        use Libraries.Fabrication.Geometry.ConvexHull
+
+        Number64BitArray xs
+        Number64BitArray ys
+        xs:SetSize(3)
+        ys:SetSize(3)
+        xs:Set(1, 4)
+        ys:Set(2, 3)
+        ConvexHull hull
+        hull:Compute(xs, ys)
+        Number64BitArray hullX = hull:GetConvexX()
+        Number64BitArray hullY = hull:GetConvexY()
+        integer i = 0
+        repeat while i < hullX:GetSize()
+            output hullX:Get(i) + ", " + hullY:Get(i)
+            i = i + 1
+        end
+    */
     action GetConvexX returns Number64BitArray
         return hullX
     end
 
-    /* The hull's y coordinates, counter-clockwise. */
+    /*
+    The hull's y coordinates, counter-clockwise.
+
+    Attribute: Returns The hull's y coordinates, counter-clockwise.
+
+    Attribute: Example
+
+        use Libraries.Containers.Number64BitArray
+        use Libraries.Fabrication.Geometry.ConvexHull
+
+        Number64BitArray xs
+        Number64BitArray ys
+        xs:SetSize(3)
+        ys:SetSize(3)
+        xs:Set(1, 4)
+        ys:Set(2, 3)
+        ConvexHull hull
+        hull:Compute(xs, ys)
+        Number64BitArray hullY = hull:GetConvexY()
+        output hullY:Get(0)         // 0: the hull starts at the lowest left point
+    */
     action GetConvexY returns Number64BitArray
         return hullY
     end

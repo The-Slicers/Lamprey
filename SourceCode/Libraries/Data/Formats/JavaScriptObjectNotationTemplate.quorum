@@ -57,6 +57,19 @@ class JavaScriptObjectNotationTemplate
     isn't a JSON object.
 
     Attribute: Parameter json The JSON text.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.System.File
+        use Libraries.Data.Formats.JavaScriptObjectNotationTemplate
+
+        File file
+        file:SetPath("project_settings.json")
+        JavaScriptObjectNotationTemplate settings
+        settings:Load(file:Read())
+        Array<text> keys = settings:GetKeys()
+        output keys:GetSize() + " settings"
     */
     action Load(text json)
         source = json
@@ -115,6 +128,19 @@ class JavaScriptObjectNotationTemplate
     Every top-level key, in file order.
 
     Attribute: Returns A new array of the keys.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.System.File
+        use Libraries.Data.Formats.JavaScriptObjectNotationTemplate
+
+        File file
+        file:SetPath("project_settings.json")
+        JavaScriptObjectNotationTemplate settings
+        settings:Load(file:Read())
+        Array<text> keys = settings:GetKeys()
+        output "The first setting is " + keys:Get(0)
     */
     action GetKeys returns Array<text>
         return keys:CopyToArray()
@@ -124,8 +150,20 @@ class JavaScriptObjectNotationTemplate
     Checks whether the object has a top-level key.
 
     Attribute: Parameter key The key to look for.
-
     Attribute: Returns True if the key exists.
+
+    Attribute: Example
+
+        use Libraries.System.File
+        use Libraries.Data.Formats.JavaScriptObjectNotationTemplate
+
+        File file
+        file:SetPath("project_settings.json")
+        JavaScriptObjectNotationTemplate settings
+        settings:Load(file:Read())
+        if not settings:Has("layer_height")
+            output "This isn't a print settings file."
+        end
     */
     action Has(text key) returns boolean
         return Find(key) >= 0
@@ -138,8 +176,18 @@ class JavaScriptObjectNotationTemplate
 
     Attribute: Parameter key The key to read.
     Attribute: Parameter fallback What to return if the key is missing (or a list has no string item).
-
     Attribute: Returns The value, or the fallback.
+
+    Attribute: Example
+
+        use Libraries.System.File
+        use Libraries.Data.Formats.JavaScriptObjectNotationTemplate
+
+        File file
+        file:SetPath("project_settings.json")
+        JavaScriptObjectNotationTemplate settings
+        settings:Load(file:Read())
+        output "Layer height: " + settings:GetText("layer_height", "0.2")
     */
     action GetText(text key, text fallback) returns text
         integer k = Find(key)
@@ -168,8 +216,18 @@ class JavaScriptObjectNotationTemplate
     The number of items in a list value.
 
     Attribute: Parameter key The key to count.
-
     Attribute: Returns The list's length, 1 for a single value, 0 if the key is missing.
+
+    Attribute: Example
+
+        use Libraries.System.File
+        use Libraries.Data.Formats.JavaScriptObjectNotationTemplate
+
+        File file
+        file:SetPath("project_settings.json")
+        JavaScriptObjectNotationTemplate settings
+        settings:Load(file:Read())
+        output settings:Count("filament_colour") + " filaments"
     */
     action Count(text key) returns integer
         integer k = Find(key)
@@ -227,6 +285,18 @@ class JavaScriptObjectNotationTemplate
 
     Attribute: Parameter key The key to change.
     Attribute: Parameter value The new value, written as a JSON string.
+
+    Attribute: Example
+
+        use Libraries.System.File
+        use Libraries.Data.Formats.JavaScriptObjectNotationTemplate
+
+        File file
+        file:SetPath("project_settings.json")
+        JavaScriptObjectNotationTemplate settings
+        settings:Load(file:Read())
+        settings:Fill("layer_height", "0.16")
+        file:Write(settings:ToText())
     */
     action Fill(text key, text value)
         integer k = Find(key)
@@ -251,6 +321,20 @@ class JavaScriptObjectNotationTemplate
 
     Attribute: Parameter key The key to change.
     Attribute: Parameter items The new list items.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.System.File
+        use Libraries.Data.Formats.JavaScriptObjectNotationTemplate
+
+        File file
+        file:SetPath("project_settings.json")
+        JavaScriptObjectNotationTemplate settings
+        settings:Load(file:Read())
+        Array<text> colours
+        colours:Add("#FF8000")
+        settings:FillList("filament_colour", colours)
     */
     action FillList(text key, Array<text> items)
         integer k = Find(key)
@@ -265,6 +349,17 @@ class JavaScriptObjectNotationTemplate
 
     Attribute: Parameter key The key to set.
     Attribute: Parameter value The new value, written as a JSON string.
+
+    Attribute: Example
+
+        use Libraries.System.File
+        use Libraries.Data.Formats.JavaScriptObjectNotationTemplate
+
+        File file
+        file:SetPath("project_settings.json")
+        JavaScriptObjectNotationTemplate settings
+        settings:Load(file:Read())
+        settings:Put("print_settings_id", "0.20mm Standard")
     */
     action Put(text key, text value)
         integer k = Find(key)
@@ -279,6 +374,20 @@ class JavaScriptObjectNotationTemplate
     The JSON text with every change applied, ending in a line feed.
 
     Attribute: Returns The edited JSON text.
+
+    Attribute: Example
+
+        use Libraries.System.File
+        use Libraries.Data.Formats.JavaScriptObjectNotationTemplate
+
+        File file
+        file:SetPath("project_settings.json")
+        JavaScriptObjectNotationTemplate settings
+        settings:Load(file:Read())
+        settings:Fill("layer_height", "0.16")
+        File copy
+        copy:SetPath("project_settings_016.json")
+        copy:Write(settings:ToText())
     */
     action ToText returns text
         text result = ""

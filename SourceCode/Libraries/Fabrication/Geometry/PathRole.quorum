@@ -37,8 +37,15 @@ class PathRole
     Checks whether a role is part of the support.
 
     Attribute: Parameter role One of the constants.
-
     Attribute: Returns True for SUPPORT_WALL and SUPPORT_FILL.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.PathRole
+
+        PathRole roles
+        output roles:IsSupport(roles:SUPPORT_FILL)     // true
+        output roles:IsSupport(roles:INFILL)           // false
     */
     action IsSupport(integer role) returns boolean
         return role = SUPPORT_WALL or role = SUPPORT_FILL
@@ -48,8 +55,14 @@ class PathRole
     The feature name G-code previewers colour by (Cura's ;TYPE: names).
 
     Attribute: Parameter role One of the constants.
-
     Attribute: Returns The name; "FILL" for sparse infill and for anything unknown.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.PathRole
+
+        PathRole roles
+        output roles:GetFeatureName(roles:OUTER_WALL)     // WALL-OUTER
     */
     action GetFeatureName(integer role) returns text
         if role = OUTER_WALL

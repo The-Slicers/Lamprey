@@ -1,9 +1,26 @@
 package Libraries.Data.Compression
 
+use Libraries.Containers.Array
+use Libraries.Containers.ByteArray
+use Libraries.System.File
+use Libraries.System.BinaryFileReader
+use Libraries.Language.Support.TextBuilder
+
 /*
-The ZipReader class reads single entries of a ZIP archive (a .3mf file is a
-ZIP archive) without unpacking it, through the plugin
-plugins.quorum.Libraries.Data.Compression.ZipReader (Plugins/src).
+The ZipReader class lists and reads the entries of a ZIP archive (a .3mf
+file is a ZIP archive) in memory, with the standard library alone (no Java
+plugin, and nothing is unpacked to disk):
+
+- the archive is read with BinaryFileReader, and the entry names, sizes and
+  positions come from its central directory;
+- a stored entry's bytes are used as they are; a deflated entry (method 8)
+  is inflated with ByteArray:Decompress, which expects zlib data, so the
+  two-byte zlib header (120, 156) is put in front of the raw deflate data;
+- the bytes are decoded as UTF-8 (an invalid sequence becomes U+FFFD).
+
+Entry names are read as single bytes, which is right for the plain ASCII
+names .3mf archives use. Encrypted entries and archives over 2 GB aren't
+read.
 
 Attribute: Example
 
@@ -19,25 +36,324 @@ Attribute: Example
     end
 */
 class ZipReader
+    // the archive last read and its central directory, entry by entry
+    ByteArray bytes = undefined
+    text where = ""
+    Array<text> names
+    Array<integer> flags
+    Array<integer> methods
+    Array<integer> compressedSizes
+    Array<integer> localOffsets
+
     /*
-    Checks whether an archive has an entry. A missing archive has no entries;
-    a file that is not a ZIP archive stops with an error.
+    Checks whether an archive has an entry. A missing archive has no
+    entries; a file that is not a ZIP archive stops with an error.
 
     Attribute: Parameter zipPath The archive.
     Attribute: Parameter entryName The entry to look for.
-
     Attribute: Returns True if the entry exists.
+
+    Attribute: Example
+
+        use Libraries.Data.Compression.ZipReader
+
+        ZipReader zip
+        if zip:HasEntry("print.gcode.3mf", "Metadata/plate_1.gcode")
+            output "The archive holds a plate's G-code."
+        end
     */
-    system action HasEntry(text zipPath, text entryName) returns boolean
+    action HasEntry(text zipPath, text entryName) returns boolean
+        File archive
+        archive:SetPath(zipPath)
+        if not archive:IsFile()
+            return false
+        end
+        Load(zipPath)
+        return IndexOf(entryName) >= 0
+    end
+
+    /*
+    The names of the archive's entries, in the order they are stored.
+    Folder entries end with "/". Stops with an error naming the archive if
+    it is missing or is not a ZIP archive.
+
+    Attribute: Parameter zipPath The archive.
+    Attribute: Returns The entry names.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Data.Compression.ZipReader
+
+        ZipReader zip
+        Array<text> names = zip:GetEntries("print.gcode.3mf")
+        integer i = 0
+        repeat while i < names:GetSize()
+            output names:Get(i)
+            i = i + 1
+        end
+    */
+    action GetEntries(text zipPath) returns Array<text>
+        Load(zipPath)
+        Array<text> copy
+        integer i = 0
+        repeat while i < names:GetSize()
+            copy:Add(names:Get(i))
+            i = i + 1
+        end
+        return copy
+    end
 
     /*
     Reads one entry as UTF-8 text. Stops with an error naming the archive if
-    it or the entry is missing.
+    it or the entry is missing, or the entry can't be read.
 
     Attribute: Parameter zipPath The archive.
     Attribute: Parameter entryName The entry to read.
-
     Attribute: Returns The entry's text.
+
+    Attribute: Example
+
+        use Libraries.Data.Compression.ZipReader
+
+        ZipReader zip
+        text settings = zip:ReadText("print.gcode.3mf", "Metadata/project_settings.config")
+        output settings:GetSize() + " characters of settings"
     */
-    system action ReadText(text zipPath, text entryName) returns text
+    action ReadText(text zipPath, text entryName) returns text
+        Load(zipPath)
+        integer index = IndexOf(entryName)
+        if index < 0
+            alert("ZipReader: " + zipPath + " has no entry named " + entryName + ".")
+        end
+        if flags:Get(index) mod 2 = 1
+            alert("ZipReader: " + entryName + " in " + where + " is encrypted.")
+        end
+
+        integer method = methods:Get(index)
+        if method not= 0 and method not= 8
+            alert("ZipReader: " + entryName + " in " + where + " uses compression method " + method
+                + "; only stored (0) and deflated (8) entries can be read.")
+        end
+
+        integer local = localOffsets:Get(index)
+        if local < 0 or local + 30 > bytes:GetSize()
+            alert("ZipReader: " + where + " is damaged: " + entryName + "'s local header is past the end of the file.")
+        end
+        if Byte(bytes, local) not= 80 or Byte(bytes, local + 1) not= 75 or Byte(bytes, local + 2) not= 3 or Byte(bytes, local + 3) not= 4
+            alert("ZipReader: " + where + " is damaged: " + entryName + " has no local header.")
+        end
+        integer start = local + 30 + TwoBytes(bytes, local + 26) + TwoBytes(bytes, local + 28)
+        integer size = compressedSizes:Get(index)
+        if size < 0 or start + size > bytes:GetSize()
+            alert("ZipReader: " + where + " is damaged: " + entryName + " runs past the end of the file.")
+        end
+
+        if method = 0
+            return Utf8(Slice(start, size, false))
+        end
+        ByteArray packed = Slice(start, size, true)
+        ByteArray unpacked = packed:Decompress()
+        if unpacked = undefined
+            alert("ZipReader: " + entryName + " in " + where + " could not be inflated (its data is damaged).")
+        end
+        return Utf8(unpacked)
+    end
+
+    /* Reads the archive and its central directory. */
+    private action Load(text zipPath)
+        File archive
+        archive:SetPath(zipPath)
+        if not archive:IsFile()
+            alert("ZipReader: the archive " + zipPath + " was not found (looked for " + archive:GetAbsolutePath() + ").")
+        end
+        where = archive:GetAbsolutePath()
+        BinaryFileReader reader
+        reader:OpenForRead(archive)
+        bytes = reader:ReadBytes()
+        if bytes = undefined
+            alert("ZipReader: could not read " + where + ".")
+        end
+        ReadDirectory()
+    end
+
+    /*
+    The end of central directory record (signature PK 5 6) is in the last
+    22 bytes plus the archive comment; it gives the number of entries and
+    where the directory starts. Each directory header (signature PK 1 2)
+    has the flags at byte 8, the method at 10, the compressed size at 20,
+    the name's length at 28, the extra field's at 30, the comment's at 32,
+    the local header's position at 42, and the name from byte 46.
+    */
+    private action ReadDirectory
+        names:Empty()
+        flags:Empty()
+        methods:Empty()
+        compressedSizes:Empty()
+        localOffsets:Empty()
+
+        integer size = bytes:GetSize()
+        integer record = -1
+        integer p = size - 22
+        integer lowest = size - 22 - 65535
+        if lowest < 0
+            lowest = 0
+        end
+        repeat while p >= lowest and record = -1
+            if Byte(bytes, p) = 80 and Byte(bytes, p + 1) = 75 and Byte(bytes, p + 2) = 5 and Byte(bytes, p + 3) = 6
+                record = p
+            end
+            p = p - 1
+        end
+        if record = -1
+            alert("ZipReader: " + where + " is not a ZIP archive (it has no end of central directory record).")
+        end
+
+        integer count = TwoBytes(bytes, record + 10)
+        integer offset = FourBytes(bytes, record + 16)
+        integer i = 0
+        repeat while i < count
+            if offset < 0 or offset + 46 > size
+                alert("ZipReader: " + where + " is damaged: entry " + i + " of " + count + " is past the end of the file.")
+            end
+            if Byte(bytes, offset) not= 80 or Byte(bytes, offset + 1) not= 75 or Byte(bytes, offset + 2) not= 1 or Byte(bytes, offset + 3) not= 2
+                alert("ZipReader: " + where + " is damaged: entry " + i + " of " + count + " has no directory header.")
+            end
+            integer nameLength = TwoBytes(bytes, offset + 28)
+            integer extraLength = TwoBytes(bytes, offset + 30)
+            integer commentLength = TwoBytes(bytes, offset + 32)
+            if offset + 46 + nameLength > size
+                alert("ZipReader: " + where + " is damaged: entry " + i + "'s name is past the end of the file.")
+            end
+            text name = ""
+            integer k = 0
+            repeat while k < nameLength
+                name = name + bytes:CharacterFromByte(Byte(bytes, offset + 46 + k))
+                k = k + 1
+            end
+            names:Add(name)
+            flags:Add(TwoBytes(bytes, offset + 8))
+            methods:Add(TwoBytes(bytes, offset + 10))
+            compressedSizes:Add(FourBytes(bytes, offset + 20))
+            localOffsets:Add(FourBytes(bytes, offset + 42))
+            offset = offset + 46 + nameLength + extraLength + commentLength
+            i = i + 1
+        end
+    end
+
+    private action IndexOf(text name) returns integer
+        integer i = 0
+        repeat while i < names:GetSize()
+            if names:Get(i) = name
+                return i
+            end
+            i = i + 1
+        end
+        return -1
+    end
+
+    /* A copy of size bytes from start, with the zlib header in front if asked. */
+    private action Slice(integer start, integer size, boolean zlibHeader) returns ByteArray
+        ByteArray part
+        integer offset = 0
+        if zlibHeader
+            offset = 2
+        end
+        part:SetSize(size + offset)
+        if zlibHeader
+            part:Set(0, 120)
+            part:Set(1, 156)
+        end
+        integer i = 0
+        repeat while i < size
+            part:Set(offset + i, bytes:Get(start + i))
+            i = i + 1
+        end
+        return part
+    end
+
+    /* Decodes UTF-8; an invalid or cut-off sequence becomes U+FFFD. */
+    private action Utf8(ByteArray data) returns text
+        TextBuilder builder
+        integer size = data:GetSize()
+        builder:SetMaxSize(size)
+        integer i = 0
+        repeat while i < size
+            integer first = Byte(data, i)
+            integer length = 1
+            integer code = first
+            if first >= 240 and first < 248
+                length = 4
+                code = first - 240
+            elseif first >= 224 and first < 240
+                length = 3
+                code = first - 224
+            elseif first >= 192 and first < 224
+                length = 2
+                code = first - 192
+            elseif first >= 128
+                code = 65533
+            end
+            if length > 1
+                if i + length > size
+                    code = 65533
+                    length = 1
+                else
+                    boolean valid = true
+                    integer k = 1
+                    repeat while k < length and valid
+                        integer next = Byte(data, i + k)
+                        if next >= 128 and next < 192
+                            code = code * 64 + next - 128
+                        else
+                            valid = false
+                        end
+                        k = k + 1
+                    end
+                    if not valid
+                        code = 65533
+                        length = 1
+                    elseif code > 1114111
+                        code = 65533
+                    end
+                end
+            end
+            builder:Append(Character(data, code))
+            i = i + length
+        end
+        return builder:ToText()
+    end
+
+    /* The text of one Unicode code point (two UTF-16 units above U+FFFF). */
+    private action Character(ByteArray data, integer code) returns text
+        if code < 128
+            return data:CharacterFromByte(code)
+        elseif code < 65536
+            return data:CharacterFromTwoBytes(code / 256, code mod 256)
+        end
+        integer value = code - 65536
+        integer high = 55296 + value / 1024
+        integer low = 56320 + value mod 1024
+        return data:CharacterFromTwoBytes(high / 256, high mod 256) + data:CharacterFromTwoBytes(low / 256, low mod 256)
+    end
+
+    /* The byte at a location, 0 to 255. */
+    private action Byte(ByteArray data, integer location) returns integer
+        integer value = data:Get(location)
+        if value < 0
+            value = value + 256
+        end
+        return value
+    end
+
+    /* A little-endian 16-bit number. */
+    private action TwoBytes(ByteArray data, integer location) returns integer
+        return Byte(data, location) + 256 * Byte(data, location + 1)
+    end
+
+    /* A little-endian 32-bit number (archives under 2 GB fit in an integer). */
+    private action FourBytes(ByteArray data, integer location) returns integer
+        return Byte(data, location) + 256 * Byte(data, location + 1) + 65536 * Byte(data, location + 2)
+            + 16777216 * Byte(data, location + 3)
+    end
 end

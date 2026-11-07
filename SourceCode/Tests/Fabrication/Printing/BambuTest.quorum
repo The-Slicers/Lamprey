@@ -1,7 +1,6 @@
 package Tests.Fabrication.Printing
 
 use Libraries.Containers.Array
-use Libraries.Data.Hash
 use Libraries.Data.Compression.ZipReader
 use Libraries.Data.Formats.JavaScriptObjectNotationTemplate
 use Libraries.Fabrication.Geometry.Contour
@@ -77,9 +76,8 @@ class BambuTest is LampreyTest
             i = i + 1
         end
 
-        Hash hash
         text plateGcode = zip:ReadText(archive, "Metadata/plate_1.gcode")
-        ExpectText(zip:ReadText(archive, "Metadata/plate_1.gcode.md5"), hash:Md5Hex(plateGcode), "the MD5 matches the G-code inside")
+        ExpectText(zip:ReadText(archive, "Metadata/plate_1.gcode.md5"), files:Md5(plateGcode), "the MD5 matches the G-code inside")
         ExpectContains(plateGcode, "; total filament weight [g] :", "the header block is rewritten with the filament use")
 
         JavaScriptObjectNotationTemplate settings

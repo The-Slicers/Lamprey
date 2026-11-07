@@ -78,12 +78,57 @@ class PolygonOperations
 
     integer brokenChain = 0
 
-    /* How many loops the last Resolve dropped because their pieces didn't chain into a loop (degenerate input). */
+    /*
+    How many loops the last Resolve dropped because their pieces didn't chain into a loop (degenerate input).
+
+    Attribute: Returns How many loops the last Resolve dropped because their pieces didn't chain into a loop (degenerate input).
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.PolygonOperations
+
+        PolygonOperations ops
+        output ops:GetBrokenChains()        // 0 until a Resolve meets degenerate input
+    */
     action GetBrokenChains returns integer
         return brokenChain
     end
 
-    /* The area covered by a or b (or both), on the given plane. */
+    /*
+    The area covered by a or b (or both), on the given plane.
+
+    Attribute: Parameter a The first set of closed loops.
+    Attribute: Parameter b The second set of closed loops.
+    Attribute: Parameter planeIndex The plane the result is on.
+    Attribute: Returns Counter-clockwise outer loops and clockwise holes.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Geometry.PolygonOperations
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        Contour moved
+        moved:AddPoint(10, 10)
+        moved:AddPoint(30, 10)
+        moved:AddPoint(30, 30)
+        moved:AddPoint(10, 30)
+        moved:closed = true
+        Array<Contour> a
+        a:Add(square)
+        Array<Contour> b
+        b:Add(moved)
+        PolygonOperations ops
+        Array<Contour> either = ops:Union(a, b, 0)
+        Contour outline = either:Get(0)
+        output outline:Area()      // 700
+    */
     action Union(Array<Contour> a, Array<Contour> b, integer planeIndex) returns Array<Contour>
         Clear()
         AddContours(a, false)
@@ -91,7 +136,41 @@ class PolygonOperations
         return Resolve(1, planeIndex)
     end
 
-    /* The area covered by both a and b. */
+    /*
+    The area covered by both a and b.
+
+    Attribute: Parameter a The first set of closed loops.
+    Attribute: Parameter b The second set of closed loops.
+    Attribute: Parameter planeIndex The plane the result is on.
+    Attribute: Returns Counter-clockwise outer loops and clockwise holes.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Geometry.PolygonOperations
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        Contour moved
+        moved:AddPoint(10, 10)
+        moved:AddPoint(30, 10)
+        moved:AddPoint(30, 30)
+        moved:AddPoint(10, 30)
+        moved:closed = true
+        Array<Contour> a
+        a:Add(square)
+        Array<Contour> b
+        b:Add(moved)
+        PolygonOperations ops
+        Array<Contour> both = ops:Intersect(a, b, 0)
+        Contour overlap = both:Get(0)
+        output overlap:Area()      // 100
+    */
     action Intersect(Array<Contour> a, Array<Contour> b, integer planeIndex) returns Array<Contour>
         Clear()
         AddContours(a, false)
@@ -99,7 +178,41 @@ class PolygonOperations
         return Resolve(2, planeIndex)
     end
 
-    /* The area covered by a but not by b. */
+    /*
+    The area covered by a but not by b.
+
+    Attribute: Parameter a The loops to subtract from.
+    Attribute: Parameter b The loops to subtract.
+    Attribute: Parameter planeIndex The plane the result is on.
+    Attribute: Returns Counter-clockwise outer loops and clockwise holes.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Geometry.PolygonOperations
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        Contour moved
+        moved:AddPoint(10, 10)
+        moved:AddPoint(30, 10)
+        moved:AddPoint(30, 30)
+        moved:AddPoint(10, 30)
+        moved:closed = true
+        Array<Contour> a
+        a:Add(square)
+        Array<Contour> b
+        b:Add(moved)
+        PolygonOperations ops
+        Array<Contour> rest = ops:Difference(a, b, 0)
+        Contour notched = rest:Get(0)
+        output notched:Area()      // 300
+    */
     action Difference(Array<Contour> a, Array<Contour> b, integer planeIndex) returns Array<Contour>
         Clear()
         AddContours(a, false)
@@ -107,7 +220,37 @@ class PolygonOperations
         return Resolve(1, planeIndex)
     end
 
-    /* Forgets the loops added so far. */
+    /*
+    Forgets the loops added so far.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Geometry.PolygonOperations
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        Contour moved
+        moved:AddPoint(10, 10)
+        moved:AddPoint(30, 10)
+        moved:AddPoint(30, 30)
+        moved:AddPoint(10, 30)
+        moved:closed = true
+        Array<Contour> a
+        a:Add(square)
+        Array<Contour> b
+        b:Add(moved)
+        PolygonOperations ops
+        ops:AddContours(a, false)
+        ops:Clear()
+        ops:AddContours(b, false)
+        Array<Contour> justB = ops:Resolve(1, 0)
+    */
     action Clear
         ex0:Empty()
         ey0:Empty()
@@ -116,6 +259,31 @@ class PolygonOperations
     end
 
     // Adds one closed loop given as point lists (last point connects to first).
+    /*
+    Adds one closed loop given as point lists (reversed = true subtracts it instead).
+
+    Attribute: Parameter xs The x coordinates (mm).
+    Attribute: Parameter ys The y coordinates (mm), as many as xs.
+    Attribute: Parameter reversed True to add the loop backwards, which subtracts its area.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Geometry.PolygonOperations
+
+        Array<number> xs
+        Array<number> ys
+        xs:Add(0)
+        ys:Add(0)
+        xs:Add(10)
+        ys:Add(0)
+        xs:Add(10)
+        ys:Add(10)
+        PolygonOperations ops
+        ops:AddPoints(xs, ys, false)
+        Array<Contour> triangle = ops:Resolve(1, 0)
+    */
     action AddPoints(Array<number> xs, Array<number> ys, boolean reversed)
         Array<number> lx
         Array<number> ly
@@ -172,7 +340,39 @@ class PolygonOperations
         end
     end
 
-    /* Adds every closed loop of the list (reversed = true subtracts them instead). */
+    /*
+    Adds every closed loop of the list (reversed = true subtracts them instead).
+
+    Attribute: Parameter loops The loops; open paths are skipped.
+    Attribute: Parameter reversed True to add the loops backwards, which subtracts their area.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Geometry.PolygonOperations
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        Contour moved
+        moved:AddPoint(10, 10)
+        moved:AddPoint(30, 10)
+        moved:AddPoint(30, 30)
+        moved:AddPoint(10, 30)
+        moved:closed = true
+        Array<Contour> a
+        a:Add(square)
+        Array<Contour> b
+        b:Add(moved)
+        PolygonOperations ops
+        ops:AddContours(a, false)
+        ops:AddContours(b, true)       // subtract b
+        Array<Contour> difference = ops:Resolve(1, 0)
+    */
     action AddContours(Array<Contour> loops, boolean reversed)
         integer c = 0
         repeat while c < loops:GetSize()
@@ -187,6 +387,37 @@ class PolygonOperations
     /*
     Builds the loops around everything whose winding number is at least
     minWinding (1 = union, 2 = intersection of two non-overlapping sets).
+
+    Attribute: Parameter minWinding The smallest winding number kept (1 or more).
+    Attribute: Parameter planeIndex The plane the result is on.
+    Attribute: Returns Counter-clockwise outer loops and clockwise holes. The loops added stay added; Clear starts again.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Geometry.PolygonOperations
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        Contour moved
+        moved:AddPoint(10, 10)
+        moved:AddPoint(30, 10)
+        moved:AddPoint(30, 30)
+        moved:AddPoint(10, 30)
+        moved:closed = true
+        Array<Contour> a
+        a:Add(square)
+        Array<Contour> b
+        b:Add(moved)
+        PolygonOperations ops
+        ops:AddContours(a, false)
+        ops:AddContours(b, false)
+        Array<Contour> overlap = ops:Resolve(2, 0)     // where both squares are
     */
     action Resolve(integer minWinding, integer planeIndex) returns Array<Contour>
         brokenChain = 0

@@ -65,6 +65,13 @@ class PathOrderer
 
     Attribute: Parameter x The x coordinate (mm, model coordinates).
     Attribute: Parameter y The y coordinate (mm).
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Slicing.PathOrderer
+
+        PathOrderer orderer
+        orderer:SetSeamPoint(0, 1000000)      // seams at the back of the model
     */
     action SetSeamPoint(number x, number y)
         seamX = x
@@ -77,6 +84,13 @@ class PathOrderer
     Attribute: Parameter loop The shortest loop (mm).
     Attribute: Parameter line The shortest open line (mm).
     Attribute: Parameter segment Points closer together than this (mm) are merged.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Slicing.PathOrderer
+
+        PathOrderer orderer
+        orderer:SetCleanup(1.0, 0.4, 0.05)      // drop loops under 1 mm and lines under 0.4 mm
     */
     action SetCleanup(number loop, number line, number segment)
         checker:RequireAtLeast("PathOrderer:SetCleanup loop", loop, 0)
@@ -91,6 +105,19 @@ class PathOrderer
     Skirt or brim loops (from SkirtGenerator), printed first on their layers.
 
     Attribute: Parameter loops The loops.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathOrderer
+        use Libraries.Fabrication.Slicing.SkirtGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        SkirtGenerator skirt
+        skirt:SetSkirt(2, 3.0, 1)
+        PathOrderer orderer
+        orderer:SetSkirt(skirt:Generate(outlines))
     */
     action SetSkirt(Array<Contour> loops)
         skirt = loops
@@ -101,12 +128,43 @@ class PathOrderer
     outlines, open paths the lines inside them.
 
     Attribute: Parameter paths The support paths.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathOrderer
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:Generate(outlines, 100)
+        PathOrderer orderer
+        orderer:SetSupport(trees:GetPaths())
     */
     action SetSupport(Array<Contour> paths)
         support = paths
     end
 
-    /* How many paths the last Order dropped as too short. */
+    /*
+    How many paths the last Order dropped as too short.
+
+    Attribute: Returns How many paths the last Order dropped as too short.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathOrderer
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        Array<Contour> walls
+        Array<Contour> skin
+        Array<Contour> infill
+        PathOrderer orderer
+        Array<Contour> ordered = orderer:Order(outlines, walls, skin, infill, 100)
+        output orderer:GetDroppedCount() + " paths too short to print"
+    */
     action GetDroppedCount returns integer
         return droppedPaths
     end
@@ -119,8 +177,20 @@ class PathOrderer
     Attribute: Parameter skin The solid lines from PathGenerator.
     Attribute: Parameter infill The sparse lines from PathGenerator.
     Attribute: Parameter planeCount The number of planes.
-
     Attribute: Returns New paths in printing order, layer by layer, each with its role set.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+        use Libraries.Fabrication.Slicing.PathOrderer
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:Generate(outlines, 100)
+        PathOrderer orderer
+        Array<Contour> ordered = orderer:Order(outlines, paths:GetWalls(), paths:GetSkin(), paths:GetInfill(), 100)
     */
     action Order(Array<Contour> contours, Array<Contour> walls, Array<Contour> skin,
                  Array<Contour> infill, integer planeCount) returns Array<Contour>

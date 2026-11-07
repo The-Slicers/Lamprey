@@ -53,23 +53,101 @@ class Contour
     */
     public boolean keepShort = false
 
-    /* The number of points. */
+    /*
+    The number of points.
+
+    Attribute: Returns The number of points.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.Contour
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        output square:GetSize()       // 4
+    */
     action GetSize returns integer
         return xs:GetSize()
     end
 
+    /*
+    The x coordinate of the first point.
+
+    Attribute: Returns The x coordinate (mm); 0 for an empty contour.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.Contour
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        output square:HeadX() + ", " + square:HeadY()      // 0, 0
+    */
     action HeadX returns number
         return xs:Get(0)
     end
 
+    /*
+    The y coordinate of the first point.
+
+    Attribute: Returns The y coordinate (mm); 0 for an empty contour.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.Contour
+
+        Contour line
+        line:AddPoint(1, 2)
+        line:AddPoint(5, 2)
+        output line:HeadY()     // 2
+    */
     action HeadY returns number
         return ys:Get(0)
     end
 
+    /*
+    The x coordinate of the last point.
+
+    Attribute: Returns The x coordinate (mm); 0 for an empty contour.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.Contour
+
+        Contour line
+        line:AddPoint(1, 2)
+        line:AddPoint(5, 2)
+        output line:TailX()     // 5
+    */
     action TailX returns number
         return xs:Get(xs:GetSize() - 1)
     end
 
+    /*
+    The y coordinate of the last point.
+
+    Attribute: Returns The y coordinate (mm); 0 for an empty contour.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.Contour
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        output square:TailY()        // 20
+    */
     action TailY returns number
         return ys:Get(ys:GetSize() - 1)
     end
@@ -79,6 +157,16 @@ class Contour
 
     Attribute: Parameter x The x coordinate (mm).
     Attribute: Parameter y The y coordinate (mm).
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.Contour
+
+        Contour path
+        path:AddPoint(0, 0)
+        path:AddPoint(10, 0)
+        path:AddPoint(10, 0)     // the same point again: not added
+        output path:GetSize()     // 2
     */
     action AddPoint(number x, number y)
         integer n = xs:GetSize()
@@ -95,6 +183,19 @@ class Contour
     Adds every point of another contour at the end (see AddPoint).
 
     Attribute: Parameter other The contour to append.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.Contour
+
+        Contour first
+        first:AddPoint(0, 0)
+        first:AddPoint(10, 0)
+        Contour second
+        second:AddPoint(10, 5)
+        second:AddPoint(0, 5)
+        first:AppendAll(second)
+        output first:GetSize()    // 4
     */
     action AppendAll(Contour other)
         integer i = 0
@@ -108,6 +209,20 @@ class Contour
     A copy with its own point lists and every field copied.
 
     Attribute: Returns The copy.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.Contour
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        Contour copy = square:Copy()
+        copy:Reverse()
+        output square:SignedArea2() > 0     // true: the original keeps its direction
     */
     action Copy returns Contour
         Contour copy
@@ -122,7 +237,22 @@ class Contour
         return copy
     end
 
-    /* Removes the last point if it repeats the first (a loop written closed). */
+    /*
+    Removes the last point if it repeats the first (a loop written closed).
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.Contour
+
+        Contour loop
+        loop:AddPoint(0, 0)
+        loop:AddPoint(10, 0)
+        loop:AddPoint(10, 10)
+        loop:AddPoint(0, 0)
+        loop:DropClosingDuplicate()
+        loop:closed = true
+        output loop:GetSize()     // 3
+    */
     action DropClosingDuplicate
         integer n = xs:GetSize()
         if n > 1
@@ -137,6 +267,18 @@ class Contour
     Twice the signed area of the loop (the shoelace sum).
 
     Attribute: Returns Positive for a counter-clockwise loop, negative for a clockwise one.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.Contour
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        output square:SignedArea2()      // 800: counter-clockwise
     */
     action SignedArea2 returns number
         number area2 = 0.0
@@ -157,6 +299,18 @@ class Contour
     The area enclosed by the loop.
 
     Attribute: Returns The unsigned area (mm^2).
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.Contour
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        output square:Area()     // 400
     */
     action Area returns number
         number area = SignedArea2() / 2.0
@@ -166,7 +320,22 @@ class Contour
         return area
     end
 
-    /* Reverses the order of the points (and so the direction of a loop). */
+    /*
+    Reverses the order of the points (and so the direction of a loop).
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.Contour
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        square:Reverse()
+        output square:SignedArea2() < 0     // true: now clockwise, like a hole
+    */
     action Reverse
         integer i = 0
         integer j = xs:GetSize() - 1
@@ -187,8 +356,20 @@ class Contour
 
     Attribute: Parameter px The x coordinate of the point.
     Attribute: Parameter py The y coordinate of the point.
-
     Attribute: Returns True if the point is inside the loop; always false for fewer than 3 points.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.Contour
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        output square:ContainsPoint(5, 5)        // true
+        output square:ContainsPoint(25, 5)       // false
     */
     action ContainsPoint(number px, number py) returns boolean
         boolean inside = false
@@ -224,8 +405,26 @@ class Contour
     share vertices, and a shared vertex can count as inside either loop.
 
     Attribute: Parameter other The loop that may surround this one.
-
     Attribute: Returns True if the test point is inside other; false if either has fewer than 3 points.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.Contour
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        Contour hole
+        hole:AddPoint(5, 5)
+        hole:AddPoint(5, 15)
+        hole:AddPoint(15, 15)
+        hole:AddPoint(15, 5)
+        hole:closed = true
+        output hole:IsInside(square)     // true
+        output square:IsInside(hole)     // false
     */
     action IsInside(Contour other) returns boolean
         integer n = xs:GetSize()
@@ -267,8 +466,19 @@ class Contour
 
     Attribute: Parameter x The x coordinate of the point.
     Attribute: Parameter y The y coordinate of the point.
-
     Attribute: Returns The index of the closest vertex; 0 for an empty contour.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.Contour
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        output square:NearestVertexIndex(19, 18)       // 2, the corner at (20, 20)
     */
     action NearestVertexIndex(number x, number y) returns integer
         integer best = 0
@@ -292,8 +502,19 @@ class Contour
 
     Attribute: Parameter x The x coordinate of the point.
     Attribute: Parameter y The y coordinate of the point.
-
     Attribute: Returns The squared distance; 0 for an empty contour.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.Contour
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        output square:NearestVertexDistance2(23, 24)     // 25: 5 mm from (20, 20)
     */
     action NearestVertexDistance2(number x, number y) returns number
         if xs:GetSize() = 0

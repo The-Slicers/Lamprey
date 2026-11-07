@@ -56,6 +56,21 @@ class TriangleMesh
     whatever was loaded before.
 
     Attribute: Parameter data The loaded model.
+
+    Attribute: Example
+
+        use Libraries.System.File
+        use Libraries.Game.Graphics.Models.Data.ModelLoader
+        use Libraries.Game.Graphics.Models.Data.ModelData
+        use Libraries.Fabrication.Geometry.TriangleMesh
+
+        File file
+        file:SetPath("assets/cube.stl")
+        ModelLoader loader
+        ModelData model = loader:Load(file)
+        TriangleMesh mesh
+        mesh:Load(model)
+        output mesh:GetTriangleCount() + " triangles"
     */
     action Load(ModelData data)
         if data = undefined
@@ -128,29 +143,154 @@ class TriangleMesh
         end
     end
 
-    /* The number of triangles loaded. */
+    /*
+    The number of triangles loaded.
+
+    Attribute: Returns The number of triangles loaded.
+
+    Attribute: Example
+
+        use Libraries.System.File
+        use Libraries.Game.Graphics.Models.Data.ModelLoader
+        use Libraries.Game.Graphics.Models.Data.ModelData
+        use Libraries.Fabrication.Geometry.TriangleMesh
+
+        File file
+        file:SetPath("assets/cube.stl")
+        ModelLoader loader
+        ModelData model = loader:Load(file)
+        TriangleMesh mesh
+        mesh:Load(model)
+        output mesh:GetTriangleCount()      // 12 for a cube
+    */
     action GetTriangleCount returns integer
         return corners:GetSize() / 3
     end
 
-    /* The number of vertices loaded. */
+    /*
+    The number of vertices loaded.
+
+    Attribute: Returns The number of vertices loaded.
+
+    Attribute: Example
+
+        use Libraries.System.File
+        use Libraries.Game.Graphics.Models.Data.ModelLoader
+        use Libraries.Game.Graphics.Models.Data.ModelData
+        use Libraries.Fabrication.Geometry.TriangleMesh
+
+        File file
+        file:SetPath("assets/cube.stl")
+        ModelLoader loader
+        ModelData model = loader:Load(file)
+        TriangleMesh mesh
+        mesh:Load(model)
+        output mesh:GetVertexCount()
+    */
     action GetVertexCount returns integer
         return vertX:GetSize()
     end
 
-    /* Three vertex indices per triangle. */
+    /*
+    Three vertex indices per triangle.
+
+    Attribute: Returns Three vertex indices per triangle, in the order the model gives them.
+
+    Attribute: Example
+
+        use Libraries.Containers.Integer32BitArray
+        use Libraries.System.File
+        use Libraries.Game.Graphics.Models.Data.ModelLoader
+        use Libraries.Game.Graphics.Models.Data.ModelData
+        use Libraries.Fabrication.Geometry.TriangleMesh
+
+        File file
+        file:SetPath("assets/cube.stl")
+        ModelLoader loader
+        ModelData model = loader:Load(file)
+        TriangleMesh mesh
+        mesh:Load(model)
+        Integer32BitArray corners = mesh:GetCorners()
+        output "The first triangle uses vertices " + corners:Get(0) + ", " + corners:Get(1) + " and " + corners:Get(2)
+    */
     action GetCorners returns Integer32BitArray
         return corners
     end
 
+    /*
+    The x coordinate of every vertex, in the model's units.
+
+    Attribute: Returns One x coordinate per vertex.
+
+    Attribute: Example
+
+        use Libraries.Containers.Number64BitArray
+        use Libraries.System.File
+        use Libraries.Game.Graphics.Models.Data.ModelLoader
+        use Libraries.Game.Graphics.Models.Data.ModelData
+        use Libraries.Fabrication.Geometry.TriangleMesh
+
+        File file
+        file:SetPath("assets/cube.stl")
+        ModelLoader loader
+        ModelData model = loader:Load(file)
+        TriangleMesh mesh
+        mesh:Load(model)
+        Number64BitArray xs = mesh:GetVertexX()
+        output xs:Get(0)
+    */
     action GetVertexX returns Number64BitArray
         return vertX
     end
 
+    /*
+    The y coordinate of every vertex, in the model's units.
+
+    Attribute: Returns One y coordinate per vertex.
+
+    Attribute: Example
+
+        use Libraries.Containers.Number64BitArray
+        use Libraries.System.File
+        use Libraries.Game.Graphics.Models.Data.ModelLoader
+        use Libraries.Game.Graphics.Models.Data.ModelData
+        use Libraries.Fabrication.Geometry.TriangleMesh
+
+        File file
+        file:SetPath("assets/cube.stl")
+        ModelLoader loader
+        ModelData model = loader:Load(file)
+        TriangleMesh mesh
+        mesh:Load(model)
+        Number64BitArray ys = mesh:GetVertexY()
+        output ys:Get(0)
+    */
     action GetVertexY returns Number64BitArray
         return vertY
     end
 
+    /*
+    The z coordinate of every vertex, in the model's units.
+
+    Attribute: Returns One z coordinate per vertex.
+
+    Attribute: Example
+
+        use Libraries.Containers.Number64BitArray
+        use Libraries.System.File
+        use Libraries.Game.Graphics.Models.Data.ModelLoader
+        use Libraries.Game.Graphics.Models.Data.ModelData
+        use Libraries.Fabrication.Geometry.TriangleMesh
+
+        File file
+        file:SetPath("assets/cube.stl")
+        ModelLoader loader
+        ModelData model = loader:Load(file)
+        TriangleMesh mesh
+        mesh:Load(model)
+        Number64BitArray zs = mesh:GetVertexZ()
+        output zs:Get(0)
+    */
     action GetVertexZ returns Number64BitArray
         return vertZ
     end

@@ -43,8 +43,26 @@ class PolygonOffsetter
 
     Attribute: Parameter loops Loops on one plane (the first loop's plane is used for the result).
     Attribute: Parameter distance How far to move (mm): positive moves into the material, negative away from it.
-
     Attribute: Returns The offset loops; copies of the input for a distance of 0.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Geometry.PolygonOffsetter
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        Array<Contour> outline
+        outline:Add(square)
+        PolygonOffsetter offsetter
+        Array<Contour> inset = offsetter:Offset(outline, 0.2)      // 0.2 mm in: an outer wall's centre line
+        Contour wall = inset:Get(0)
+        output wall:Area()      // 384.16, a 19.6 mm square
     */
     action Offset(Array<Contour> loops, number distance) returns Array<Contour>
         Array<Contour> result

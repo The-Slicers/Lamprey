@@ -1,0 +1,160 @@
+package Tests.Data
+
+use Libraries.Containers.Array
+use Libraries.System.File
+use Libraries.Language.Errors.Error
+use Libraries.Data.Compression.ZipWriter
+use Libraries.Data.Compression.ZipReader
+use Tests.LampreyTest
+
+/*
+Tests ZipWriter (Lamprey's only Java plugin, in Plugins/lamprey-plugins.jar)
+and ZipReader (plain Quorum on BinaryFileReader and ByteArray:Decompress). If
+ZipWriter fails with NoClassDefFoundError, the jar in Plugins/ (or the copy
+in Run/) is out of date: rebuild it with Plugins/build.sh and clean the
+project.
+*/
+class ZipTest is LampreyTest
+    text folder = "Outputs/tests/zip"
+    text lf = ""
+
+    on create
+        SetName("Zip: ZipWriter and ZipReader")
+        lf = lf:GetLineFeed()
+    end
+
+    action Run
+        RoundTrip()
+        Checksums()
+        ReaderErrors()
+        WriterErrors()
+    end
+
+    /* Writes the archive the cases read, with entries in and out of folders. */
+    action Archive(text name) returns text
+        text archive = folder + "/" + name
+        ZipWriter zip
+        zip:Open(archive)
+        zip:AddText("a.txt", "plain text")
+        zip:AddText("Metadata/b.txt", "second entry")
+        zip:BeginImage(4, 4)
+        zip:SetPixel(1, 1, 255, 0, 0, 255)
+        zip:SetPixel(99, 99, 0, 0, 0, 255)
+        zip:AddImage("Metadata/_rels/image.png")
+        zip:AddCopy("copy.png", "Metadata/_rels/image.png")
+        zip:AddMd5("empty.md5", "")
+        zip:AddMd5("hello.md5", "hello")
+        zip:Close()
+        zip:Close()
+        return archive
+    end
+
+    action RoundTrip
+        Case("ZipWriter then ZipReader")
+        text archive = Archive("round-trip/test.zip")
+        ZipReader reader
+        Array<text> entries = reader:GetEntries(archive)
+        ExpectInteger(entries:GetSize(), 6, "six entries")
+        if entries:GetSize() = 6
+            ExpectText(entries:Get(0), "a.txt", "entries are in the order they were added")
+            ExpectText(entries:Get(2), "Metadata/_rels/image.png", "the image entry")
+            ExpectText(entries:Get(5), "hello.md5", "the last entry")
+        end
+        ExpectTrue(reader:HasEntry(archive, "a.txt"), "HasEntry a.txt")
+        ExpectTrue(reader:HasEntry(archive, "Metadata/b.txt"), "HasEntry in a folder")
+        ExpectTrue(reader:HasEntry(archive, "copy.png"), "HasEntry for the copy")
+        ExpectFalse(reader:HasEntry(archive, "nope.txt"), "HasEntry for a missing entry")
+        ExpectFalse(reader:HasEntry(folder + "/missing.zip", "a.txt"), "HasEntry on a missing archive")
+        ExpectText(reader:ReadText(archive, "a.txt"), "plain text", "ReadText")
+        ExpectText(reader:ReadText(archive, "Metadata/b.txt"), "second entry", "ReadText in a folder")
+        text big = ""
+        integer i = 0
+        repeat while i < 200
+            big = big + "G1 X" + i + " Y" + (200 - i) + " E0.5" + lf
+            i = i + 1
+        end
+        ZipWriter zip
+        zip:Open(folder + "/round-trip/big.zip")
+        zip:AddText("plate.gcode", big)
+        zip:Close()
+        ExpectText(reader:ReadText(folder + "/round-trip/big.zip", "plate.gcode"), big, "a deflated multi-kilobyte entry comes back exactly")
+
+        File unpacked
+        unpacked:SetPath(folder + "/round-trip/a.txt")
+        ExpectFalse(unpacked:Exists(), "nothing is unpacked to disk")
+    end
+
+    action Checksums
+        Case("ZipWriter:AddMd5")
+        text archive = Archive("md5/test.zip")
+        ZipReader reader
+        ExpectText(reader:ReadText(archive, "empty.md5"), "D41D8CD98F00B204E9800998ECF8427E", "MD5 of empty text")
+        ExpectText(reader:ReadText(archive, "hello.md5"), "5D41402ABC4B2A76B9719D911017C592", "MD5 of hello")
+    end
+
+    action ReaderErrors
+        Case("ZipReader stops with a clear error")
+        text archive = Archive("errors/test.zip")
+        ZipReader reader
+        boolean missingEntry = false
+        check
+            text nothing = reader:ReadText(archive, "missing.txt")
+        detect first is Error
+            missingEntry = true
+            ExpectContains(first:GetErrorMessage(), "missing.txt", "the error names the entry")
+        end
+        ExpectTrue(missingEntry, "reading a missing entry")
+
+        boolean missingArchive = false
+        check
+            Array<text> none = reader:GetEntries(folder + "/errors/none.zip")
+        detect second is Error
+            missingArchive = true
+            ExpectContains(second:GetErrorMessage(), "none.zip", "the error names the archive")
+        end
+        ExpectTrue(missingArchive, "listing a missing archive")
+
+        File notZip
+        notZip:SetPath(folder + "/errors/not-a-zip.zip")
+        notZip:Write("hello, this is plain text")
+        boolean notArchive = false
+        check
+            boolean found = reader:HasEntry(folder + "/errors/not-a-zip.zip", "a.txt")
+        detect third is Error
+            notArchive = true
+            ExpectContains(third:GetErrorMessage(), "is not a ZIP archive", "the error says why")
+        end
+        ExpectTrue(notArchive, "a file that isn't a ZIP archive")
+    end
+
+    action WriterErrors
+        Case("ZipWriter misuse stops with a clear error")
+        ZipWriter notOpen
+        boolean addBeforeOpen = false
+        check
+            notOpen:AddText("a.txt", "x")
+        detect first
+            addBeforeOpen = true
+        end
+        ExpectTrue(addBeforeOpen, "adding before Open")
+
+        ZipWriter zip
+        zip:Open(folder + "/errors/writer.zip")
+        zip:AddText("a.txt", "x")
+        boolean duplicate = false
+        check
+            zip:AddMd5("a.txt", "y")
+        detect second
+            duplicate = true
+        end
+        ExpectTrue(duplicate, "adding the same entry twice")
+        boolean badCopy = false
+        check
+            zip:AddCopy("b.txt", "never-added.txt")
+        detect third
+            badCopy = true
+        end
+        ExpectTrue(badCopy, "copying an entry that was never added")
+        zip:Close()
+    end
+end

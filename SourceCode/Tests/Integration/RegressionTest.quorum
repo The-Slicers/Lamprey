@@ -2,9 +2,8 @@ package Tests.Integration
 
 use Libraries.Containers.Array
 use Libraries.Game.Graphics.Models.Data.ModelData
-use Libraries.Data.Hash
 use Libraries.Data.Formats.NumberFormatter
-use Libraries.System.TextFile
+use Libraries.System.File
 use Libraries.Fabrication.SliceJob
 use Libraries.Fabrication.Profiles.ProfileManager
 use Tests.LampreyTest
@@ -43,8 +42,9 @@ class RegressionTest is LampreyTest
     action Run
         Case("fixtures")
         text fixture = "Tests/Fixtures/regression-profiles.json"
-        TextFile checkt
-        if not checkt:Exists(fixture)
+        File checkFile
+        checkFile:SetPath(fixture)
+        if not checkFile:IsFile()
             Fail("the fixture " + fixture + " is missing. Copy the Tests folder (Fixtures and Baselines) "
                 + "into the project folder, next to Profiles and SourceCode.")
             return now
@@ -67,14 +67,15 @@ class RegressionTest is LampreyTest
         text actual = Fingerprint(reader)
 
         text baselinePath = baselines + name + ".txt"
-        TextFile file
-        if not file:Exists(baselinePath)
+        File file
+        file:SetPath(baselinePath)
+        if not file:IsFile()
             files:WriteAt(baselinePath, actual)
             Note("recorded a new baseline " + baselinePath + " (commit it)")
             return now
         end
 
-        text expected = file:Read(baselinePath)
+        text expected = file:Read()
         text cr = ""
         cr = cr:GetCarriageReturn()
         expected = expected:Replace(cr, "")
@@ -106,7 +107,6 @@ class RegressionTest is LampreyTest
 
     /* One line per fact; the MD5 covers every byte (line endings made the same on every system). */
     action Fingerprint(GcodeReader reader) returns text
-        Hash hash
         text result = "layers: " + reader:GetLayerCount() + lf
         result = result + "lines: " + reader:CountLinesStartingWith("") + lf
         result = result + "printing moves: " + reader:GetPrintMoveCount() + lf
@@ -120,7 +120,7 @@ class RegressionTest is LampreyTest
         result = result + "infill paths: " + reader:CountLinesStartingWith(";TYPE:FILL") + lf
         result = result + "support paths: " + reader:CountLinesStartingWith(";TYPE:SUPPORT") + lf
         result = result + "skirt / brim paths: " + reader:CountLinesStartingWith(";TYPE:SKIRT") + lf
-        result = result + "md5: " + hash:Md5Hex(reader:GetText()) + lf
+        result = result + "md5: " + files:Md5(reader:GetText()) + lf
         return result
     end
 end

@@ -61,6 +61,13 @@ class SliceJob
     are printed either way.
 
     Attribute: Parameter toggle True to print progress.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.SliceJob
+
+        SliceJob job
+        job:SetVerbose(false)       // only warnings are printed
     */
     action SetVerbose(boolean toggle)
         verbose = toggle
@@ -74,8 +81,25 @@ class SliceJob
     Attribute: Parameter data The loaded model.
     Attribute: Parameter profile The settings to slice with.
     Attribute: Parameter gcodePath Where to write the G-code.
-
     Attribute: Returns The path of the last file written (the .gcode.3mf, or the .gcode).
+
+    Attribute: Example
+
+        use Libraries.System.File
+        use Libraries.Game.Graphics.Models.Data.ModelLoader
+        use Libraries.Game.Graphics.Models.Data.ModelData
+        use Libraries.Fabrication.SliceJob
+        use Libraries.Fabrication.Profiles.ProfileManager
+
+        File file
+        file:SetPath("assets/3dbenchy.stl")
+        ModelLoader loader
+        ModelData model = loader:Load(file)
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        SliceJob job
+        text written = job:Run(model, profiles:Require("ender3-v2"), "Outputs/benchy.gcode")
+        output "Wrote " + written
     */
     action Run(ModelData data, Profile profile, text gcodePath) returns text
         if data = undefined
@@ -197,7 +221,7 @@ class SliceJob
         return gcodePath
     end
 
-    action ConfigureSlicer(Profile profile, MeshSlicer slicer)
+    private action ConfigureSlicer(Profile profile, MeshSlicer slicer)
         slicer:SetUnitScale(profile:GetNumber("unitScale"))
         number width = profile:GetNumber("bedWidth")
         number depth = profile:GetNumber("bedDepth")
@@ -207,12 +231,12 @@ class SliceJob
         slicer:SetBedSize(width)
     end
 
-    action ConfigureContours(Profile profile, ContourGenerator conGen)
+    private action ConfigureContours(Profile profile, ContourGenerator conGen)
         conGen:SetSimplifyTolerance(profile:GetNumber("simplifyTolerance"))
         conGen:SetMinArea(profile:GetNumber("minContourArea"))
     end
 
-    action ConfigurePaths(Profile profile, PathGenerator paths)
+    private action ConfigurePaths(Profile profile, PathGenerator paths)
         paths:SetLineWidth(profile:GetNumber("lineWidth"))
         paths:SetWallCount(profile:GetInteger("wallCount"))
         paths:SetInfillDensity(profile:GetNumber("infillDensity"))
@@ -222,7 +246,7 @@ class SliceJob
         paths:SetJoinFirstLayer(profile:GetBoolean("joinFirstLayer"))
     end
 
-    action ConfigureSupports(Profile profile, TreeSupport trees)
+    private action ConfigureSupports(Profile profile, TreeSupport trees)
         trees:SetLayerHeight(profile:GetNumber("layerHeight"))
         trees:SetLineWidth(profile:GetNumber("lineWidth"))
         trees:SetOverhangAngle(profile:GetNumber("supportOverhangAngle"))
@@ -241,7 +265,7 @@ class SliceJob
         trees:SetMinOverhangArea(profile:GetNumber("supportMinOverhangArea"))
     end
 
-    action ConfigureAdhesion(Profile profile, SkirtGenerator skirtGen)
+    private action ConfigureAdhesion(Profile profile, SkirtGenerator skirtGen)
         skirtGen:SetLineWidth(profile:GetNumber("lineWidth"))
         if profile:GetText("adhesionType") = "brim"
             skirtGen:SetBrim(profile:GetInteger("brimLoops"), profile:GetNumber("brimGap"))
@@ -250,12 +274,12 @@ class SliceJob
         end
     end
 
-    action ConfigureOrderer(Profile profile, PathOrderer orderer)
+    private action ConfigureOrderer(Profile profile, PathOrderer orderer)
         orderer:SetSeamPoint(profile:GetNumber("seamX"), profile:GetNumber("seamY"))
         orderer:SetCleanup(profile:GetNumber("minLoopLength"), profile:GetNumber("minLineLength"), profile:GetNumber("minSegmentLength"))
     end
 
-    action ConfigureGcode(Profile profile, GcodeWriter gcode)
+    private action ConfigureGcode(Profile profile, GcodeWriter gcode)
         gcode:SetLayerHeight(profile:GetNumber("layerHeight"))
         gcode:SetLineWidth(profile:GetNumber("lineWidth"))
         gcode:SetNozzleDiameter(profile:GetNumber("nozzleDiameter"))
@@ -305,7 +329,7 @@ class SliceJob
     project_settings template already filled in by BambuSettingsMap, so the
     3MF shows the settings the print was actually sliced with.
     */
-    action ConfigurePacker(Profile profile, BambuPackager packer)
+    private action ConfigurePacker(Profile profile, BambuPackager packer)
         text templatePath = profile:GetText("bambuSettingsTemplate")
         packer:SetSettingsTemplate(templatePath)
         packer:SetPrinterModelId(profile:GetText("printerModelId"))

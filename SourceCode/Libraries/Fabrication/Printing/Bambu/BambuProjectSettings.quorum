@@ -3,7 +3,7 @@ package Libraries.Fabrication.Printing.Bambu
 use Libraries.Data.Compression.ZipReader
 use Libraries.Data.Formats.JavaScriptObjectNotationTemplate
 use Libraries.Fabrication.ArgumentChecker
-use Libraries.System.TextFile
+use Libraries.System.File
 
 /*
 The BambuProjectSettings class is a Bambu Studio project_settings.config
@@ -35,6 +35,14 @@ class BambuProjectSettings is JavaScriptObjectNotationTemplate
     isn't one of those.
 
     Attribute: Parameter path The JSON file or 3MF archive.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Printing.Bambu.BambuProjectSettings
+
+        BambuProjectSettings settings
+        settings:LoadFile("Templates/bambu-p2s/p2s_project_settings.json")
+        output settings:GetText("layer_height", "")
     */
     action LoadFile(text path)
         ArgumentChecker checker
@@ -48,8 +56,9 @@ class BambuProjectSettings is JavaScriptObjectNotationTemplate
             end
             Load(zip:ReadText(path, entry))
         else
-            TextFile file
-            Load(file:Read(path))
+            File file
+            file:SetPath(path)
+            Load(file:Read())
         end
     end
 
@@ -57,6 +66,15 @@ class BambuProjectSettings is JavaScriptObjectNotationTemplate
     The checks Bambu Studio's PresetBundle::load_config_file_config makes
     when it opens the file: it must be a project_settings file for a single
     filament, with matching filament extruder lists.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Printing.Bambu.BambuProjectSettings
+
+        BambuProjectSettings settings
+        settings:LoadFile("Templates/bambu-p2s/p2s_project_settings.json")
+        settings:Fill("layer_height", "0.16")
+        settings:Check()       // stops with an alert if Bambu Studio would reject it
     */
     action Check
         text name = GetText("name", "")

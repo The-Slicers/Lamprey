@@ -189,31 +189,107 @@ class GcodeWriter
     integer lastAccel = -1
     integer slowedLayers = 0
 
-    /* The layer height (mm). */
+    /*
+    The layer height (mm).
+
+    Attribute: Parameter height The height (mm), greater than 0.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetLayerHeight(0.2)
+        gcode:Write(ordered, "Outputs/part.gcode")
+    */
     action SetLayerHeight(number height)
         checker:RequirePositive("GcodeWriter:SetLayerHeight height", height)
         layerHeight = height
     end
 
-    /* The extrusion width (mm). */
+    /*
+    The extrusion width (mm).
+
+    Attribute: Parameter width The width (mm), greater than 0.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetLineWidth(0.4)
+        gcode:Write(ordered, "Outputs/part.gcode")
+    */
     action SetLineWidth(number width)
         checker:RequirePositive("GcodeWriter:SetLineWidth width", width)
         lineWidth = width
     end
 
-    /* Nozzle size in mm, for {NOZZLE_DIAMETER} in start / end G-code. */
+    /*
+    Nozzle size in mm, for {NOZZLE_DIAMETER} in start / end G-code.
+
+    Attribute: Parameter diameter The diameter (mm), greater than 0.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetNozzleDiameter(0.4)
+        gcode:Write(ordered, "Outputs/part.gcode")
+    */
     action SetNozzleDiameter(number diameter)
         checker:RequirePositive("GcodeWriter:SetNozzleDiameter diameter", diameter)
         nozzleDiameter = diameter
     end
 
-    /* Filament diameter (mm), usually 1.75 or 2.85. */
+    /*
+    Filament diameter (mm), usually 1.75 or 2.85.
+
+    Attribute: Parameter diameter The diameter (mm), greater than 0.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetFilamentDiameter(1.75)
+        gcode:Write(ordered, "Outputs/part.gcode")
+    */
     action SetFilamentDiameter(number diameter)
         checker:RequirePositive("GcodeWriter:SetFilamentDiameter diameter", diameter)
         filamentDiameter = diameter
     end
 
-    /* Nozzle and bed temperatures (C), for the start / end G-code placeholders. */
+    /*
+    Nozzle and bed temperatures (C), for the start / end G-code placeholders.
+
+    Attribute: Parameter nozzle The nozzle temperature (C).
+    Attribute: Parameter bed The bed temperature (C).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetTemperatures(210, 60)      // PLA
+        gcode:Write(ordered, "Outputs/part.gcode")
+    */
     action SetTemperatures(integer nozzle, integer bed)
         checker:RequireAtLeast("GcodeWriter:SetTemperatures nozzle", nozzle, 0)
         checker:RequireAtLeast("GcodeWriter:SetTemperatures bed", bed, 0)
@@ -221,7 +297,23 @@ class GcodeWriter
         bedTemp = bed
     end
 
-    /* The bed size (mm); the model is centred on it. */
+    /*
+    The bed size (mm); the model is centred on it.
+
+    Attribute: Parameter sizeX The bed width along X (mm).
+    Attribute: Parameter sizeY The bed depth along Y (mm).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetBed(220, 220)      // an Ender-3
+        gcode:Write(ordered, "Outputs/part.gcode")
+    */
     action SetBed(number sizeX, number sizeY)
         checker:RequirePositive("GcodeWriter:SetBed sizeX", sizeX)
         checker:RequirePositive("GcodeWriter:SetBed sizeY", sizeY)
@@ -231,13 +323,43 @@ class GcodeWriter
         bedCenterY = sizeY / 2.0
     end
 
-    /* Build height in mm (Ender-3: 250, Bambu P2S: 256). Caps {PARK_Z}. */
+    /*
+    Build height in mm (Ender-3: 250, Bambu P2S: 256). Caps {PARK_Z}.
+
+    Attribute: Parameter sizeZ The build height (mm).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetBedHeight(250)
+        gcode:Write(ordered, "Outputs/part.gcode")
+    */
     action SetBedHeight(number sizeZ)
         checker:RequirePositive("GcodeWriter:SetBedHeight sizeZ", sizeZ)
         bedSizeZ = sizeZ
     end
 
-    /* Travels between infill lines shorter than this (mm) don't retract. */
+    /*
+    Travels between infill lines shorter than this (mm) don't retract.
+
+    Attribute: Parameter distance The distance (mm), 0 or more.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetInfillTravel(2.0)
+        gcode:Write(ordered, "Outputs/part.gcode")
+    */
     action SetInfillTravel(number distance)
         checker:RequireAtLeast("GcodeWriter:SetInfillTravel distance", distance, 0)
         infillTravelLimit = distance
@@ -246,6 +368,21 @@ class GcodeWriter
     /*
     The part cooling fan: off for the first offLayers layers, then ramping up
     to maxSpeed (0 - 255), which it reaches on layer fullLayers.
+
+    Attribute: Parameter maxSpeed The full fan speed, 0 to 255.
+    Attribute: Parameter offLayers How many layers start with the fan off.
+    Attribute: Parameter fullLayers The layer the fan reaches maxSpeed on.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetFan(255, 1, 3)      // off on layer 0, full speed from layer 3
+        gcode:Write(ordered, "Outputs/part.gcode")
     */
     action SetFan(integer maxSpeed, integer offLayers, integer fullLayers)
         checker:RequireRange("GcodeWriter:SetFan maxSpeed", maxSpeed, 0, 255)
@@ -260,6 +397,20 @@ class GcodeWriter
     Retraction length (mm: about 1 for direct drive, 4 - 6 for Bowden) and
     speed (mm/s). Also resets the retraction limit's window to the length,
     so call SetRetractionLimit after this.
+
+    Attribute: Parameter length How far to pull the filament back (mm).
+    Attribute: Parameter speed How fast (mm/s).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetRetraction(5, 45)      // a Bowden extruder
+        gcode:Write(ordered, "Outputs/part.gcode")
     */
     action SetRetraction(number length, number speed)
         checker:RequireAtLeast("GcodeWriter:SetRetraction length", length, 0)
@@ -272,6 +423,19 @@ class GcodeWriter
     /*
     Lift the nozzle `height` mm on travels that retract (0 = off). 0.2 - 0.4
     mm stops it scraping the bed or the top of the print.
+
+    Attribute: Parameter height The lift (mm), 0 for none.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetZHop(0.4)
+        gcode:Write(ordered, "Outputs/part.gcode")
     */
     action SetZHop(number height)
         checker:RequireAtLeast("GcodeWriter:SetZHop height", height, 0)
@@ -285,6 +449,19 @@ class GcodeWriter
     diagonal) stay unlifted so solid layers don't slow down. While
     SetZHopNeedsRetract is on (the default) a travel also has to retract to
     hop.
+
+    Attribute: Parameter distance The shortest travel that hops (mm).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetZHopMinTravel(0.8)
+        gcode:Write(ordered, "Outputs/part.gcode")
     */
     action SetZHopMinTravel(number distance)
         checker:RequireAtLeast("GcodeWriter:SetZHopMinTravel distance", distance, 0)
@@ -294,6 +471,19 @@ class GcodeWriter
     /*
     true (default): hop only on travels that retract. false: hop on every
     travel longer than zHopMinTravel, even without a retract.
+
+    Attribute: Parameter toggle True to hop only on travels that retract.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetZHopNeedsRetract(false)
+        gcode:Write(ordered, "Outputs/part.gcode")
     */
     action SetZHopNeedsRetract(boolean toggle)
         zHopNeedsRetract = toggle
@@ -303,6 +493,20 @@ class GcodeWriter
     After a layer that is still under the minimum layer time at the slowest
     speed, lift `lift` mm, park `clearance` mm beside the model and wait out
     the rest. lift 0 turns the pause off.
+
+    Attribute: Parameter lift How far to lift the nozzle (mm); 0 turns the pause off.
+    Attribute: Parameter clearance How far beside the model to park (mm).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetCoolingPause(5, 10)
+        gcode:Write(ordered, "Outputs/part.gcode")
     */
     action SetCoolingPause(number lift, number clearance)
         checker:RequireAtLeast("GcodeWriter:SetCoolingPause lift", lift, 0)
@@ -311,7 +515,24 @@ class GcodeWriter
         coolClear = clearance
     end
 
-    /* At most `count` retracts within `window` mm of extruded filament (stops the extruder grinding the filament). */
+    /*
+    At most `count` retracts within `window` mm of extruded filament (stops the extruder grinding the filament).
+
+    Attribute: Parameter count The most retracts allowed in the window.
+    Attribute: Parameter window The window (mm of filament).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetRetraction(5, 45)
+        gcode:SetRetractionLimit(10, 5)      // after SetRetraction
+        gcode:Write(ordered, "Outputs/part.gcode")
+    */
     action SetRetractionLimit(integer count, number window)
         checker:RequireAtLeast("GcodeWriter:SetRetractionLimit count", count, 0)
         checker:RequireAtLeast("GcodeWriter:SetRetractionLimit window", window, 0)
@@ -319,7 +540,23 @@ class GcodeWriter
         retractWindow = window
     end
 
-    /* Slow down layers that would print in less than `seconds`, but never below slowestSpeed (mm/s). */
+    /*
+    Slow down layers that would print in less than `seconds`, but never below slowestSpeed (mm/s).
+
+    Attribute: Parameter seconds The shortest time a layer may take (s).
+    Attribute: Parameter slowestSpeed The slowest speed allowed (mm/s).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetMinLayerTime(8, 10)
+        gcode:Write(ordered, "Outputs/part.gcode")
+    */
     action SetMinLayerTime(number seconds, number slowestSpeed)
         checker:RequireAtLeast("GcodeWriter:SetMinLayerTime seconds", seconds, 0)
         checker:RequirePositive("GcodeWriter:SetMinLayerTime slowestSpeed", slowestSpeed)
@@ -330,6 +567,24 @@ class GcodeWriter
     /*
     Printing speeds in mm/s. The first layer uses firstLayer for everything
     (skirt and brim always do).
+
+    Attribute: Parameter outerWall Outer walls (mm/s).
+    Attribute: Parameter innerWall Inner walls (mm/s).
+    Attribute: Parameter skin Top and bottom skin (mm/s).
+    Attribute: Parameter infill Sparse infill (mm/s).
+    Attribute: Parameter support Support (mm/s).
+    Attribute: Parameter firstLayer Everything on the first layer (mm/s).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetSpeeds(40, 60, 50, 80, 50, 20)      // outer wall, inner wall, skin, infill, support, first layer
+        gcode:Write(ordered, "Outputs/part.gcode")
     */
     action SetSpeeds(number outerWall, number innerWall, number skin, number infill,
                      number support, number firstLayer)
@@ -351,6 +606,19 @@ class GcodeWriter
     Bambu Lab printers: write the header block and the layer / progress
     reports their screen, time estimate and timelapse use:
     M73 P<percent> R<minutes left>, M73 L<layer>, M991 S0 P<layer>.
+
+    Attribute: Parameter toggle True for a Bambu Lab printer.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetBambuExtras(true)
+        gcode:Write(ordered, "Outputs/part.gcode")
     */
     action SetBambuExtras(boolean toggle)
         bambu = toggle
@@ -359,6 +627,25 @@ class GcodeWriter
     /*
     Accelerations in mm/s^2, sent with M204 when they change (0 = never
     sent, the printer keeps whatever the start G-code set).
+
+    Attribute: Parameter outerWall Outer walls (mm/s^2).
+    Attribute: Parameter innerWall Inner walls (mm/s^2).
+    Attribute: Parameter skin Top and bottom skin (mm/s^2).
+    Attribute: Parameter infill Sparse infill (mm/s^2).
+    Attribute: Parameter support Support (mm/s^2).
+    Attribute: Parameter firstLayer The first layer (mm/s^2).
+    Attribute: Parameter travel Moves that don't print (mm/s^2).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetAccelerations(5000, 8000, 8000, 10000, 8000, 500, 10000)
+        gcode:Write(ordered, "Outputs/part.gcode")
     */
     action SetAccelerations(number outerWall, number innerWall, number skin, number infill,
                             number support, number firstLayer, number travel)
@@ -378,7 +665,22 @@ class GcodeWriter
         accelTravel = travel
     end
 
-    /* Speed of moves that don't print (mm/s). */
+    /*
+    Speed of moves that don't print (mm/s).
+
+    Attribute: Parameter mmPerSecond The speed (mm/s), greater than 0.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetTravelSpeed(150)
+        gcode:Write(ordered, "Outputs/part.gcode")
+    */
     action SetTravelSpeed(number mmPerSecond)
         checker:RequirePositive("GcodeWriter:SetTravelSpeed mmPerSecond", mmPerSecond)
         travelSpeed = mmPerSecond
@@ -387,13 +689,41 @@ class GcodeWriter
     /*
     Hotend melt limit in mm^3/s (0 = none). Faster moves than the hotend can
     feed come out thin and weak, so every speed is capped to fit.
+
+    Attribute: Parameter mm3PerSecond The most plastic the hotend can melt (mm^3/s); 0 for no limit.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetMaxFlow(12)
+        gcode:Write(ordered, "Outputs/part.gcode")
     */
     action SetMaxFlow(number mm3PerSecond)
         checker:RequireAtLeast("GcodeWriter:SetMaxFlow mm3PerSecond", mm3PerSecond, 0)
         maxFlow = mm3PerSecond
     end
 
-    /* Extrusion multiplier (1 = as calculated). */
+    /*
+    Extrusion multiplier (1 = as calculated).
+
+    Attribute: Parameter ratio The multiplier, greater than 0.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetFlow(0.98)
+        gcode:Write(ordered, "Outputs/part.gcode")
+    */
     action SetFlow(number ratio)
         checker:RequirePositive("GcodeWriter:SetFlow ratio", ratio)
         flow = ratio
@@ -402,13 +732,41 @@ class GcodeWriter
     /*
     Extra extrusion multiplier on the first layer (default 1.15), on top of
     SetFlow, so the first layer squishes into the bed.
+
+    Attribute: Parameter ratio The first layer's extra multiplier, greater than 0.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetFirstLayerFlow(1.1)
+        gcode:Write(ordered, "Outputs/part.gcode")
     */
     action SetFirstLayerFlow(number ratio)
         checker:RequirePositive("GcodeWriter:SetFirstLayerFlow ratio", ratio)
         firstLayerFlow = ratio
     end
 
-    /* Only travels longer than `distance` mm retract (default 1.5). */
+    /*
+    Only travels longer than `distance` mm retract (default 1.5).
+
+    Attribute: Parameter distance The shortest travel that retracts (mm).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetMinTravelForRetract(1.5)
+        gcode:Write(ordered, "Outputs/part.gcode")
+    */
     action SetMinTravelForRetract(number distance)
         checker:RequireAtLeast("GcodeWriter:SetMinTravelForRetract distance", distance, 0)
         minTravelForRetract = distance
@@ -417,6 +775,19 @@ class GcodeWriter
     /*
     The file holding the printer's own start G-code, copied in before the
     first layer. A missing file is created from a generic template.
+
+    Attribute: Parameter path The start G-code file.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetStartGCodeFile("Templates/ender3-v2/start.gcode")
+        gcode:Write(ordered, "Outputs/part.gcode")
     */
     action SetStartGCodeFile(text path)
         if path = ""
@@ -425,7 +796,22 @@ class GcodeWriter
         startFile = path
     end
 
-    /* The file holding the printer's own end G-code, copied in after the last layer. */
+    /*
+    The file holding the printer's own end G-code, copied in after the last layer.
+
+    Attribute: Parameter path The end G-code file.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetEndGCodeFile("Templates/ender3-v2/end.gcode")
+        gcode:Write(ordered, "Outputs/part.gcode")
+    */
     action SetEndGCodeFile(text path)
         if path = ""
             checker:Fail("GcodeWriter:SetEndGCodeFile needs a file path")
@@ -438,6 +824,20 @@ class GcodeWriter
     `lift` mm above the bed with the heaters off and no extrusion. Watch it
     to check the print stays on the bed and nothing collides. The custom
     start / end G-code is NOT used in a dry run.
+
+    Attribute: Parameter toggle True for a dry run.
+    Attribute: Parameter lift How high above the bed to trace (mm).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetDryRun(true, 20)      // trace the print 20 mm up, heaters off
+        gcode:Write(ordered, "Outputs/part.gcode")
     */
     action SetDryRun(boolean toggle, number lift)
         checker:RequireAtLeast("GcodeWriter:SetDryRun lift", lift, 0)
@@ -450,6 +850,18 @@ class GcodeWriter
 
     Attribute: Parameter paths The paths in printing order, with roles set (PathOrderer:Order).
     Attribute: Parameter filePath Where to write the G-code.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetTemperatures(210, 60)
+        gcode:Write(ordered, "Outputs/part.gcode")
+        output gcode:GetFilamentLength() + " mm of filament"
     */
     action Write(Array<Contour> paths, text filePath)
         warnings:Empty()
@@ -507,32 +919,127 @@ class GcodeWriter
         writer:Close()
     end
 
-    /* The filament the last Write extruded (mm). */
+    /*
+    The filament the last Write extruded (mm).
+
+    Attribute: Returns The filament the last Write extruded (mm).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:Write(ordered, "Outputs/part.gcode")
+        output "Uses " + gcode:GetFilamentLength() / 1000 + " m of filament"
+    */
     action GetFilamentLength returns number
         return totalFilament
     end
 
-    /* The time the last Write's moves take at their programmed speeds (s); real prints run slower, as acceleration isn't counted. */
+    /*
+    The time the last Write's moves take at their programmed speeds (s); real prints run slower, as acceleration isn't counted.
+
+    Attribute: Returns The time the last Write's moves take at their programmed speeds (s); real prints run slower, as acceleration isn't counted.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:Write(ordered, "Outputs/part.gcode")
+        output "About " + gcode:GetMoveSeconds() / 60 + " minutes of moves"
+    */
     action GetMoveSeconds returns number
         return totalSeconds
     end
 
-    /* How many layers the last Write slowed down to get their minimum layer time. */
+    /*
+    How many layers the last Write slowed down to get their minimum layer time.
+
+    Attribute: Returns How many layers the last Write slowed down to get their minimum layer time.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:Write(ordered, "Outputs/part.gcode")
+        output gcode:GetSlowedLayerCount() + " layers slowed down to cool"
+    */
     action GetSlowedLayerCount returns integer
         return slowedLayers
     end
 
-    /* How many layers were still too quick at the slowest speed, so the nozzle parks and waits after them. */
+    /*
+    How many layers were still too quick at the slowest speed, so the nozzle parks and waits after them.
+
+    Attribute: Returns How many layers were still too quick at the slowest speed, so the nozzle parks and waits after them.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:Write(ordered, "Outputs/part.gcode")
+        output gcode:GetPausedLayerCount() + " layers pause to cool"
+    */
     action GetPausedLayerCount returns integer
         return dwellLayers
     end
 
-    /* How many retracts the last Write skipped to avoid grinding the filament. */
+    /*
+    How many retracts the last Write skipped to avoid grinding the filament.
+
+    Attribute: Returns How many retracts the last Write skipped to avoid grinding the filament.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:Write(ordered, "Outputs/part.gcode")
+        output gcode:GetSkippedRetractCount() + " retracts skipped"
+    */
     action GetSkippedRetractCount returns integer
         return skippedRetracts
     end
 
-    /* Warnings from the last Write (a model too big for the bed, unknown placeholders, a created template), as sentences. */
+    /*
+    Warnings from the last Write (a model too big for the bed, unknown placeholders, a created template), as sentences.
+
+    Attribute: Returns Warnings from the last Write (a model too big for the bed, unknown placeholders, a created template), as sentences.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:Write(ordered, "Outputs/part.gcode")
+        Array<text> warnings = gcode:GetWarnings()
+        integer i = 0
+        repeat while i < warnings:GetSize()
+            output "warning: " + warnings:Get(i)
+            i = i + 1
+        end
+    */
     action GetWarnings returns Array<text>
         return warnings
     end

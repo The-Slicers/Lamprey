@@ -36,6 +36,26 @@ class ContourLayers
     Attribute: Parameter contours The contours to group (kept, not copied).
     Attribute: Parameter planeCount The number of planes.
     Attribute: Parameter usableLoopsOnly True to keep only closed loops of at least 3 points.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Geometry.ContourLayers
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        square:planeIndex = 3
+        Array<Contour> outlines
+        outlines:Add(square)
+        ContourLayers layers
+        layers:Index(outlines, 10, true)
+        Array<Contour> third = layers:GetLayer(3)
+        output third:GetSize()      // 1
     */
     action Index(Array<Contour> contours, integer planeCount, boolean usableLoopsOnly)
         source = contours
@@ -54,7 +74,22 @@ class ContourLayers
         util:BucketByPlane(planeOf, planeCount, starts, order)
     end
 
-    /* The number of planes given to Index. */
+    /*
+    The number of planes given to Index.
+
+    Attribute: Returns The number of planes given to Index.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Geometry.ContourLayers
+
+        Array<Contour> outlines
+        ContourLayers layers
+        layers:Index(outlines, 100, false)
+        output layers:GetPlaneCount()       // 100
+    */
     action GetPlaneCount returns integer
         return planeTotal
     end
@@ -63,8 +98,19 @@ class ContourLayers
     The contours of one plane, in their original order.
 
     Attribute: Parameter plane The plane.
-
     Attribute: Returns A new array; empty for a plane outside the indexed range.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Geometry.ContourLayers
+
+        Array<Contour> outlines      // from ContourGenerator:Build
+        ContourLayers layers
+        layers:Index(outlines, 100, false)
+        Array<Contour> first = layers:GetLayer(0)
+        output first:GetSize() + " loops on the first layer"
     */
     action GetLayer(integer plane) returns Array<Contour>
         Array<Contour> layer

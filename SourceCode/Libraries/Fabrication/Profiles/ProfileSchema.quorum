@@ -144,15 +144,60 @@ class ProfileSchema
         AddNumber("debug", "dryRunLift", "20", 0, 500, "Dry run height above the bed (mm)")
     end
 
+    /*
+    The number of settings.
+
+    Attribute: Returns The number of settings.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Profiles.ProfileSchema
+
+        ProfileSchema schema
+        output schema:GetSize() + " settings"
+    */
     action GetSize returns integer
         return fields:GetSize()
     end
 
+    /*
+    A setting by position, in the order the schema lists them.
+
+    Attribute: Parameter index The position, from 0 to GetSize() - 1.
+    Attribute: Returns The setting.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Profiles.ProfileSchema
+        use Libraries.Fabrication.Profiles.ProfileField
+
+        ProfileSchema schema
+        integer i = 0
+        repeat while i < schema:GetSize()
+            ProfileField field = schema:Get(i)
+            output field:GetKey() + ": " + field:GetDescription()
+            i = i + 1
+        end
+    */
     action Get(integer index) returns ProfileField
         return fields:Get(index)
     end
 
-    /* The field with this key, or undefined. */
+    /*
+    The field with this key, or undefined.
+
+    Attribute: Parameter key The key used in profiles.json.
+    Attribute: Returns The field with this key, or undefined.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Profiles.ProfileSchema
+        use Libraries.Fabrication.Profiles.ProfileField
+
+        ProfileSchema schema
+        ProfileField field = schema:Find("layerHeight")
+        output field:GetDefault()      // 0.2
+    */
     action Find(text key) returns ProfileField
         integer i = 0
         repeat while i < fields:GetSize()
@@ -165,6 +210,20 @@ class ProfileSchema
         return undefined
     end
 
+    /*
+    Whether a key names a setting.
+
+    Attribute: Parameter key The key to look up.
+    Attribute: Returns True if the schema has the setting.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Profiles.ProfileSchema
+
+        ProfileSchema schema
+        output schema:Has("layerHeight")      // true
+        output schema:Has("layerHieght")      // false: a typo
+    */
     action Has(text key) returns boolean
         return Find(key) not= undefined
     end

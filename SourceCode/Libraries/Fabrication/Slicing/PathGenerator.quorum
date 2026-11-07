@@ -83,6 +83,17 @@ class PathGenerator
     shortest fill line kept.
 
     Attribute: Parameter width The width (mm), greater than 0.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:SetLineWidth(0.42)
+        paths:Generate(outlines, 100)
     */
     action SetLineWidth(number width)
         checker:RequirePositive("PathGenerator:SetLineWidth width", width)
@@ -94,6 +105,17 @@ class PathGenerator
     The number of walls (0 for none).
 
     Attribute: Parameter count The number of walls.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:SetWallCount(2)
+        paths:Generate(outlines, 100)
     */
     action SetWallCount(integer count)
         checker:RequireAtLeast("PathGenerator:SetWallCount count", count, 0)
@@ -105,6 +127,17 @@ class PathGenerator
     by side).
 
     Attribute: Parameter density The density, 0 to 1.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:SetInfillDensity(0.15)      // 15% infill
+        paths:Generate(outlines, 100)
     */
     action SetInfillDensity(number density)
         checker:RequireRange("PathGenerator:SetInfillDensity density", density, 0, 1)
@@ -116,6 +149,17 @@ class PathGenerator
     line width.
 
     Attribute: Parameter overlap The fraction, 0 to 1.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:SetInfillOverlap(0.25)      // a quarter of a line width into the wall
+        paths:Generate(outlines, 100)
     */
     action SetInfillOverlap(number overlap)
         checker:RequireRange("PathGenerator:SetInfillOverlap overlap", overlap, 0, 1)
@@ -127,6 +171,17 @@ class PathGenerator
     layers at 0.2 mm. 0 turns them off.
 
     Attribute: Parameter count The number of layers.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:SetTopLayers(4)      // 0.8 mm at 0.2 mm layers
+        paths:Generate(outlines, 100)
     */
     action SetTopLayers(integer count)
         checker:RequireAtLeast("PathGenerator:SetTopLayers count", count, 0)
@@ -137,6 +192,17 @@ class PathGenerator
     Solid layers over bottom surfaces; 0 turns them off.
 
     Attribute: Parameter count The number of layers.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:SetBottomLayers(3)
+        paths:Generate(outlines, 100)
     */
     action SetBottomLayers(integer count)
         checker:RequireAtLeast("PathGenerator:SetBottomLayers count", count, 0)
@@ -148,32 +214,121 @@ class PathGenerator
     zigzags. false: separate straight lines, as on every other layer.
 
     Attribute: Parameter toggle Whether to join the first layer's lines.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:SetJoinFirstLayer(false)      // straight lines on the first layer too
+        paths:Generate(outlines, 100)
     */
     action SetJoinFirstLayer(boolean toggle)
         joinFirstLayer = toggle
     end
 
-    /* The wall loops of every plane from the last Generate. */
+    /*
+    The wall loops of every plane from the last Generate.
+
+    Attribute: Returns The wall loops of every plane from the last Generate.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:Generate(outlines, 100)
+        Array<Contour> walls = paths:GetWalls()
+        output walls:GetSize() + " wall loops"
+    */
     action GetWalls returns Array<Contour>
         return walls
     end
 
-    /* The solid fill lines (and thin-part center lines) of every plane. */
+    /*
+    The solid fill lines (and thin-part center lines) of every plane.
+
+    Attribute: Returns The solid fill lines (and thin-part center lines) of every plane.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:Generate(outlines, 100)
+        Array<Contour> skin = paths:GetSkin()
+        output skin:GetSize() + " solid fill lines"
+    */
     action GetSkin returns Array<Contour>
         return skin
     end
 
-    /* The sparse infill lines of every plane. */
+    /*
+    The sparse infill lines of every plane.
+
+    Attribute: Returns The sparse infill lines of every plane.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:Generate(outlines, 100)
+        Array<Contour> infill = paths:GetInfill()
+        output infill:GetSize() + " infill lines"
+    */
     action GetInfill returns Array<Contour>
         return infill
     end
 
-    /* How many inner-wall / fill loops the last Generate dropped for not fitting inside a thin part. */
+    /*
+    How many inner-wall / fill loops the last Generate dropped for not fitting inside a thin part.
+
+    Attribute: Returns How many inner-wall / fill loops the last Generate dropped for not fitting inside a thin part.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:Generate(outlines, 100)
+        output paths:GetDroppedLoopCount() + " loops didn't fit inside thin parts"
+    */
     action GetDroppedLoopCount returns integer
         return droppedLoops
     end
 
-    /* How many thin islands the last Generate rebuilt with the exact (slower) inset. */
+    /*
+    How many thin islands the last Generate rebuilt with the exact (slower) inset.
+
+    Attribute: Returns How many thin islands the last Generate rebuilt with the exact (slower) inset.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:Generate(outlines, 100)
+        output paths:GetRebuiltIslandCount() + " thin islands needed the exact inset"
+    */
     action GetRebuiltIslandCount returns integer
         return rebuiltIslands
     end
@@ -184,6 +339,19 @@ class PathGenerator
 
     Attribute: Parameter contours The oriented outlines from ContourGenerator:Build.
     Attribute: Parameter planeCount The number of planes sliced.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:SetWallCount(3)
+        paths:SetInfillDensity(0.2)
+        paths:Generate(outlines, 100)
+        Array<Contour> walls = paths:GetWalls()
     */
     action Generate(Array<Contour> contours, integer planeCount)
         walls:Empty()

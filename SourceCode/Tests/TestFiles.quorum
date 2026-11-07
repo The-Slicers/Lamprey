@@ -1,6 +1,8 @@
 package Tests
 
 use Libraries.System.File
+use Libraries.Data.Compression.ZipWriter
+use Libraries.Data.Compression.ZipReader
 
 /*
 The TestFiles class manages the scratch files tests write. Everything goes
@@ -8,6 +10,7 @@ under Outputs/tests/, which is ignored by git and safe to delete.
 */
 class TestFiles
     text root = "Outputs/tests"
+    integer checksums = 0
 
     /* The path of a scratch file, such as Path("gcode/cube.gcode"). */
     action Path(text name) returns text
@@ -38,6 +41,23 @@ class TestFiles
         if file:Exists()
             file:Delete()
         end
+    end
+
+    /*
+    The MD5 (32 upper-case hex digits) of the text's UTF-8 bytes. Lamprey's
+    only MD5 is ZipWriter:AddMd5, so this writes it into a scratch archive
+    and reads it back (a new archive each time, so none is rewritten while
+    Windows may still hold it open for reading).
+    */
+    action Md5(text content) returns text
+        checksums = checksums + 1
+        text archive = Path("md5/checksum-" + checksums + ".zip")
+        ZipWriter zip
+        zip:Open(archive)
+        zip:AddMd5("checksum.md5", content)
+        zip:Close()
+        ZipReader reader
+        return reader:ReadText(archive, "checksum.md5")
     end
 
     /* Whether a scratch file exists. */
