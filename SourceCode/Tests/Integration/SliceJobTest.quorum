@@ -1,5 +1,6 @@
 package Tests.Integration
 
+use Libraries.Containers.Array
 use Libraries.Data.Compression.ZipReader
 use Libraries.Game.Graphics.Models.Data.ModelData
 use Libraries.Fabrication.SliceJob
@@ -30,6 +31,7 @@ class SliceJobTest is LampreyTest
         EveryProfileSlicesACube()
         SupportsAndAdhesion()
         BambuArchive()
+        BambuA1Archive()
         UnusableInput()
     end
 
@@ -108,6 +110,49 @@ class SliceJobTest is LampreyTest
         file:SetPath(gcodePath)
         text written = file:Read()
         ExpectTrue(written:StartsWith("; HEADER_BLOCK_START"), "the G-code has Bambu's header")
+    end
+
+    action BambuA1Archive
+        Case("the A1 profile makes a .gcode.3mf for the A1")
+        SliceJob job
+        job:SetVerbose(false)
+        text gcodePath = files:Path("slice/a1-archive.gcode")
+        text archive = job:Run(models:Cube(), profiles:Require("bambu-a1"), gcodePath)
+        ExpectText(archive, files:Path("slice/a1-archive.gcode.3mf"), "Run returns the archive")
+        ZipReader zip
+        ExpectTrue(zip:HasEntry(archive, "Metadata/plate_1.gcode"), "the archive holds the G-code")
+        text sliceInfo = zip:ReadText(archive, "Metadata/slice_info.config")
+        ExpectContains(sliceInfo, "N2S", "slice_info has the A1's model id")
+        text settings = zip:ReadText(archive, "Metadata/project_settings.config")
+        ExpectContains(settings, "Bambu Lab A1 0.4 nozzle", "the A1 settings template went into the 3MF")
+
+        File file
+        file:SetPath(gcodePath)
+        text written = file:Read()
+        ExpectTrue(written:StartsWith("; HEADER_BLOCK_START"), "the G-code has Bambu's header")
+        ExpectContains(written, "M1002 set_filament_type:PLA", "the start code names the filament")
+        ExpectContains(written, "M620 S0A", "filament 1 comes from the AMS lite or the external spool")
+        ExpectContains(written, "G29 A1 X", "the bed mesh covers the print")
+        text placeholders = "{FILAMENT_TYPE} {FIRST_CENTER_Y} {PARK_Z_UP} {PARK_Z_UP_BACK} {PRIME_FEED} {PRIME_FEED_SLOW} {LINE_FEED} {CALI_FEED} {CALI_FLOW} {FLOW_FEED} {NOZZLE_TEMP_LESS_50}"
+        Array<text> names = placeholders:Split(" ")
+        integer i = 0
+        repeat while i < names:GetSize()
+            ExpectNotContains(written, names:Get(i), names:Get(i) + " is filled in")
+            i = i + 1
+        end
+
+        // the end code raises the gantry 100 mm above the cube's 20 mm top
+        integer parkAt = written:IndexOf(" F600 ; raise the gantry")
+        ExpectTrue(parkAt > 16, "the end code has the A1 park move")
+        if parkAt > 16
+            text before = written:GetSubtext(parkAt - 16, parkAt)
+            integer zAt = before:IndexOf("G1 Z")
+            ExpectTrue(zAt >= 0, "the park move is a G1 Z")
+            if zAt >= 0
+                text z = before:GetSubtext(zAt + 4)
+                ExpectNumber(z:ParseNumber(), 120, 0.5, "the gantry parks 100 mm above the print")
+            end
+        end
     end
 
     action UnusableInput

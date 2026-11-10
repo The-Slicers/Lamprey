@@ -70,6 +70,7 @@ class GcodeWriter
     number filamentDiameter = 1.75
     number nozzleDiameter = 0.4
     number flow = 1.0
+    text filamentType = "PLA"
 
     integer nozzleTemp = 210
     integer bedTemp = 60
@@ -271,6 +272,30 @@ class GcodeWriter
     action SetFilamentDiameter(number diameter)
         checker:RequirePositive("GcodeWriter:SetFilamentDiameter diameter", diameter)
         filamentDiameter = diameter
+    end
+
+    /*
+    The filament's material (PLA, PETG, ...), for {FILAMENT_TYPE} in start /
+    end G-code. Bambu printers read it from "M1002 set_filament_type:".
+
+    Attribute: Parameter type The material, such as "PLA".
+
+    Attribute: Example
+
+    	use Libraries.Containers.Array
+    	use Libraries.Fabrication.Geometry.Contour
+    	use Libraries.Fabrication.Printing.GcodeWriter
+
+    	Array<Contour> ordered // from PathOrderer:Order
+    	GcodeWrite gcode
+    	gcode:SetFilamentType("PETG")
+    	gcode:Write(ordered, "Outputs/part.gcode")
+    */
+    action SetFilamentType(text type)
+    	if type = ""
+     		alert("GcodeWriter:SetFilamentType needs a material name, such as PLA.")
+     	end
+      	filamentType = type:ToUpperCase()
     end
 
     /*
@@ -1221,6 +1246,21 @@ class GcodeWriter
         return 2.0
     end
 
+    // Where a bed-slinger's end code (Bambu A1) raises the nozzle to: 100 mm
+    // above the print, never past the top of the build volume.
+    private action ParkUpZ returns number
+    	return utils:Min2(topZ + 100.0, bedSizeZ)
+    end
+
+    // The A1's settling move comes back down 2 mm, unless the first one hit
+    // the top of the build volume (then it stays there, as Bambu's does).
+    private action ParkUpBack returns number
+    	if ParkUpZ() >= bedSizeZ
+     		return 0.0
+     	end
+      	return 2.0
+    end
+
     // Fills in our placeholders, plus the most common Cura {...} and
     // PrusaSlicer [...] ones, so pasted profiles mostly work as-is.
     private action Substitute(text value) returns text
@@ -1249,6 +1289,20 @@ class GcodeWriter
         result = result:Replace("{PURGE_FEED}", Fixed(MacroFlow() / 2.0 / filamentArea, 2))
         result = result:Replace("{PARK_Z_BACK}", Fixed(ParkZ() - ParkBack(), 2))
         result = result:Replace("{PARK_Z}", Fixed(ParkZ(), 2))
+        // Bambu A1 (bed slinger): its end code raises the gantry instead
+        result = result:Replace("{PARK_Z_UP_BACK}", Fixed(ParkUpZ() - ParkUpBack(), 2))
+        result = result:Replace("{PARK_Z_UP}", Fixed(ParkUpZ(), 2))
+        result = result:Replace("{FIRST_CENTER_X}", Fixed(firstMinX + firstSizeX / 2.0, 3))
+        result = result:Replace("{FIRST_CENTER_Y}", Fixed(firstMinY + firstSizeY / 2.0, 3))
+        // Bambu A1 start code feeds, all from the max flow like ones above:
+        // its prime line (0.5 x 0.3 mm), the same quarter speed, its long
+        // purge (flow / 1.2) and the calibration feed (flow / 2.4, in mm/min)
+        result = result:Replace("{PRIME_FEED_SLOW}", Fixed(MacroFlow() / 0.15 / 4.0 * 60.0, 2))
+        result = result:Replace("{PRIME_FEED}", Fixed(MacroFlow() / 0.15 * 60.0, 2))
+        result = result:Replace("{LINE_FEED}", Fixed(MacroFlow() / 1.2 * 60.0, 2))
+        result = result:Replace("{CALI_FEED}", Fixed(MacroFlow() / 2.4 * 60.0, 2))
+        result = result:Replace("{FILAMENT_TYPE}", filamentType)
+        result = result:Replace("{NOZZLE_TEMP_LESS_50}", "" + (nozzleTemp - 50))
         // Cura
         result = result:Replace("{material_print_temperature_layer_0}", nozzle)
         result = result:Replace("{material_print_temperature}", nozzle)

@@ -52,6 +52,7 @@ class BambuTest is LampreyTest
         PackagingProblems()
         ProjectSettings()
         SettingsFromAProfile()
+        A1Settings()
     end
 
     action PackagesACube
@@ -184,6 +185,36 @@ class BambuTest is LampreyTest
             i = i + 1
         end
         ExpectTrue(nozzleWarned, "a template for another nozzle is warned about")
+    end
+
+    action A1Settings
+        Case("the A1 settings template and the bambu-a1 profile")
+        text a1Template = "Templates/bambu-a1/a1_project_settings.json"
+        BambuProjectSettings settings
+        settings:LoadFile(a1Template)
+        boolean fine = true
+        check
+            settings:Check()
+        detect e1
+            fine = false
+        end
+        ExpectTrue(fine, "the A1 template passes Bambu Studio's checks")
+        ExpectText(settings:GetText("printer_model", "?"), "Bambu Lab A1", "it is for the A1")
+        ExpectText(settings:GetText("printer_settings_id", "?"), "Bambu Lab A1 0.4 nozzle", "with a 0.4 mm nozzle")
+        ExpectText(settings:GetText("printer_structure", "?"), "i3", "a bed slinger")
+        ExpectText(settings:GetText("nozzle_type", "?"), "stainless_steel", "the A1's stock nozzle")
+
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        BambuSettingsMap map
+        JavaScriptObjectNotationTemplate filled
+        filled:Load(map:FilledTemplate(profiles:Require("bambu-a1"), a1Template))
+        Array<text> warnings = map:GetWarnings()
+        ExpectInteger(warnings:GetSize(), 0, "the bambu-a1 profile matches its template (nozzle, filament, keys)")
+        ExpectText(filled:GetText("wall_loops", "?"), "2", "wall_loops from the A1 profile")
+        ExpectText(filled:GetText("textured_plate_temp", "?"), "65", "the A1's PLA bed temperature")
+        ExpectText(filled:GetText("nozzle_temperature", "?"), "220", "the A1's PLA nozzle temperature")
+        ExpectText(filled:GetText("travel_speed", "?"), "500", "travel at the A1 firmware's cap")
     end
 
     action Quoted(text value) returns text

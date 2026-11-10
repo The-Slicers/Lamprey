@@ -74,6 +74,28 @@
         "fanMax": 128
     },
 
+    "bambu-a1": {
+        "_note": "Bambu Lab A1 (bed slinger, 256 x 256 x 256, like the P2S), 0.4 mm stainless steel nozzle, PLA on the Textured PEI plate. Speeds, accelerations, walls and temperatures from Bambu Studio's '0.20mm Standard @BBL A1' and 'Generic PLA @BBL A1'. Travel is 500 because the A1 firmware caps moves there (Bambu's profile asks for 700). The start G-code is resolved for PLA; see the CHANGE notes in it before printing other filaments. a1_project_settings.json was built from Bambu Studio's own A1 machine, process and filament profiles (Bambu Studio 02.08.02.61 keys); a plate you export from Bambu Studio for the A1 can replace it.",
+        "inherits": "bambu-p2s",
+        "startGcodeFile": "Templates/bambu-a1/start.gcode",
+        "endGcodeFile": "Templates/bambu-a1/end.gcode",
+        "printerModelId": "N2S",
+        "bambuSettingsTemplate": "Templates/bambu-a1/a1_project_settings.json",
+
+        "nozzleTemperature": 220,
+        "bedTemperature": 65,
+
+        "wallCount": 2,
+        "topLayers": 5,
+
+        "travelSpeed": 500,
+
+        "accelOuterWall": 5000,
+        "accelInnerWall": 6000,
+        "accelInfill": 6000,
+        "accelSupport": 6000
+    },
+
     "ender3-v2": {
         "_note": "Values from Main.EnderRun.",
         "bedWidth": 200,

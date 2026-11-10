@@ -30,7 +30,7 @@ class ProfileSchema
         AddText("machine", "endGcodeFile", "end.gcode", "The printer's own end G-code")
         AddBoolean("machine", "bambuExtras", "false", "Write Bambu's header block and M73 / M991 progress reports")
         AddBoolean("machine", "write3mf", "false", "Package the G-code as a Bambu .gcode.3mf after slicing")
-        AddText("machine", "printerModelId", "N7", "Bambu printer_model_id: P2S = N7, P1S = C12, X1C = BL-P001")
+        AddText("machine", "printerModelId", "N7", "Bambu printer_model_id: P2S = N7, A1 = N2S, A1 mini = N1, P1S = C12, X1C = BL-P001")
         AddText("machine", "bambuSettingsTemplate", "", "project_settings JSON, or a .gcode.3mf exported by Bambu Studio for this printer")
 
         // ---- filament ----

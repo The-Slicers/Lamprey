@@ -48,7 +48,7 @@ class ProfileManagerTest is LampreyTest
             Fail(problems:Get(i))
             i = i + 1
         end
-        text names = "bambu-p2s bambu-p2s-petg ender3-v2 ender3-v2-fine"
+        text names = "bambu-p2s bambu-p2s-petg bambu-a1 ender3-v2 ender3-v2-fine"
         Array<text> expected = names:Split(" ")
         i = 0
         repeat while i < expected:GetSize()
@@ -58,6 +58,15 @@ class ProfileManagerTest is LampreyTest
         Profile p2s = profiles:Require("bambu-p2s")
         ExpectTrue(p2s:GetBoolean("write3mf") and p2s:GetBoolean("bambuExtras"), "the P2S profile makes a 3MF")
         ExpectNumber(p2s:GetNumber("bedWidth"), 256, 0, "the P2S bed")
+
+        Profile a1 = profiles:Require("bambu-a1")
+        ExpectText(a1:GetText("printerModelId"), "N2S", "the A1's Bambu model id")
+        ExpectTrue(a1:GetBoolean("write3mf") and a1:GetBoolean("bambuExtras"), "the A1 profile makes a 3MF")
+        ExpectNumber(a1:GetNumber("bedWidth"), 256, 0, "the A1 bed, inherited from the P2S")
+        ExpectNumber(a1:GetNumber("bedHeight"), 256, 0, "the A1 build height, inherited from the P2S")
+        ExpectNumber(a1:GetNumber("travelSpeed"), 500, 0, "travel at the A1 firmware's speed cap")
+        ExpectText(a1:GetText("startGcodeFile"), "Templates/bambu-a1/start.gcode", "the A1's own start G-code")
+        ExpectText(a1:GetText("bambuSettingsTemplate"), "Templates/bambu-a1/a1_project_settings.json", "the A1's own settings template")
     end
 
     action InheritanceFromFile

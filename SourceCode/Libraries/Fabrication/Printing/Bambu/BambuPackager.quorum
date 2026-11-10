@@ -152,7 +152,7 @@ class BambuPackager
     end
 
     /*
-    printer_model_id: P2S = N7, P1S = C12, X1C = BL-P001.
+    printer_model_id: P2S = N7, A1 = N2S, A1 mini = N1, P1S = C12, X1C = BL-P001.
 
     Attribute: Parameter id The printer model ID.
 

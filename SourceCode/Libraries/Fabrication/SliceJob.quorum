@@ -287,6 +287,7 @@ class SliceJob
         gcode:SetFlow(profile:GetNumber("flow"))
         gcode:SetFirstLayerFlow(profile:GetNumber("firstLayerFlow"))
         gcode:SetMaxFlow(profile:GetNumber("maxFlow"))
+        gcode:SetFilamentType(profile:GetText("filamentType"))
         gcode:SetTemperatures(profile:GetInteger("nozzleTemperature"), profile:GetInteger("bedTemperature"))
         gcode:SetBed(profile:GetNumber("bedWidth"), profile:GetNumber("bedDepth"))
         gcode:SetBedHeight(profile:GetNumber("bedHeight"))

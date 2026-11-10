@@ -43,6 +43,7 @@ class GcodeWriterTest is LampreyTest
         DryRun()
         BambuExtras()
         TemplatesAndPlaceholders()
+        BambuA1Placeholders()
         RejectsBadSettings()
     end
 
@@ -163,6 +164,72 @@ class GcodeWriterTest is LampreyTest
         empty:Write(nothing, files:Path("gcode/empty.gcode"))
         Array<text> emptyWarnings = empty:GetWarnings()
         ExpectInteger(emptyWarnings:GetSize(), 1, "writing no paths is warned about")
+    end
+
+    action BambuA1Placeholders
+        Case("the Bambu A1 placeholders")
+        text a1Start = files:Write("gcode/a1-start.gcode", "M1002 set_filament_type:{FILAMENT_TYPE}" + lf
+            + "M109 S{NOZZLE_TEMP_LESS_50}" + lf
+            + "G0 X128 E8 F{LINE_FEED}" + lf
+            + "G0 X133 E.3742 F{PRIME_FEED_SLOW}" + lf
+            + "G0 X138 E.3742 F{PRIME_FEED}" + lf
+            + "G1 E10 F{CALI_FEED}" + lf
+            + "M983 F{CALI_FLOW} A0.3 H{NOZZLE_DIAMETER}")
+        text a1End = files:Write("gcode/a1-end.gcode", "G1 X0 Y{FIRST_CENTER_Y} F18000" + lf
+            + "; first layer centre x {FIRST_CENTER_X} mm" + lf
+            + "G1 Z{PARK_Z_UP} F600" + lf
+            + "G1 Z{PARK_Z_UP_BACK}")
+
+        GcodeWriter gcode = Writer()
+        gcode:SetFilamentType("petg")
+        gcode:SetStartGCodeFile(a1Start)
+        gcode:SetEndGCodeFile(a1End)
+        text path = files:Path("gcode/cube-a1.gcode")
+        gcode:Write(ordered, path)
+        Array<text> warnings = gcode:GetWarnings()
+        ExpectInteger(warnings:GetSize(), 0, "every A1 placeholder is known")
+        GcodeReader reader
+        reader:Read(path)
+        text gcodeText = reader:GetText()
+        ExpectContains(gcodeText, "M1002 set_filament_type:PETG", "{FILAMENT_TYPE}, upper case")
+        ExpectContains(gcodeText, "M109 S160", "{NOZZLE_TEMP_LESS_50}: 210 - 50")
+        // no SetMaxFlow, so the feeds use the default 12 mm^3/s
+        ExpectContains(gcodeText, "G0 X128 E8 F600.00", "{LINE_FEED}: 12 / 1.2 * 60")
+        ExpectContains(gcodeText, "G0 X133 E.3742 F1200.00", "{PRIME_FEED_SLOW}: 12 / 0.15 / 4 * 60")
+        ExpectContains(gcodeText, "G0 X138 E.3742 F4800.00", "{PRIME_FEED}: 12 / 0.15 * 60")
+        ExpectContains(gcodeText, "G1 E10 F300.00", "{CALI_FEED}: 12 / 2.4 * 60")
+        ExpectContains(gcodeText, "M983 F5.00 A0.3 H0.40", "{CALI_FLOW} and {NOZZLE_DIAMETER}")
+        // the cube sits in the middle of the 220 mm bed
+        ExpectNumber(NumberAfter(gcodeText, "G1 X0 Y", " F18000"), 110, 0.5, "{FIRST_CENTER_Y}")
+        ExpectNumber(NumberAfter(gcodeText, "; first layer centre x ", " mm"), 110, 0.5, "{FIRST_CENTER_X}")
+        // the 20 mm cube's top is at 20 mm: the gantry goes 100 mm above it, then down 2
+        ExpectContains(gcodeText, "G1 Z120.00 F600" + lf + "G1 Z118.00", "{PARK_Z_UP} and {PARK_Z_UP_BACK}")
+
+        GcodeWriter capped = Writer()
+        capped:SetStartGCodeFile(a1Start)
+        capped:SetEndGCodeFile(a1End)
+        capped:SetBedHeight(110)
+        text cappedPath = files:Path("gcode/cube-a1-capped.gcode")
+        capped:Write(ordered, cappedPath)
+        GcodeReader cappedReader
+        cappedReader:Read(cappedPath)
+        text cappedText = cappedReader:GetText()
+        ExpectContains(cappedText, "G1 Z110.00 F600" + lf + "G1 Z110.00", "the park stops at the top of the build volume and stays there")
+    end
+
+    /* The number between the first 'before' and the next 'after', or -1. */
+    action NumberAfter(text haystack, text before, text after) returns number
+        integer start = haystack:IndexOf(before)
+        if start < 0
+            return -1.0
+        end
+        start = start + before:GetSize()
+        integer stop = haystack:IndexOf(after, start)
+        if stop < 0
+            return -1.0
+        end
+        text value = haystack:GetSubtext(start, stop)
+        return value:ParseNumber()
     end
 
     action RejectsBadSettings
