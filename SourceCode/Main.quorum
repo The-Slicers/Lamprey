@@ -2,6 +2,7 @@ use Libraries.Containers.Array
 use Libraries.System.File
 use Libraries.Game.Graphics.Models.Data.ModelLoader
 use Libraries.Game.Graphics.Models.Data.ModelData
+use Libraries.System.DateTime
 
 use Libraries.Fabrication.ArgumentChecker
 use Libraries.Fabrication.SliceJob
@@ -22,9 +23,9 @@ use Tests.LampreyTests
 */
 class Main
     boolean runTests = false
-    text modelPath = "assets/xyzCalibration_cube.stl"
+    text modelPath = "assets/printed_weird.stl"
     text profilesPath = "Profiles/profiles.json"
-    text profileName = "bambu-a1"          // or "bambu-a1", "bambu-p2s", "ender3-v2", "ender3-v2-fine", "bambu-p2s-petg"
+    text profileName = "bambu-a1" // or "bambu-a1", "bambu-p2s", "ender3-v2", "ender3-v2-fine", "bambu-p2s-petg"
     text outputFolder = "Outputs"
 
     action Main
@@ -33,7 +34,8 @@ class Main
             integer failed = tests:Run()
             return now
         end
-
+        DateTime timer 
+        number start = timer:GetEpochTime()
         ArgumentChecker checker
         checker:RequireFile("Model", modelPath)
         File file
@@ -48,6 +50,8 @@ class Main
         profiles:Load(profilesPath)
         PrintWarnings(profiles:GetWarnings())
         Profile profile = profiles:Require(profileName)
+        profile:Set("supportsEnabled", "true")
+        profile:Set("adhesionType", "brim")
 
         text gcodePath = outputFolder + "/" + BaseName(modelPath) + ".gcode"
         SliceJob job
@@ -60,6 +64,12 @@ class Main
             text settingsPath = map:WriteTemplate(profile, profile:GetText("bambuSettingsTemplate"), outputFolder + "/project_settings.json")
             output "Wrote " + settingsPath + ": the " + map:GetFilledCount() + " Bambu settings the 3MF was made with"
         end
+
+        number finish = timer:GetEpochTime()
+
+        number elapsed = finish - start
+        output "Slicing took " + elapsed + " milliseconds"
+        output "That is " + (elapsed / 1000) + " seconds"
     end
 
     private action PrintWarnings(Array<text> warnings)

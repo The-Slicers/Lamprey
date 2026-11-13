@@ -35,16 +35,47 @@
         "topLayers": 3,
         "bottomLayers": 3,
 
-        "supportsEnabled": false,
+        "_topNote": "Top surfaces: Bambu Studio's own top surface speed (200) and acceleration (accelSkin, 2000). Set ironing to true to iron them with Bambu Studio's ironing values below.",
+        "topSurfaceLayers": 1,
+        "topSurfaceSpeed": 100,
+        "topSurfaceFlow": 1.0,
+        "ironing": false,
+        "ironingSpeed": 30,
+        "ironingFlow": 0.1,
+        "ironingSpacing": 0.15,
+        "ironingInset": 0.21,
+
+        "_adhesionNote": "Brim about 5 mm wide, touching the model and the support feet. 1.15 first-layer flow over-fills 0.4 mm-spaced lines and raises ridges; 1.05 still squishes well on the textured plate.",
         "adhesionType": "none",
+        "brimLoops": 12,
+        "brimGap": 0,
+
+        "supportsEnabled": false,
+        "_supportNote": "With the defaults (1.0 mm tips, branches thickening at only 5 degrees, leaning up to 40 degrees), branches stayed about 1 mm thick for 5-10 mm and snapped. Thicker tips, branches that thicken faster and lean less, and a wider foot on the bed.",
+        "supportTipDiameter": 1.6,
+        "supportGrowthAngle": 12,
+        "supportMaxRadius": 5.0,
+        "supportBranchAngle": 30,
+        "supportBaseFlare": 2.0,
+        "_minHeightNote": "No posts under overhangs lower than 2 mm above the bed (they caused stringing at the base). Needs supportMinHeight in ProfileSchema, SliceJob and TreeSupport.",
+        "supportMinHeight": 2.0,
 
         "outerWallSpeed": 200,
         "innerWallSpeed": 300,
         "skinSpeed": 200,
         "infillSpeed": 270,
-        "supportSpeed": 150,
+        "supportSpeed": 100,
         "firstLayerSpeed": 50,
         "travelSpeed": 600,
+        "_overhangNote": "Walls hanging past the layer below slow down like Bambu Studio's: 25-50% of the line unsupported 50 mm/s, 50-75% 30 mm/s, 75% and more 10 mm/s.",
+        "overhangSpeed25": 50,
+        "overhangSpeed50": 30,
+        "overhangSpeed75": 10,
+
+        "_seamNote": "Seams like Bambu Studio's: on the corner nearest the back where there is one (aligned), loops stop 0.06 mm (15% of the nozzle) short, then wipe 2 mm along the wall while retracting.",
+        "seamCorners": true,
+        "seamGap": 0.06,
+        "wipeDistance": 2,
 
         "accelOuterWall": 6000,
         "accelInnerWall": 10000,
@@ -62,7 +93,11 @@
         "zHopMinTravel": 1.5,
 
         "minLayerTime": 4,
-        "minPrintSpeed": 20
+        "minPrintSpeed": 20,
+
+        "_joinNote": "Solid fill and sparse infill are chained into zigzags, so each layer has a few long paths instead of a separate start, stop and jump for every line.",
+        "joinSkin": true,
+        "joinInfill": true
     },
 
     "bambu-p2s-petg": {
@@ -75,25 +110,56 @@
     },
 
     "bambu-a1": {
-        "_note": "Bambu Lab A1 (bed slinger, 256 x 256 x 256, like the P2S), 0.4 mm stainless steel nozzle, PLA on the Textured PEI plate. Speeds, accelerations, walls and temperatures from Bambu Studio's '0.20mm Standard @BBL A1' and 'Generic PLA @BBL A1'. Travel is 500 because the A1 firmware caps moves there (Bambu's profile asks for 700). The start G-code is resolved for PLA; see the CHANGE notes in it before printing other filaments. a1_project_settings.json was built from Bambu Studio's own A1 machine, process and filament profiles (Bambu Studio 02.08.02.61 keys); a plate you export from Bambu Studio for the A1 can replace it.",
+        "_note": "Bambu Lab A1 (bed slinger, 256 x 256 x 256, like the P2S), 0.4 mm stainless steel nozzle, PLA on the Textured PEI plate. Starts from Bambu Studio's '0.20mm Standard @BBL A1' and 'Generic PLA @BBL A1', then slowed down and given supports and a brim for tall prints on small feet (see the notes below). Travel is capped by the A1 firmware at 500 (Bambu's profile asks for 700). The start G-code is resolved for PLA; see the CHANGE notes in it before printing other filaments. a1_project_settings.json was built from Bambu Studio's own A1 machine, process and filament profiles (Bambu Studio 02.08.02.61 keys); a plate you export from Bambu Studio for the A1 can replace it.",
         "inherits": "bambu-p2s",
         "startGcodeFile": "Templates/bambu-a1/start.gcode",
         "endGcodeFile": "Templates/bambu-a1/end.gcode",
         "printerModelId": "N2S",
         "bambuSettingsTemplate": "Templates/bambu-a1/a1_project_settings.json",
 
-        "nozzleTemperature": 220,
+        "_tempNote": "Bambu uses 220; 215 strings less between support posts.",
+        "nozzleTemperature": 215,
         "bedTemperature": 65,
+        "_flowNote": "21 mm3/s suits Bambu PLA Basic. Bambu Studio's Generic PLA profile is much lower; use 12 for third-party PLA.",
+        "maxFlow": 21,
 
-        "wallCount": 2,
-        "topLayers": 5,
+        "lineWidth": 0.4,
+        "wallCount": 3,
+        "infillDensity": 0.15,
+        "topLayers": 3,
+        "bottomLayers": 3,
 
-        "travelSpeed": 500,
+        "_speedNote": "Slower and gentler than Bambu's defaults, so the A1's moving bed doesn't shake a tall part on small feet loose. Roughly the printer's Silent mode, set in the profile.",
+        "outerWallSpeed": 150,
+        "innerWallSpeed": 200,
+        "infillSpeed": 200,
+        "travelSpeed": 300,
 
         "accelOuterWall": 5000,
-        "accelInnerWall": 6000,
-        "accelInfill": 6000,
-        "accelSupport": 6000
+        "accelInnerWall": 4000,
+        "accelInfill": 4000,
+
+        "supportsEnabled": false,
+        "_supportNote": "With the defaults (1.0 mm tips, branches thickening at only 5 degrees, leaning up to 40 degrees), branches stayed about 1 mm thick for 5-10 mm and snapped. Thicker tips, branches that thicken faster and lean less, and a wider foot on the bed.",
+        "supportTipDiameter": 1.6,
+        "supportGrowthAngle": 12,
+        "supportMaxRadius": 5.0,
+        "supportBranchAngle": 30,
+        "supportBaseFlare": 2.0,
+        "_minHeightNote": "No posts under overhangs lower than 2 mm above the bed (they caused stringing at the base). Needs supportMinHeight in ProfileSchema, SliceJob and TreeSupport.",
+        "supportMinHeight": 2.0,
+        "supportSpeed": 80,
+        "accelSupport": 3000,
+
+        "_adhesionNote": "Brim about 5 mm wide, touching the model and the support feet. 1.15 first-layer flow over-fills 0.4 mm-spaced lines and raises ridges; 1.05 still squishes well on the textured plate.",
+        "adhesionType": "none",
+        "brimLoops": 12,
+        "brimGap": 0,
+        "firstLayerFlow": 1.05,
+
+        "_joinNote": "Solid fill and sparse infill are chained into zigzags, so each layer has a few long paths instead of a separate start, stop and jump for every line.",
+        "joinSkin": true,
+        "joinInfill": true
     },
 
     "ender3-v2": {
@@ -123,8 +189,18 @@
         "lineWidth": 0.4,
         "wallCount": 3,
         "infillDensity": 0.15,
-        "topLayers": 4,
+        "topLayers": 3,
         "bottomLayers": 3,
+
+        "_topNote": "Top surfaces print slower than the rest of the skin. Set ironing to true to iron them.",
+        "topSurfaceLayers": 1,
+        "topSurfaceSpeed": 30,
+        "topSurfaceFlow": 1.0,
+        "ironing": false,
+        "ironingSpeed": 15,
+        "ironingFlow": 0.15,
+        "ironingSpacing": 0.1,
+        "ironingInset": 0.2,
 
         "supportsEnabled": true,
         "supportTipDiameter": 0.8,
@@ -143,6 +219,12 @@
         "supportSpeed": 40,
         "firstLayerSpeed": 15,
         "travelSpeed": 150,
+        "overhangSpeed25": 0,
+        "overhangSpeed50": 20,
+        "overhangSpeed75": 15,
+        "seamCorners": true,
+        "seamGap": 0.06,
+        "wipeDistance": 1,
 
         "retractLength": 6.0,
         "retractSpeed": 40,
@@ -155,7 +237,11 @@
         "minPrintSpeed": 10,
         "fanMax": 255,
         "fanOffLayers": 1,
-        "fanFullLayer": 3
+        "fanFullLayer": 3,
+
+        "_joinNote": "Solid fill and sparse infill are chained into zigzags, so each layer has a few long paths instead of a separate start, stop and jump for every line.",
+        "joinSkin": true,
+        "joinInfill": true
     },
 
     "ender3-v2-fine": {

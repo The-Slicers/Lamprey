@@ -1,6 +1,7 @@
 package Libraries.Fabrication.Slicing
 
 use Libraries.Containers.Array
+use Libraries.Compute.Math
 use Libraries.Fabrication.ArgumentChecker
 use Libraries.Fabrication.Geometry.Contour
 use Libraries.Fabrication.Geometry.ContourLayers
@@ -15,9 +16,9 @@ Per layer: skirt / brim first, then one nearest-neighbour tour over the
 model's islands and the support tines together, so the nozzle always goes to
 whatever is closest instead of printing every tine and then crossing back
 over the layer for the model. Each island is finished (walls inside out, then
-skin, then infill) and each tine is finished (its outline, then the lines
-inside it) before moving on. Fewer trips across open air means fewer
-strings. Wall loops start at the vertex nearest the seam point, so the seams
+skin, then infill, then its top surface and the ironing over it) and each
+tine is finished (its outline, then the lines inside it) before moving on.
+Fewer trips across open air means fewer strings. Wall loops start at the vertex nearest the seam point, so the seams
 line up.
 
 Paths too short to print cleanly are dropped (see SetCleanup), except the
@@ -44,6 +45,12 @@ Attribute: Example
 class PathOrderer
     number seamX = 0.0
     number seamY = 1000000.0
+    // seams on corners (turning 45 degrees or more, measured over
+    // seamCornerReach mm either side) when a loop has any
+    boolean seamCorners = false
+    number seamCornerReach = 1.0
+    // cosine of the smallest turn that counts as a corner (45 degrees)
+    number seamCornerCos = 0.7071067811865476
 
     number minLoopLength = 1.0
     number minLineLength = 0.4
@@ -51,6 +58,8 @@ class PathOrderer
     integer droppedPaths = 0
     Array<Contour> skirt
     Array<Contour> support
+    Array<Contour> topSurface
+    Array<Contour> ironing
 
     number nozzleX = 0.0
     number nozzleY = 0.0
@@ -59,6 +68,7 @@ class PathOrderer
     GeometryUtilities util
     PathRole roles
     ArgumentChecker checker
+    Math math
 
     /*
     Wall seams are placed at the vertex nearest this point.
@@ -76,6 +86,29 @@ class PathOrderer
     action SetSeamPoint(number x, number y)
         seamX = x
         seamY = y
+    end
+
+    /*
+    true: a wall loop's seam goes on a corner where the loop has one (a
+    turn of 45 degrees or more), the corner nearest the seam point, instead
+    of on the vertex nearest the seam point. A seam on a corner is much
+    harder to see than one down the middle of a smooth, curved side. Loops
+    with no corner (a cylinder, a smooth hull) still use the nearest vertex,
+    so the seam stays lined up from layer to layer. false (the default):
+    always the nearest vertex. Like Bambu Studio's "aligned" seams.
+
+    Attribute: Parameter toggle Whether to put seams on corners.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Slicing.PathOrderer
+
+        PathOrderer orderer
+        orderer:SetSeamPoint(0, 1000000)
+        orderer:SetSeamCorners(true)      // the back-most corner, if there is one
+    */
+    action SetSeamCorners(boolean toggle)
+        seamCorners = toggle
     end
 
     /*
@@ -147,6 +180,59 @@ class PathOrderer
     end
 
     /*
+    Top surface zigzags (from PathGenerator:GetTopSurface), printed after
+    the island's infill. They are printed in the order PathGenerator made
+    them, in one sweep across the surface (forwards or backwards, whichever
+    starts nearer the nozzle), never picked nearest-first: that keeps every
+    line next to one printed just before it.
+
+    Attribute: Parameter paths The top surface zigzags.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+        use Libraries.Fabrication.Slicing.PathOrderer
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:SetTopSurfaceLayers(1)
+        paths:Generate(outlines, 100)
+        PathOrderer orderer
+        orderer:SetTopSurface(paths:GetTopSurface())
+        Array<Contour> ordered = orderer:Order(outlines, paths:GetWalls(), paths:GetSkin(), paths:GetInfill(), 100)
+    */
+    action SetTopSurface(Array<Contour> paths)
+        topSurface = paths
+    end
+
+    /*
+    Ironing zigzags (from PathGenerator:GetIroning), printed last on their
+    island, right after its top surface, in one sweep like it.
+
+    Attribute: Parameter paths The ironing zigzags.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+        use Libraries.Fabrication.Slicing.PathOrderer
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:SetIroning(true, 0.1, 0.2)
+        paths:Generate(outlines, 100)
+        PathOrderer orderer
+        orderer:SetIroning(paths:GetIroning())
+        Array<Contour> ordered = orderer:Order(outlines, paths:GetWalls(), paths:GetSkin(), paths:GetInfill(), 100)
+    */
+    action SetIroning(Array<Contour> paths)
+        ironing = paths
+    end
+
+    /*
     How many paths the last Order dropped as too short.
 
     Attribute: Returns How many paths the last Order dropped as too short.
@@ -209,6 +295,10 @@ class PathOrderer
         infillLayers:Index(infill, planeCount, false)
         ContourLayers supportLayers
         supportLayers:Index(support, planeCount, false)
+        ContourLayers topLayers
+        topLayers:Index(topSurface, planeCount, false)
+        ContourLayers ironLayers
+        ironLayers:Index(ironing, planeCount, false)
 
         integer p = 0
         repeat while p < planeCount
@@ -234,6 +324,12 @@ class PathOrderer
             Array<Contour> layerInfill
             Array<integer> infillIsland
             CollectLayer(infillLayers:GetLayer(p), islands, layerInfill, infillIsland)
+            Array<Contour> layerTop
+            Array<integer> topIsland
+            CollectLayer(topLayers:GetLayer(p), islands, layerTop, topIsland)
+            Array<Contour> layerIron
+            Array<integer> ironIsland
+            CollectLayer(ironLayers:GetLayer(p), islands, layerIron, ironIsland)
 
             // this layer's support: tine outlines, and the lines inside them
             Array<Contour> tines
@@ -269,7 +365,8 @@ class PathOrderer
                 end
                 done:Set(best, true)
                 if best < islandCount
-                    PrintIsland(best, layerWalls, wallIsland, layerSkin, skinIsland, layerInfill, infillIsland)
+                    PrintIsland(best, layerWalls, wallIsland, layerSkin, skinIsland, layerInfill, infillIsland,
+                                layerTop, topIsland, layerIron, ironIsland)
                 else
                     PrintTine(best - islandCount, tines, tineLines, lineTine)
                 end
@@ -279,7 +376,8 @@ class PathOrderer
             // Leftovers. IslandOf now attaches stray paths to the nearest
             // island or tine, so these are only non-empty on a layer that
             // has no islands (or no tine outlines) at all.
-            PrintIsland(-1, layerWalls, wallIsland, layerSkin, skinIsland, layerInfill, infillIsland)
+            PrintIsland(-1, layerWalls, wallIsland, layerSkin, skinIsland, layerInfill, infillIsland,
+                        layerTop, topIsland, layerIron, ironIsland)
             OrderLines(OfIsland(tineLines, lineTine, -1), roles:SUPPORT_FILL)
             p = p + 1
         end
@@ -288,7 +386,9 @@ class PathOrderer
 
     private action PrintIsland(integer island, Array<Contour> layerWalls, Array<integer> wallIsland,
                                Array<Contour> layerSkin, Array<integer> skinIsland,
-                               Array<Contour> layerInfill, Array<integer> infillIsland)
+                               Array<Contour> layerInfill, Array<integer> infillIsland,
+                               Array<Contour> layerTop, Array<integer> topIsland,
+                               Array<Contour> layerIron, Array<integer> ironIsland)
         // a wall whose wallIndex was never set (-1) is printed as an outer wall
         integer maxWall = -1
         integer i = 0
@@ -320,6 +420,8 @@ class PathOrderer
         end
         OrderLines(OfIsland(layerSkin, skinIsland, island), roles:SKIN)
         OrderLines(OfIsland(layerInfill, infillIsland, island), roles:INFILL)
+        OrderSweep(OfIsland(layerTop, topIsland, island), roles:TOP_SURFACE)
+        OrderSweep(OfIsland(layerIron, ironIsland, island), roles:IRONING)
     end
 
     private action WallIndexOf(Contour wall) returns integer
@@ -350,7 +452,7 @@ class PathOrderer
         integer i = 0
         repeat while i < loops:GetSize()
             Contour loop = loops:Get(i)
-            seams:Add(loop:NearestVertexIndex(seamX, seamY))
+            seams:Add(SeamVertex(loop))
             used:Add(false)
             i = i + 1
         end
@@ -409,6 +511,128 @@ class PathOrderer
         end
     end
 
+    // Where a wall loop's seam goes: the corner nearest the seam point if
+    // SetSeamCorners is on and the loop has a corner, otherwise the vertex
+    // nearest the seam point.
+    //
+    // Measured over a millimetre either side, the vertices just beside a
+    // corner turn nearly as much as the corner itself, so only the sharpest
+    // vertex of each corner counts: one that turns at least as much as every
+    // vertex within seamCornerReach of it along the loop.
+    private action SeamVertex(Contour loop) returns integer
+        integer nearest = loop:NearestVertexIndex(seamX, seamY)
+        integer n = loop:GetSize()
+        if not seamCorners or n < 3
+            return nearest
+        end
+        // the cosine of each vertex's turn (smaller = sharper)
+        Array<number> turn
+        integer t = 0
+        repeat while t < n
+            turn:Add(TurnCosine(loop, t))
+            t = t + 1
+        end
+        integer best = -1
+        number bestD2 = 0.0
+        integer v = 0
+        repeat while v < n
+            number here = turn:Get(v)
+            if here <= seamCornerCos and SharpestNearby(loop, turn, v)
+                number dx = loop:xs:Get(v) - seamX
+                number dy = loop:ys:Get(v) - seamY
+                number d2 = dx * dx + dy * dy
+                if best = -1 or d2 < bestD2
+                    best = v
+                    bestD2 = d2
+                end
+            end
+            v = v + 1
+        end
+        if best = -1
+            return nearest
+        end
+        return best
+    end
+
+    // Does vertex v turn at least as sharply as every vertex within
+    // seamCornerReach of it along the loop, both ways?
+    private action SharpestNearby(Contour loop, Array<number> turn, integer v) returns boolean
+        integer n = loop:GetSize()
+        number here = turn:Get(v)
+        integer direction = -1
+        repeat while direction <= 1
+            integer at = v
+            number walked = 0.0
+            integer steps = 0
+            boolean going = true
+            repeat while going and steps < n - 1
+                integer other = (at + direction + n) mod n
+                number dx = loop:xs:Get(other) - loop:xs:Get(at)
+                number dy = loop:ys:Get(other) - loop:ys:Get(at)
+                walked = walked + math:SquareRoot(dx * dx + dy * dy)
+                if walked > seamCornerReach
+                    going = false
+                else
+                    if turn:Get(other) < here
+                        return false
+                    end
+                    at = other
+                    steps = steps + 1
+                end
+            end
+            direction = direction + 2
+        end
+        return true
+    end
+
+    // The cosine of how far the loop turns at vertex v: 1 for straight on,
+    // cos 45 degrees = 0.71 for a 45 degree corner, 0 for a right angle. The
+    // directions are taken from points seamCornerReach mm back and ahead
+    // along the loop, so a corner rounded off over a few short edges (as
+    // tessellated models have) still counts, and the slight bend at each
+    // vertex of a smooth curve doesn't.
+    private action TurnCosine(Contour loop, integer v) returns number
+        integer n = loop:GetSize()
+        number vx = loop:xs:Get(v)
+        number vy = loop:ys:Get(v)
+
+        integer back = v
+        number walked = 0.0
+        integer steps = 0
+        repeat while walked < seamCornerReach and steps < n - 1
+            integer before = (back + n - 1) mod n
+            number px = loop:xs:Get(before) - loop:xs:Get(back)
+            number py = loop:ys:Get(before) - loop:ys:Get(back)
+            walked = walked + math:SquareRoot(px * px + py * py)
+            back = before
+            steps = steps + 1
+        end
+        integer ahead = v
+        walked = 0.0
+        steps = 0
+        repeat while walked < seamCornerReach and steps < n - 1
+            integer following = (ahead + 1) mod n
+            number qx = loop:xs:Get(following) - loop:xs:Get(ahead)
+            number qy = loop:ys:Get(following) - loop:ys:Get(ahead)
+            walked = walked + math:SquareRoot(qx * qx + qy * qy)
+            ahead = following
+            steps = steps + 1
+        end
+        if back = v or ahead = v or back = ahead
+            return 1.0
+        end
+
+        number ax = vx - loop:xs:Get(back)
+        number ay = vy - loop:ys:Get(back)
+        number bx = loop:xs:Get(ahead) - vx
+        number by = loop:ys:Get(ahead) - vy
+        number lengths = math:SquareRoot((ax * ax + ay * ay) * (bx * bx + by * by))
+        if lengths < 0.000000001
+            return 1.0
+        end
+        return (ax * bx + ay * by) / lengths
+    end
+
     private action RotatedLoop(Contour src, integer start) returns Contour
         Contour path
         integer n = src:GetSize()
@@ -420,6 +644,59 @@ class PathOrderer
         end
         path:closed = true
         return path
+    end
+
+    // Prints `lines` in the order given (one sweep across a surface), or all
+    // of it backwards, each line reversed, when that starts nearer the
+    // nozzle. Either way neighbouring lines are printed one after the other.
+    private action OrderSweep(Array<Contour> lines, integer role)
+        integer count = lines:GetSize()
+        if count = 0
+            return now
+        end
+        Contour first = lines:Get(0)
+        Contour last = lines:Get(count - 1)
+        number fx = first:HeadX() - nozzleX
+        number fy = first:HeadY() - nozzleY
+        number lx = last:TailX() - nozzleX
+        number ly = last:TailY() - nozzleY
+        boolean backwards = lx * lx + ly * ly < fx * fx + fy * fy
+        integer i = 0
+        repeat while i < count
+            if backwards
+                EmitLine(lines:Get(count - 1 - i), true, role)
+            else
+                EmitLine(lines:Get(i), false, role)
+            end
+            i = i + 1
+        end
+    end
+
+    // Adds one open path to the output (reversed if flip), merging points
+    // closer than minSegmentLength, and moves the nozzle to its end.
+    private action EmitLine(Contour src, boolean flip, integer role)
+        Contour path
+        integer n = src:GetSize()
+        integer i = 0
+        repeat while i < n
+            integer v = i
+            if flip
+                v = n - 1 - i
+            end
+            boolean isLast = false
+            if i = n - 1
+                isLast = true
+            end
+            AddSpaced(path, src:xs:Get(v), src:ys:Get(v), isLast)
+            i = i + 1
+        end
+        path:closed = false
+        path:planeIndex = src:planeIndex
+        path:role = role
+        path:keepShort = src:keepShort
+        ordered:Add(path)
+        nozzleX = path:TailX()
+        nozzleY = path:TailY()
     end
 
     private action OrderLines(Array<Contour> lines, integer role)
@@ -479,6 +756,7 @@ class PathOrderer
             path:closed = false
             path:planeIndex = src:planeIndex
             path:role = role
+            path:keepShort = src:keepShort
             ordered:Add(path)
             nozzleX = path:TailX()
             nozzleY = path:TailY()

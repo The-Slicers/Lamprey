@@ -32,6 +32,34 @@ class PathRole
     public constant integer SUPPORT_WALL = 5
     /* The lines inside a support tine or branch. */
     public constant integer SUPPORT_FILL = 6
+    /*
+    Solid fill on a top surface: the layer(s) that nothing is printed on, so
+    they stay visible. Printed with their own speed, flow and acceleration.
+    */
+    public constant integer TOP_SURFACE = 7
+    /*
+    A second, nearly dry pass over a finished top surface at the same height,
+    smoothing it and closing the gaps between its lines.
+    */
+    public constant integer IRONING = 8
+
+    /*
+    Checks whether a role is part of a top surface (its fill or its ironing).
+
+    Attribute: Parameter role One of the constants.
+    Attribute: Returns True for TOP_SURFACE and IRONING.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.PathRole
+
+        PathRole roles
+        output roles:IsTopSurface(roles:IRONING)     // true
+        output roles:IsTopSurface(roles:SKIN)        // false
+    */
+    action IsTopSurface(integer role) returns boolean
+        return role = TOP_SURFACE or role = IRONING
+    end
 
     /*
     Checks whether a role is part of the support.
@@ -53,6 +81,8 @@ class PathRole
 
     /*
     The feature name G-code previewers colour by (Cura's ;TYPE: names).
+    Cura has no separate names for top surfaces or ironing (it marks both
+    SKIN), so TOP_SURFACE and IRONING are SKIN here too.
 
     Attribute: Parameter role One of the constants.
     Attribute: Returns The name; "FILL" for sparse infill and for anything unknown.
@@ -69,7 +99,7 @@ class PathRole
             return "WALL-OUTER"
         elseif role = INNER_WALL
             return "WALL-INNER"
-        elseif role = SKIN
+        elseif role = SKIN or IsTopSurface(role)
             return "SKIN"
         elseif role = SKIRT
             return "SKIRT"
@@ -77,5 +107,41 @@ class PathRole
             return "SUPPORT"
         end
         return "FILL"
+    end
+
+    /*
+    The feature name Bambu Studio's G-code preview colours by (its
+    "; FEATURE: " comments, the names of its extrusion roles). Solid fill
+    (SKIN) is "Internal solid infill" here; GcodeWriter names its first-layer
+    and gap-filling lines "Bottom surface" and "Gap infill" itself, as only
+    it knows which they are.
+
+    Attribute: Parameter role One of the constants.
+    Attribute: Returns The name; "Sparse infill" for sparse infill and for anything unknown.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.PathRole
+
+        PathRole roles
+        output roles:GetBambuFeatureName(roles:OUTER_WALL)     // Outer wall
+    */
+    action GetBambuFeatureName(integer role) returns text
+        if role = OUTER_WALL
+            return "Outer wall"
+        elseif role = INNER_WALL
+            return "Inner wall"
+        elseif role = SKIN
+            return "Internal solid infill"
+        elseif role = TOP_SURFACE
+            return "Top surface"
+        elseif role = IRONING
+            return "Ironing"
+        elseif role = SKIRT
+            return "Skirt"
+        elseif IsSupport(role)
+            return "Support"
+        end
+        return "Sparse infill"
     end
 end

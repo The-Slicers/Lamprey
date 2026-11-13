@@ -44,6 +44,9 @@ class GcodeWriterTest is LampreyTest
         BambuExtras()
         TemplatesAndPlaceholders()
         BambuA1Placeholders()
+        TopSurfaceAndIroning()
+        OverhangSlowdown()
+        SeamGapAndWipe()
         RejectsBadSettings()
     end
 
@@ -137,6 +140,21 @@ class GcodeWriterTest is LampreyTest
         ExpectContains(gcodeText, "M73 P0 R", "progress starts at 0%")
         ExpectContains(gcodeText, "M991 S0 P99", "the last layer change is reported")
         ExpectContains(gcodeText, "; EXECUTABLE_BLOCK_END", "the block is closed")
+        // Bambu Studio's feature names, for its G-code preview
+        ExpectContains(gcodeText, "; FEATURE: Outer wall", "outer walls named for Bambu Studio")
+        ExpectContains(gcodeText, "; FEATURE: Inner wall", "inner walls")
+        ExpectContains(gcodeText, "; FEATURE: Sparse infill", "sparse infill")
+        ExpectContains(gcodeText, "; FEATURE: Internal solid infill", "solid infill")
+        ExpectContains(gcodeText, "; FEATURE: Bottom surface", "the first layer's solid fill is the bottom surface")
+        ExpectNotContains(gcodeText, "; FEATURE: Outer wall" + lf + "; FEATURE: ", "no empty features")
+
+        GcodeWriter plainWriter = Writer()
+        text plainPath = files:Path("gcode/cube-not-bambu.gcode")
+        plainWriter:Write(ordered, plainPath)
+        GcodeReader plainReader
+        plainReader:Read(plainPath)
+        text plainText = plainReader:GetText()
+        ExpectNotContains(plainText, "; FEATURE: ", "only Bambu output gets Bambu Studio's names")
     end
 
     action TemplatesAndPlaceholders
@@ -232,6 +250,127 @@ class GcodeWriterTest is LampreyTest
         return value:ParseNumber()
     end
 
+    action TopSurfaceAndIroning
+        Case("top surface and ironing speeds and flow")
+        Array<Contour> outlines = models:Outlines(models:Cube(), 0.2)
+        integer planes = models:GetLastPlaneCount()
+        PathGenerator paths
+        paths:SetTopSurfaceLayers(1)
+        paths:SetIroning(true, 0.1, 0.2)
+        paths:Generate(outlines, planes)
+        PathOrderer orderer
+        orderer:SetTopSurface(paths:GetTopSurface())
+        orderer:SetIroning(paths:GetIroning())
+        Array<Contour> topOrdered = orderer:Order(outlines, paths:GetWalls(), paths:GetSkin(), paths:GetInfill(), planes)
+
+        GcodeWriter gcode = Writer()
+        gcode:SetTopSurface(25, 1.05, 0)
+        gcode:SetIroning(12, 0.15, 0.1)
+        gcode:SetBambuExtras(true)
+        text path = files:Path("gcode/cube-top.gcode")
+        gcode:Write(topOrdered, path)
+        GcodeReader reader
+        reader:Read(path)
+        text gcodeText = reader:GetText()
+        ExpectContains(gcodeText, " F1500", "the top surface at 25 mm/s")
+        ExpectContains(gcodeText, " F720", "ironing at 12 mm/s")
+        ExpectContains(gcodeText, "; FEATURE: Top surface", "Bambu Studio sees the top surface")
+        ExpectContains(gcodeText, "; FEATURE: Ironing", "and the ironing")
+        // a full line: lineWidth * layerHeight / filament area
+        number full = 0.08 / (3.141592653589793 * 0.875 * 0.875)
+        ExpectNumber(reader:GetMaxRatio(), full * 1.05, full * 0.02, "the top surface gets 5% more plastic")
+        // ironing: 15% of a layer spread over lines 0.1 mm apart instead of 0.4
+        ExpectNumber(reader:GetMinRatio(), full * 0.15 * 0.1 / 0.4, full * 0.15 * 0.1 / 0.4 * 0.05, "ironing lays a trickle")
+    end
+
+    /*
+    Two layers of a 10 mm square, the second moved 0.4 mm along x: its
+    right side hangs a full line width past the first layer, its left side
+    sits a line width inside it.
+    */
+    action OverhangSlowdown
+        Case("overhanging walls slow down")
+        Array<Contour> outlines
+        outlines:Add(models:Square(0, 0, 10, 0))
+        outlines:Add(models:Square(0.4, 0, 10, 1))
+        PathGenerator paths
+        paths:SetWallCount(2)
+        paths:Generate(outlines, 2)
+        PathOrderer orderer
+        Array<Contour> shifted = orderer:Order(outlines, paths:GetWalls(), paths:GetSkin(), paths:GetInfill(), 2)
+
+        // no minimum layer time: it would stretch both of these tiny layers
+        // to the same 10 seconds, slowed or not
+        GcodeWriter plain = Writer()
+        plain:SetMinLayerTime(0, 10)
+        text plainPath = files:Path("gcode/overhang-plain.gcode")
+        plain:Write(shifted, plainPath)
+        GcodeReader plainReader
+        plainReader:Read(plainPath)
+        text plainText = plainReader:GetText()
+        ExpectNotContains(plainText, " F420", "no slowdown unless asked for")
+
+        GcodeWriter slowed = Writer()
+        slowed:SetMinLayerTime(0, 10)
+        slowed:SetModelOutlines(outlines, 2)
+        slowed:SetOverhangSpeeds(9, 8, 7)
+        slowed:SetBambuExtras(true)
+        text slowedPath = files:Path("gcode/overhang-slowed.gcode")
+        slowed:Write(shifted, slowedPath)
+        GcodeReader slowedReader
+        slowedReader:Read(slowedPath)
+        text slowedText = slowedReader:GetText()
+        ExpectContains(slowedText, " F420", "the outer wall over thin air at 7 mm/s")
+        ExpectContains(slowedText, "; FEATURE: Overhang wall", "Bambu Studio sees it as overhang wall")
+        ExpectTrue(slowed:GetMoveSeconds() > plain:GetMoveSeconds(), "which takes longer")
+        // the first layer has nothing below it to overhang, and the inner
+        // walls and the left side are supported: not everything is slowed
+        integer slowMoves = 0
+        Array<text> lines = slowedReader:GetLines()
+        integer i = 0
+        repeat while i < lines:GetSize()
+            text line = lines:Get(i)
+            if line:Contains(" F420")
+                slowMoves = slowMoves + 1
+            end
+            i = i + 1
+        end
+        ExpectTrue(slowMoves >= 1 and slowMoves <= 4, "only the overhanging stretch switches to 7 mm/s (" + slowMoves + " times)")
+    end
+
+    action SeamGapAndWipe
+        Case("seam gap and wipe")
+        GcodeWriter plain = Writer()
+        text plainPath = files:Path("gcode/cube-seam-plain.gcode")
+        plain:Write(ordered, plainPath)
+
+        GcodeWriter wiped = Writer()
+        wiped:SetSeam(0.06, 2)
+        wiped:SetRetractionLimit(1000, 1)
+        text path = files:Path("gcode/cube-seam-wipe.gcode")
+        wiped:Write(ordered, path)
+        GcodeReader reader
+        reader:Read(path)
+        Array<text> lines = reader:GetLines()
+        integer wipes = 0
+        integer i = 0
+        repeat while i < lines:GetSize()
+            text line = lines:Get(i)
+            if line:StartsWith("G1 X") and line:Contains(" E-")
+                wipes = wipes + 1
+            end
+            i = i + 1
+        end
+        // one outer wall loop per layer, 100 layers; a wipe is one or more moves
+        ExpectTrue(wipes >= 100, "every outer wall loop ends with a retracting wipe (" + wipes + " wipe moves)")
+        ExpectTrue(wiped:GetFilamentLength() < plain:GetFilamentLength(), "the seam gap leaves out a little plastic")
+        ExpectNumber(reader:GetMinRatio(), FullLineRatio(), FullLineRatio() * 0.02, "the walls themselves are unchanged")
+    end
+
+    action FullLineRatio returns number
+        return 0.08 / (3.141592653589793 * 0.875 * 0.875)
+    end
+
     action RejectsBadSettings
         Case("bad settings are refused")
         ExpectTrue(Refuses(0, 30), "a layer height of 0")
@@ -245,6 +384,14 @@ class GcodeWriterTest is LampreyTest
             fan = true
         end
         ExpectTrue(fan, "a fan speed above 255")
+        boolean ironing = false
+        check
+            GcodeWriter ironer
+            ironer:SetIroning(15, 1.5, 0.1)
+        detect e2 is InvalidArgumentError
+            ironing = true
+        end
+        ExpectTrue(ironing, "ironing with more than a full layer of plastic")
     end
 
     action Refuses(number layerHeight, number travelSpeed) returns boolean

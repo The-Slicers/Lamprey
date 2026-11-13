@@ -17,6 +17,9 @@ under top surfaces and over bottom surfaces) and sparse infill. Parts too
 thin for a wall get a single center line, and bands too thin for an inner
 wall get solid lines, so nothing thin prints hollow.
 
+Optionally, the solid fill of top surfaces is kept apart (GetTopSurface) so
+it can be printed differently, and top surfaces can be ironed (GetIroning).
+
 The paths are not in printing order yet; PathOrderer does that.
 
 Attribute: Example
@@ -48,12 +51,33 @@ class PathGenerator
     // layer 0's solid fill is printed as continuous zigzags (no loose line
     // ends that can peel off the bed)
     boolean joinFirstLayer = true
+    // solid fill (skin) and sparse infill on every layer are chained into
+    // zigzags too: fewer starts, stops and jumps per layer
+    boolean joinSkin = false
+    boolean joinInfill = false
     integer topLayers = 4
     integer bottomLayers = 4
+    // solid fill within this many layers of a top surface is kept apart as
+    // top surface (0 = off: it is ordinary skin)
+    integer topSurfaceLayers = 0
+    // ironing: a second pass over every top surface, lines this far apart,
+    // kept this far in from the surface's edge (mm)
+    boolean ironing = false
+    number ironingSpacing = 0.1
+    number ironingInset = 0.2
+    // gap fill: bands inside the innermost wall too narrow for fill lines
+    // (thin walls a bit wider than the walls themselves) get solid lines
+    boolean gapFill = true
 
     Array<Contour> walls
     Array<Contour> skin
     Array<Contour> infill
+    Array<Contour> topSurface
+    Array<Contour> ironingLines
+    // gap-filled bands of each plane (gapAreas[gapStart[p] ... gapStart[p + 1]]),
+    // kept out of that plane's fill
+    Array<Contour> gapAreas
+    Array<integer> gapStart
 
     // the outlines being processed, grouped by plane
     ContourLayers modelLayers
@@ -231,6 +255,141 @@ class PathGenerator
     end
 
     /*
+    true: solid fill (skin) on every layer is chained into continuous
+    zigzags, as the first layer's is. Each line's end is linked to the next
+    line's start along the edge of the fill, wherever that link stays inside
+    it, so the nozzle keeps extruding instead of stopping, travelling and
+    starting again for every line. false (the default): separate straight
+    lines (the first layer still follows SetJoinFirstLayer).
+
+    Attribute: Parameter toggle Whether to join the solid fill lines.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:SetJoinSkin(true)
+        paths:Generate(outlines, 100)
+    */
+    action SetJoinSkin(boolean toggle)
+        joinSkin = toggle
+    end
+
+    /*
+    true: sparse infill lines are chained into continuous zigzags, linked
+    along the edge of the infill where the link stays inside it (like
+    "connected" rectilinear infill in other slicers). The links lie along the
+    innermost wall, so they also tie the infill to it. false (the default):
+    separate straight lines.
+
+    Attribute: Parameter toggle Whether to join the sparse infill lines.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:SetInfillDensity(0.15)
+        paths:SetJoinInfill(true)
+        paths:Generate(outlines, 100)
+    */
+    action SetJoinInfill(boolean toggle)
+        joinInfill = toggle
+    end
+
+    /*
+    true (the default): where the space left inside the innermost wall is
+    too narrow for the next wall and too narrow for fill lines (a thin wall
+    a little wider than its walls, such as a boat's hull rim or a
+    chimney), it is filled with solid lines instead of being left as an
+    open slot down the middle of the part. false: such slots stay empty.
+
+    Attribute: Parameter toggle Whether to fill the gaps.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:SetGapFill(false)      // leave slots between walls open
+        paths:Generate(outlines, 100)
+    */
+    action SetGapFill(boolean toggle)
+        gapFill = toggle
+    end
+
+    /*
+    Keeps the solid fill of top surfaces apart from the rest of the skin, so
+    it can be printed slower, with its own flow, and in one sweep (see
+    GetTopSurface). count is how many layers down from a surface count as
+    top surface: 1 is just the layer you see; 0 (the default) turns this off
+    and top surfaces are ordinary skin.
+
+    Where a part finishes partway up the print (a ledge, a short pillar next
+    to a tall one), its last layer is a top surface too.
+
+    Attribute: Parameter count How many layers under each top surface.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:SetTopSurfaceLayers(1)      // only the layer you see
+        paths:Generate(outlines, 100)
+        Array<Contour> top = paths:GetTopSurface()
+    */
+    action SetTopSurfaceLayers(integer count)
+        checker:RequireAtLeast("PathGenerator:SetTopSurfaceLayers count", count, 0)
+        topSurfaceLayers = count
+    end
+
+    /*
+    Ironing: after a top surface is printed, the nozzle goes over it again
+    at the same height, along lines `spacing` mm apart and across the
+    surface's own lines, pushing out only a trickle of plastic. That melts
+    the ridges flat and fills the small gaps between lines. Only surfaces
+    with nothing printed on them are ironed, and only `inset` mm in from
+    their edge. Off by default.
+
+    Attribute: Parameter toggle Whether to iron top surfaces.
+    Attribute: Parameter spacing The distance between ironing lines (mm), greater than 0; 0.1 - 0.15 is typical.
+    Attribute: Parameter inset How far in from the surface's edge ironing stops (mm).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:SetIroning(true, 0.1, 0.2)
+        paths:Generate(outlines, 100)
+        Array<Contour> ironing = paths:GetIroning()
+    */
+    action SetIroning(boolean toggle, number spacing, number inset)
+        checker:RequirePositive("PathGenerator:SetIroning spacing", spacing)
+        checker:RequireAtLeast("PathGenerator:SetIroning inset", inset, 0)
+        ironing = toggle
+        ironingSpacing = spacing
+        ironingInset = inset
+    end
+
+    /*
     The wall loops of every plane from the last Generate.
 
     Attribute: Returns The wall loops of every plane from the last Generate.
@@ -291,6 +450,52 @@ class PathGenerator
     */
     action GetInfill returns Array<Contour>
         return infill
+    end
+
+    /*
+    The top surface fill of every plane (empty unless SetTopSurfaceLayers
+    was given 1 or more). Each path is a zigzag that climbs from one line to
+    the next in one direction; PathOrderer keeps them that way.
+
+    Attribute: Returns The top surface zigzags of every plane.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:SetTopSurfaceLayers(1)
+        paths:Generate(outlines, 100)
+        Array<Contour> top = paths:GetTopSurface()
+        output top:GetSize() + " top surface paths"
+    */
+    action GetTopSurface returns Array<Contour>
+        return topSurface
+    end
+
+    /*
+    The ironing zigzags of every plane (empty unless SetIroning turned it on).
+
+    Attribute: Returns The ironing zigzags of every plane.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:SetIroning(true, 0.1, 0.2)
+        paths:Generate(outlines, 100)
+        Array<Contour> ironing = paths:GetIroning()
+        output ironing:GetSize() + " ironing paths"
+    */
+    action GetIroning returns Array<Contour>
+        return ironingLines
     end
 
     /*
@@ -357,8 +562,12 @@ class PathGenerator
         walls:Empty()
         skin:Empty()
         infill:Empty()
+        topSurface:Empty()
+        ironingLines:Empty()
         inner:Empty()
         innerStart:Empty()
+        gapAreas:Empty()
+        gapStart:Empty()
         droppedLoops = 0
         rebuiltIslands = 0
         planeTotal = planeCount
@@ -369,6 +578,7 @@ class PathGenerator
         repeat while p < planeCount
             plane = p
             innerStart:Add(inner:GetSize())
+            gapStart:Add(gapAreas:GetSize())
             Array<Contour> layer = modelLayers:GetLayer(p)
             if layer:GetSize() > 0
                 // the center line of wall sits (w + 0.5)
@@ -406,10 +616,14 @@ class PathGenerator
                     inner:Add(area:Get(a))
                     a = a + 1
                 end
+                if gapFill and wallCount > 0 and area:GetSize() > 0
+                    GapFill(layer, area, p)
+                end
             end
             p = p + 1
         end
         innerStart:Add(inner:GetSize())
+        gapStart:Add(gapAreas:GetSize())
 
         // pass 2: skin and infill (needs the inner areas of neighbours)
         number sparseSpacing = lineWidth
@@ -425,26 +639,49 @@ class PathGenerator
                 // fill area = inner area grown back into the last wall by the overlap
                 number inset = lineWidth * (cast(number, wallCount) + 0.5 - infillOverlap)
                 Array<Contour> fillArea = Inset(layer2, inset)
+                Array<Contour> filledGaps = GapContours(p)
+                if fillArea:GetSize() > 0 and filledGaps:GetSize() > 0
+                    // the gap fill already covers these bands
+                    fillArea = ops:Difference(fillArea, filledGaps, p)
+                end
                 if fillArea:GetSize() > 0
                     Array<Contour> skinArea = FindSkin(p, innerArea)
                     if skinArea:GetSize() > 0
                         Array<Contour> solid = ops:Intersect(fillArea, skinArea, p)
-                        // first layer: one continuous zigzag, no loose ends to lift
-                        if joinFirstLayer and p = 0
+                        if topSurfaceLayers > 0 or ironing
+                            // top surfaces (and their ironing) are made here;
+                            // what's left is ordinary skin
+                            solid = SplitTopSurface(p, solid)
+                        end
+                        // first layer: one continuous zigzag, no loose ends to lift;
+                        // other layers too when joinSkin is on
+                        if joinSkin or (joinFirstLayer and p = 0)
                             lineFill:FillJoined(solid, p, lineWidth, minInfillLength, skin)
                         else
                             lineFill:Fill(solid, p, lineWidth, minInfillLength, skin)
                         end
                         if infillDensity > 0
                             Array<Contour> sparse = ops:Difference(fillArea, skinArea, p)
-                            lineFill:Fill(sparse, p, sparseSpacing, minInfillLength, infill)
+                            FillSparse(sparse, p, sparseSpacing)
                         end
                     elseif infillDensity > 0
-                        lineFill:Fill(fillArea, p, sparseSpacing, minInfillLength, infill)
+                        FillSparse(fillArea, p, sparseSpacing)
                     end
                 end
             end
             p = p + 1
+        end
+    end
+
+    // sparse infill lines over `area`, chained into zigzags if joinInfill is on
+    private action FillSparse(Array<Contour> area, integer p, number spacing)
+        if area:GetSize() = 0
+            return now
+        end
+        if joinInfill
+            lineFill:FillJoined(area, p, spacing, minInfillLength, infill)
+        else
+            lineFill:Fill(area, p, spacing, minInfillLength, infill)
         end
     end
 
@@ -908,6 +1145,113 @@ class PathGenerator
         return ops:Union(top, bottom, p)
     end
 
+    // ------------------------------------------------------------ top surfaces
+
+    // Fills the part of `solid` that is top surface (not covered by all of
+    // the next topSurfaceLayers layers) into topSurface, and the ironing for
+    // the part with nothing at all on it into ironingLines. Returns the rest
+    // of `solid`, for ordinary skin.
+    //
+    // A layer is covered by the model's whole outline on the layer above,
+    // not just that layer's inner area: where the part narrows going up,
+    // the band under the next layer's walls is covered too.
+    private action SplitTopSurface(integer p, Array<Contour> solid) returns Array<Contour>
+        if solid:GetSize() = 0
+            return solid
+        end
+        Array<Contour> rest = solid
+        Array<Contour> exposed
+        boolean haveExposed = false
+
+        if topSurfaceLayers > 0
+            Array<Contour> covered = CoveredAbove(p, topSurfaceLayers)
+            Array<Contour> top = solid
+            if covered:GetSize() > 0
+                top = ops:Difference(solid, covered, p)
+                rest = ops:Intersect(solid, covered, p)
+            else
+                Array<Contour> none
+                rest = none
+            end
+            if top:GetSize() > 0
+                // Joined zigzags climb from each line to the next one, always
+                // the same way, so no line is ever squeezed in between two
+                // that have already cooled (what leaves ridges and pinholes
+                // on a top surface).
+                lineFill:FillJoined(top, p, lineWidth, minInfillLength, topSurface)
+            end
+            if topSurfaceLayers = 1
+                exposed = top
+                haveExposed = true
+            end
+        end
+
+        if ironing
+            if not haveExposed
+                exposed = solid
+                Array<Contour> above = CoveredAbove(p, 1)
+                if above:GetSize() > 0
+                    exposed = ops:Difference(solid, above, p)
+                end
+            end
+            if exposed:GetSize() > 0
+                Iron(p, exposed)
+            end
+        end
+        return rest
+    end
+
+    // The area covered on every one of the next `count` planes (the model's
+    // whole outline there), or nothing if any of them is empty or past the
+    // top of the model.
+    private action CoveredAbove(integer p, integer count) returns Array<Contour>
+        Array<Contour> nothing
+        Array<Contour> covered
+        integer j = 1
+        repeat while j <= count
+            integer q = p + j
+            if q >= planeTotal
+                return nothing
+            end
+            Array<Contour> above = modelLayers:GetLayer(q)
+            if above:GetSize() = 0
+                return nothing
+            end
+            if j = 1
+                covered = above
+            else
+                covered = ops:Intersect(covered, above, p)
+                if covered:GetSize() = 0
+                    return nothing
+                end
+            end
+            j = j + 1
+        end
+        return covered
+    end
+
+    // Ironing lines over `exposed` (a surface nothing is printed on), kept
+    // ironingInset in from its edge. They run across the surface's own lines:
+    // filling as if on the next plane gives the other of the two angles.
+    private action Iron(integer p, Array<Contour> exposed)
+        Array<Contour> area = exposed
+        if ironingInset > 0
+            area = FitInset(exposed, ironingInset, false)
+        end
+        if area:GetSize() = 0
+            return now
+        end
+        Array<Contour> lines
+        lineFill:FillJoined(area, p + 1, ironingSpacing, minInfillLength, lines)
+        integer i = 0
+        repeat while i < lines:GetSize()
+            Contour line = lines:Get(i)
+            line:planeIndex = p
+            ironingLines:Add(line)
+            i = i + 1
+        end
+    end
+
     // The part of innerArea not covered by every one of the next `count`
     // layers in `direction` (+1 = up, -1 = down).
     private action Uncovered(integer p, Array<Contour> innerArea, integer direction, integer count) returns Array<Contour>
@@ -964,6 +1308,68 @@ class PathGenerator
         if gaps:GetSize() > 0
             lineFill:Fill(gaps, p, lineWidth, minInfillLength, skin)
         end
+    end
+
+    // The band inside the innermost wall (`band`, from Inset(layer,
+    // lineWidth * wallCount)) where one more wall wouldn't fit from both
+    // sides: narrower than two line widths, so the fill lines there come out
+    // too short and are dropped, and the band would stay an open slot. Fill
+    // it with solid lines, as WallGaps does between walls, and remember it
+    // so the plane's fill leaves it alone.
+    //
+    // Pieces smaller than half a line width squared are left out: they are
+    // the slivers in the corners of every wide area (where one more wall
+    // would round the corner off), far too small for a line.
+    private action GapFill(Array<Contour> layer, Array<Contour> band, integer p)
+        Array<Contour> gapArea = band
+        Array<Contour> deeper = FitInset(layer, lineWidth * cast(number, wallCount + 1), false)
+        if deeper:GetSize() > 0
+            Array<Contour> reach = ExactOutset(deeper, lineWidth)
+            if reach:GetSize() > 0
+                gapArea = ops:Difference(band, reach, p)
+            end
+        end
+        number smallest = lineWidth * lineWidth * 0.5
+        Array<Contour> kept
+        integer i = 0
+        repeat while i < gapArea:GetSize()
+            Contour piece = gapArea:Get(i)
+            if piece:GetSize() >= 3 and piece:Area() >= smallest
+                kept:Add(piece)
+            end
+            i = i + 1
+        end
+        if kept:GetSize() = 0
+            return now
+        end
+        // A band a little under a line width wide is crossed by lines not
+        // much longer than it is wide, so lines down to half a line width are
+        // kept (and marked so PathOrderer keeps them too); each still lays
+        // the plastic for the area it covers.
+        Array<Contour> lines
+        lineFill:Fill(kept, p, lineWidth, lineWidth * 0.5, lines)
+        i = 0
+        repeat while i < lines:GetSize()
+            Contour line = lines:Get(i)
+            line:keepShort = true
+            skin:Add(line)
+            i = i + 1
+        end
+        i = 0
+        repeat while i < kept:GetSize()
+            gapAreas:Add(kept:Get(i))
+            i = i + 1
+        end
+    end
+
+    private action GapContours(integer p) returns Array<Contour>
+        Array<Contour> area
+        integer k = gapStart:Get(p)
+        repeat while k < gapStart:Get(p + 1)
+            area:Add(gapAreas:Get(k))
+            k = k + 1
+        end
+        return area
     end
 
     private action InnerContours(integer p) returns Array<Contour>

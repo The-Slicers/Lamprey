@@ -98,6 +98,11 @@ class TreeSupport
     // overhang islands smaller than this (mm^2) get no tines. 0 = off
     number minOverhangArea = 0.5
 
+    // overhangs whose underside is closer to the bed than this (mm) get no
+    // tines: they would only need stubby posts, and sag onto the bed instead.
+    // 0 = off
+    number minHeight = 0.0
+
     number allowed = 0.0
     number maxMove = 0.0
     number growth = 0.0
@@ -174,6 +179,7 @@ class TreeSupport
     integer droppedTips = 0
     integer skippedBridges = 0
     integer skippedSmall = 0
+    integer skippedLow = 0
     number travelX = 0.0
     number travelY = 0.0
 
@@ -553,6 +559,30 @@ class TreeSupport
     end
 
     /*
+    Overhangs whose underside is closer to the bed than this (mm) get no
+    tines; 0 = off. Near the bed a tine is only a stub of a post, which adds
+    a retraction and a string per post. A low overhang sags at most this far,
+    onto the bed, so it is usually better left unsupported.
+
+    Attribute: Parameter height The lowest overhang supported, above the bed (mm); 0 supports all.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetMinHeight(2.0)     // nothing under overhangs lower than 2 mm
+        trees:Generate(outlines, 100)
+    */
+    action SetMinHeight(number height)
+        checker:RequireAtLeast("TreeSupport:SetMinHeight height", height, 0)
+        minHeight = height
+    end
+
+    /*
     The support's outline on each layer from the last Generate (for a brim to go around).
 
     Attribute: Returns The support's outline on each layer from the last Generate (for a brim to go around).
@@ -715,6 +745,27 @@ class TreeSupport
     end
 
     /*
+    How many tine spots the last Generate skipped for being closer to the bed than SetMinHeight allows.
+
+    Attribute: Returns How many tine spots the last Generate skipped for being closer to the bed than SetMinHeight allows.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetMinHeight(2.0)
+        trees:Generate(outlines, 100)
+        output trees:GetSkippedLowCount() + " spots too close to the bed"
+    */
+    action GetSkippedLowCount returns integer
+        return skippedLow
+    end
+
+    /*
     Grows the supports for a sliced model, replacing the results of an
     earlier call.
 
@@ -742,6 +793,7 @@ class TreeSupport
         droppedTips = 0
         skippedBridges = 0
         skippedSmall = 0
+        skippedLow = 0
         travelX = 0.0
         travelY = 0.0
         planeTotal = planeCount
@@ -1026,10 +1078,15 @@ class TreeSupport
         end
     end
 
-    // a spot needs a tine if it's too steep, not part of a tiny island,
-    // and not a short bridge
+    // a spot needs a tine if it's too steep, high enough above the bed,
+    // not part of a tiny island, and not a short bridge
     private action WantsTip(number x, number y, integer layer) returns boolean
         if not NeedsSupport(x, y, layer)
+            return false
+        end
+        // the underside of layer p is p layers above the bed
+        if minHeight > 0 and cast(number, layer) * layerHeight < minHeight
+            skippedLow = skippedLow + 1
             return false
         end
         if not BigEnoughOverhang(x, y)

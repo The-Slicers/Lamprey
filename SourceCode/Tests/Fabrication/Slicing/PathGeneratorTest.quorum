@@ -31,6 +31,10 @@ class PathGeneratorTest is LampreyTest
         SkinOnlyNearSurfaces()
         NoInfillAtZeroDensity()
         ThinParts()
+        TopSurfaces()
+        TopSurfaceOfALedge()
+        Ironing()
+        GapFill()
         RejectsBadSettings()
     end
 
@@ -131,6 +135,217 @@ class PathGeneratorTest is LampreyTest
         // the first layer's skin is joined into zigzags: far fewer paths than lines
         ExpectAtMost(models:CountOnPlane(skin, 0), 4, "first layer skin is joined")
         ExpectTrue(models:CountOnPlane(skin, 1) > 10, "other skin layers are separate lines")
+    end
+
+    action TopSurfaces
+        Case("top surfaces kept apart from the skin")
+        PathGenerator off = Generated(0.2)
+        Array<Contour> none = off:GetTopSurface()
+        Array<Contour> noIroning = off:GetIroning()
+        ExpectInteger(none:GetSize(), 0, "off by default: no top surface paths")
+        ExpectInteger(noIroning:GetSize(), 0, "off by default: no ironing")
+
+        PathGenerator paths
+        paths:SetLineWidth(0.4)
+        paths:SetWallCount(3)
+        paths:SetTopLayers(4)
+        paths:SetBottomLayers(4)
+        paths:SetTopSurfaceLayers(1)
+        paths:Generate(cube, planes)
+        Array<Contour> top = paths:GetTopSurface()
+        Array<Contour> skin = paths:GetSkin()
+        ExpectTrue(models:CountOnPlane(top, 99) > 0, "the top layer is top surface")
+        ExpectInteger(models:CountOnPlane(skin, 99), 0, "and none of it is ordinary skin")
+        ExpectInteger(models:CountOnPlane(top, 98), 0, "the layer under it is not top surface")
+        ExpectTrue(models:CountOnPlane(skin, 98) > 0, "it is ordinary skin")
+        ExpectInteger(models:CountOnPlane(top, 0), 0, "the bottom is not a top surface")
+        // one sweep: the 18.7 mm square comes out as a few long zigzags
+        ExpectAtMost(models:CountOnPlane(top, 99), 4, "the top surface is joined into zigzags")
+
+        PathGenerator two
+        two:SetLineWidth(0.4)
+        two:SetWallCount(3)
+        two:SetTopSurfaceLayers(2)
+        two:Generate(cube, planes)
+        Array<Contour> top2 = two:GetTopSurface()
+        ExpectTrue(models:CountOnPlane(top2, 98) > 0 and models:CountOnPlane(top2, 99) > 0, "two top surface layers")
+        ExpectInteger(models:CountOnPlane(top2, 97), 0, "but not three")
+    end
+
+    /*
+    The ledge model: a 20 x 20 x 10 mm block with a 10 mm ledge from z 4 to
+    6 beside it. The ledge finishes on plane 29, partway up the print, and
+    its top is a top surface there; the block's is on plane 49.
+    */
+    action TopSurfaceOfALedge
+        Case("a part that finishes partway up gets a top surface")
+        Array<Contour> ledge = models:Outlines(models:Ledge(), 0.2)
+        integer ledgePlanes = models:GetLastPlaneCount()
+        PathGenerator paths
+        paths:SetLineWidth(0.4)
+        paths:SetWallCount(3)
+        paths:SetTopSurfaceLayers(1)
+        paths:Generate(ledge, ledgePlanes)
+        Array<Contour> top = paths:GetTopSurface()
+        ExpectTrue(models:CountOnPlane(top, 29) > 0, "the ledge's last layer is top surface")
+        ExpectInteger(models:CountOnPlane(top, 28), 0, "the layer under it is not")
+        ExpectTrue(models:CountOnPlane(top, 49) > 0, "the block's last layer is top surface")
+        ExpectInteger(models:CountOnPlane(top, 40), 0, "the block's middle is not")
+        boolean onLedge = true
+        integer i = 0
+        repeat while i < top:GetSize()
+            Contour path = top:Get(i)
+            if path:planeIndex = 29
+                integer k = 0
+                repeat while k < path:GetSize()
+                    if path:xs:Get(k) < 20
+                        onLedge = false
+                    end
+                    k = k + 1
+                end
+            end
+            i = i + 1
+        end
+        ExpectTrue(onLedge, "on plane 29 only the ledge (x > 20) is top surface, not the block that goes on up")
+    end
+
+    action Ironing
+        Case("ironing")
+        PathGenerator paths
+        paths:SetLineWidth(0.4)
+        paths:SetWallCount(3)
+        paths:SetTopSurfaceLayers(1)
+        paths:SetIroning(true, 0.1, 0.2)
+        paths:Generate(cube, planes)
+        Array<Contour> ironing = paths:GetIroning()
+        Array<Contour> top = paths:GetTopSurface()
+        ExpectTrue(models:CountOnPlane(ironing, 99) > 0, "the top is ironed")
+        ExpectInteger(ironing:GetSize(), models:CountOnPlane(ironing, 99), "nothing else is")
+
+        // the solid fill reaches 0.4 * (3 + 0.5 - 0.25) = 1.3 mm in from the
+        // outside; ironing stops 0.2 mm inside that
+        boolean inside = true
+        integer i = 0
+        repeat while i < ironing:GetSize()
+            Contour line = ironing:Get(i)
+            integer k = 0
+            repeat while k < line:GetSize()
+                number x = line:xs:Get(k)
+                number y = line:ys:Get(k)
+                if x < 1.49 or x > 18.51 or y < 1.49 or y > 18.51
+                    inside = false
+                end
+                k = k + 1
+            end
+            i = i + 1
+        end
+        ExpectTrue(inside, "ironing stays 1.5 mm in from the cube's sides")
+
+        // across the top surface's lines: 45 degrees against 135
+        if ironing:GetSize() > 0 and models:CountOnPlane(top, 99) > 0
+            Contour iron = ironing:Get(0)
+            Contour surface = top:Get(0)
+            i = 0
+            repeat while i < top:GetSize()
+                Contour candidate = top:Get(i)
+                if candidate:planeIndex = 99
+                    surface = candidate
+                end
+                i = i + 1
+            end
+            number ironTurn = (iron:xs:Get(1) - iron:xs:Get(0)) * (iron:ys:Get(1) - iron:ys:Get(0))
+            number surfaceTurn = (surface:xs:Get(1) - surface:xs:Get(0)) * (surface:ys:Get(1) - surface:ys:Get(0))
+            ExpectTrue(ironTurn * surfaceTurn < 0, "ironing runs across the top surface's lines")
+        end
+
+        PathGenerator ironOnly
+        ironOnly:SetLineWidth(0.4)
+        ironOnly:SetWallCount(3)
+        ironOnly:SetIroning(true, 0.1, 0.2)
+        ironOnly:Generate(cube, planes)
+        Array<Contour> ironed = ironOnly:GetIroning()
+        Array<Contour> notTop = ironOnly:GetTopSurface()
+        Array<Contour> skin = ironOnly:GetSkin()
+        ExpectTrue(models:CountOnPlane(ironed, 99) > 0, "ironing works without top surfaces kept apart")
+        ExpectInteger(notTop:GetSize(), 0, "then there is no top surface fill")
+        ExpectTrue(models:CountOnPlane(skin, 99) > 0, "and the top layer stays ordinary skin")
+
+        boolean refused = false
+        check
+            PathGenerator bad
+            bad:SetIroning(true, 0, 0.2)
+        detect e is InvalidArgumentError
+            refused = true
+        end
+        ExpectTrue(refused, "an ironing spacing of 0")
+    end
+
+    /*
+    A wall 2 mm thick and 20 mm long, 20 layers high, with 2 walls of 0.4 mm
+    on each side: the walls take 1.6 mm and leave a 0.4 mm slot down the
+    middle (y 0.8 to 1.2), too narrow for fill lines.
+    */
+    action GapFill
+        Case("gap fill between the innermost walls")
+        Array<Contour> slab
+        integer q = 0
+        repeat while q < 20
+            slab:Add(models:Rectangle(0, 0, 20, 2.0, q))
+            q = q + 1
+        end
+
+        PathGenerator noGaps
+        noGaps:SetLineWidth(0.4)
+        noGaps:SetWallCount(2)
+        noGaps:SetGapFill(false)
+        noGaps:Generate(slab, 20)
+        Array<Contour> openSkin = noGaps:GetSkin()
+        Array<Contour> openInfill = noGaps:GetInfill()
+        integer openLines = models:CountOnPlane(openSkin, 10) + models:CountOnPlane(openInfill, 10)
+        ExpectInteger(openLines, 0, "without gap fill the slot in the middle layer stays empty")
+
+        PathGenerator filled
+        filled:SetLineWidth(0.4)
+        filled:SetWallCount(2)
+        filled:Generate(slab, 20)
+        Array<Contour> skin = filled:GetSkin()
+        Array<Contour> infill = filled:GetInfill()
+        ExpectTrue(models:CountOnPlane(skin, 10) > 20, "with gap fill the slot gets solid lines")
+        ExpectInteger(models:CountOnPlane(infill, 10), 0, "and no infill on top of them")
+        boolean inSlot = true
+        boolean kept = true
+        number covered = 0.0
+        integer i = 0
+        repeat while i < skin:GetSize()
+            Contour line = skin:Get(i)
+            if line:planeIndex = 10
+                integer k = 0
+                repeat while k < line:GetSize()
+                    number y = line:ys:Get(k)
+                    if y < 0.79 or y > 1.21
+                        inSlot = false
+                    end
+                    k = k + 1
+                end
+                if not line:keepShort
+                    kept = false
+                end
+                number dx = line:xs:Get(1) - line:xs:Get(0)
+                number dy = line:ys:Get(1) - line:ys:Get(0)
+                covered = covered + math:SquareRoot(dx * dx + dy * dy) * 0.4
+            end
+            i = i + 1
+        end
+        ExpectTrue(inSlot, "the lines stay inside the slot, between the inner walls")
+        ExpectTrue(kept, "they are marked keepShort, so PathOrderer keeps them")
+        // lines one line width apart lay plastic for the area they cross:
+        // the slot is 18.4 x 0.4 mm
+        ExpectNumber(covered, 7.36, 0.8, "they fill about the slot's area")
+
+        // a wide part has no gaps: only its corners, which are too small
+        PathGenerator cubePaths = Generated(0.2)
+        Array<Contour> cubeSkin = cubePaths:GetSkin()
+        ExpectInteger(models:CountOnPlane(cubeSkin, 50), 0, "no gap fill in the middle of a cube")
     end
 
     action NoInfillAtZeroDensity

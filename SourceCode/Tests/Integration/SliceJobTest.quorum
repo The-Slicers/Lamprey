@@ -30,6 +30,7 @@ class SliceJobTest is LampreyTest
         profiles:Load("Profiles/profiles.json")
         EveryProfileSlicesACube()
         SupportsAndAdhesion()
+        TopSurfaceAndIroning()
         BambuArchive()
         BambuA1Archive()
         UnusableInput()
@@ -95,6 +96,34 @@ class SliceJobTest is LampreyTest
         ExpectContains(brimText, ";TYPE:SKIRT", "the brim is printed (G-code previewers call it SKIRT)")
         // 8 brim loops 0.4 mm apart touching the cube: the outermost centre line is 3 mm out
         ExpectNumber(withBrim:GetMaxX() - withBrim:GetMinX(), 20 + 2 * 3.0, 0.1, "the brim's width")
+    end
+
+    action TopSurfaceAndIroning
+        Case("top surfaces and ironing from a profile")
+        Profile plain = profiles:Derive("ender3-v2", "test-top-plain")
+        plain:SetInteger("topSurfaceLayers", 0)
+        plain:SetNumber("topSurfaceSpeed", 31)
+        GcodeReader plainCube = Slice(models:Cube(), plain, "cube-top-plain")
+        text plainText = plainCube:GetText()
+        ExpectNotContains(plainText, " F1860", "topSurfaceLayers 0: no top surface speed")
+
+        Profile top = profiles:Derive("ender3-v2", "test-top")
+        top:SetInteger("topSurfaceLayers", 1)
+        top:SetNumber("topSurfaceSpeed", 31)
+        GcodeReader topCube = Slice(models:Cube(), top, "cube-top")
+        text topText = topCube:GetText()
+        ExpectContains(topText, " F1860", "the top surface at its own speed")
+
+        Profile ironed = profiles:Derive("ender3-v2", "test-ironed")
+        ironed:SetInteger("topSurfaceLayers", 1)
+        ironed:SetBoolean("ironing", true)
+        ironed:SetNumber("ironingSpeed", 13)
+        GcodeReader ironedCube = Slice(models:Cube(), ironed, "cube-ironed")
+        text ironedText = ironedCube:GetText()
+        ExpectContains(ironedText, " F780", "ironing at its own speed")
+        ExpectTrue(ironedCube:GetPrintMoveCount() > topCube:GetPrintMoveCount() + 100, "ironing adds many moves")
+        ExpectTrue(ironedCube:GetExtruded() > topCube:GetExtruded(), "and a little plastic")
+        ExpectTrue(ironedCube:GetExtruded() < topCube:GetExtruded() * 1.05, "only a little")
     end
 
     action BambuArchive

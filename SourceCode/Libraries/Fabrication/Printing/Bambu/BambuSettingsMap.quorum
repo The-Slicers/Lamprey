@@ -222,21 +222,59 @@ class BambuSettingsMap
         // ---- speeds ----
         Num("outer_wall_speed", profile:GetNumber("outerWallSpeed"))
         Num("inner_wall_speed", profile:GetNumber("innerWallSpeed"))
-        Num("top_surface_speed", profile:GetNumber("skinSpeed"))
+        // with top surfaces kept apart, they have their own speed
+        if profile:GetInteger("topSurfaceLayers") > 0
+            Num("top_surface_speed", profile:GetNumber("topSurfaceSpeed"))
+        else
+            Num("top_surface_speed", profile:GetNumber("skinSpeed"))
+        end
         Num("internal_solid_infill_speed", profile:GetNumber("skinSpeed"))
         Num("sparse_infill_speed", profile:GetNumber("infillSpeed"))
         Num("support_speed", profile:GetNumber("supportSpeed"))
         Num("initial_layer_speed", profile:GetNumber("firstLayerSpeed"))
         Num("initial_layer_infill_speed", profile:GetNumber("firstLayerSpeed"))
         Num("travel_speed", profile:GetNumber("travelSpeed"))
+        // overhang slowdown: Bambu's quarters of the line width hanging out
+        // (1/4 = 10-25% is never slowed by Lamprey); 0 means no slowdown in both
+        boolean overhangs = profile:GetNumber("overhangSpeed25") > 0 or profile:GetNumber("overhangSpeed50") > 0 or profile:GetNumber("overhangSpeed75") > 0
+        Flag("enable_overhang_speed", overhangs)
+        Num("overhang_1_4_speed", 0.0)
+        Num("overhang_2_4_speed", profile:GetNumber("overhangSpeed25"))
+        Num("overhang_3_4_speed", profile:GetNumber("overhangSpeed50"))
+        Num("overhang_4_4_speed", profile:GetNumber("overhangSpeed75"))
 
         // ---- accelerations: 0 means Lamprey leaves the printer's, so the template's stays ----
         Accel("outer_wall_acceleration", profile:GetNumber("accelOuterWall"))
         Accel("inner_wall_acceleration", profile:GetNumber("accelInnerWall"))
-        Accel("top_surface_acceleration", profile:GetNumber("accelSkin"))
+        if profile:GetInteger("topSurfaceLayers") > 0 and profile:GetNumber("accelTopSurface") > 0
+            Accel("top_surface_acceleration", profile:GetNumber("accelTopSurface"))
+        else
+            Accel("top_surface_acceleration", profile:GetNumber("accelSkin"))
+        end
         Accel("sparse_infill_acceleration", profile:GetNumber("accelInfill"))
         Accel("initial_layer_acceleration", profile:GetNumber("accelFirstLayer"))
         Accel("travel_acceleration", profile:GetNumber("accelTravel"))
+
+        // ---- seams ----
+        if profile:GetBoolean("seamCorners")
+            Txt("seam_position", "aligned")
+        else
+            Txt("seam_position", "back")
+        end
+        Num("seam_gap", profile:GetNumber("seamGap"))
+        Flag("wipe", profile:GetNumber("wipeDistance") > 0)
+        Num("wipe_distance", profile:GetNumber("wipeDistance"))
+
+        // ---- ironing ----
+        if profile:GetBoolean("ironing")
+            Txt("ironing_type", "top")
+            Num("ironing_speed", profile:GetNumber("ironingSpeed"))
+            Pct("ironing_flow", profile:GetNumber("ironingFlow"))
+            Num("ironing_spacing", profile:GetNumber("ironingSpacing"))
+            Num("ironing_inset", profile:GetNumber("ironingInset"))
+        else
+            Txt("ironing_type", "no ironing")
+        end
 
         // ---- retraction ----
         Num("retraction_length", profile:GetNumber("retractLength"))

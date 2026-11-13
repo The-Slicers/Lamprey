@@ -61,6 +61,20 @@ class ProfileSchema
         AddInteger("paths", "topLayers", "4", 0, 100, "Solid layers under top surfaces")
         AddInteger("paths", "bottomLayers", "4", 0, 100, "Solid layers over bottom surfaces")
         AddBoolean("paths", "joinFirstLayer", "true", "Chain the first layer's solid fill into continuous zigzags")
+        AddBoolean("paths", "joinSkin", "false", "Chain solid fill on every layer into continuous zigzags (fewer starts and stops)")
+        AddBoolean("paths", "joinInfill", "false", "Chain sparse infill into continuous zigzags, linked along the inner wall (fewer starts and stops)")
+        AddBoolean("paths", "gapFill", "true", "Fill bands inside the innermost wall too narrow for fill lines (thin walls) with solid lines")
+
+        // ---- top surfaces and ironing ----
+        AddInteger("top", "topSurfaceLayers", "0", 0, 100, "Layers under each top surface printed as top surface, with the settings below; 0 = off (ordinary skin)")
+        AddNumber("top", "topSurfaceSpeed", "30", 1, 2000, "Top surface speed (mm/s)")
+        AddNumber("top", "topSurfaceFlow", "1.0", 0.5, 1.5, "Extra extrusion multiplier on top surfaces; a little over 1 closes gaps between lines")
+        AddNumber("top", "accelTopSurface", "0", 0, 100000, "Top surface acceleration; 0 = the same as accelSkin")
+        AddBoolean("top", "ironing", "false", "Iron top surfaces: a second, nearly dry pass that smooths them")
+        AddNumber("top", "ironingSpeed", "15", 1, 2000, "Ironing speed (mm/s)")
+        AddNumber("top", "ironingFlow", "0.15", 0, 1, "Ironing plastic, as a share of a full layer over the ironed area")
+        AddNumber("top", "ironingSpacing", "0.1", 0.01, 2, "Distance between ironing lines (mm)")
+        AddNumber("top", "ironingInset", "0.2", 0, 10, "Ironing stops this far in from a surface's edge (mm)")
 
         // ---- tree supports ----
         AddBoolean("supports", "supportsEnabled", "false", "Generate tree supports")
@@ -85,6 +99,7 @@ class ProfileSchema
         AddBoolean("supports", "supportBedRouting", "true", "Route branches around the model down to the bed")
         AddNumber("supports", "supportMaxBridge", "0", 0, 100, "Longest span left to bridge instead of supported (mm); 0 = off")
         AddNumber("supports", "supportMinOverhangArea", "0.5", 0, 1000, "Overhang islands smaller than this get no tines (mm^2); 0 = off")
+        AddNumber("supports", "supportMinHeight", "0", 0, 1000, "Overhangs closer to the bed than this get no tines: they sag onto the bed instead of needing tiny posts (mm); 0 = off")
 
         // ---- skirt / brim ----
         AddChoice("adhesion", "adhesionType", "none", "none|skirt|brim", "Skirt, brim or neither")
@@ -97,6 +112,9 @@ class ProfileSchema
         // ---- path order ----
         AddNumber("order", "seamX", "0", -1000000, 1000000, "Seams are placed nearest this point (mm)")
         AddNumber("order", "seamY", "1000000", -1000000, 1000000, "Seams are placed nearest this point (mm); the default puts them at the back")
+        AddBoolean("order", "seamCorners", "false", "Put each wall seam on the loop's corner nearest the seam point, if it has one (like Bambu's aligned seams)")
+        AddNumber("order", "seamGap", "0", 0, 2, "Outer wall loops stop this far short of their start (mm); 0 = close exactly")
+        AddNumber("order", "wipeDistance", "0", 0, 20, "After an outer wall loop, wipe this far along the wall while retracting (mm); 0 = off")
         AddNumber("order", "minLoopLength", "1.0", 0, 100, "Loops shorter than this are dropped (mm)")
         AddNumber("order", "minLineLength", "0.4", 0, 100, "Lines shorter than this are dropped (mm)")
         AddNumber("order", "minSegmentLength", "0.05", 0, 100, "Segments shorter than this are merged (mm)")
@@ -110,6 +128,9 @@ class ProfileSchema
         AddNumber("speed", "firstLayerSpeed", "20", 1, 2000, "Speed of everything on the first layer (mm/s)")
         AddNumber("speed", "travelSpeed", "150", 1, 2000, "Travel speed (mm/s)")
         AddNumber("speed", "infillTravelLimit", "5.0", 0, 1000, "Travels inside infill shorter than this don't retract (mm)")
+        AddNumber("speed", "overhangSpeed25", "0", 0, 2000, "Walls with 25-50% of the line hanging past the layer below (mm/s); 0 = no slowdown")
+        AddNumber("speed", "overhangSpeed50", "0", 0, 2000, "Walls with 50-75% of the line hanging past the layer below (mm/s); 0 = no slowdown")
+        AddNumber("speed", "overhangSpeed75", "0", 0, 2000, "Walls with 75-100% of the line hanging past the layer below (mm/s); 0 = no slowdown")
 
         // ---- accelerations (mm/s^2, 0 = leave what the start G-code set) ----
         AddNumber("acceleration", "accelOuterWall", "0", 0, 100000, "Outer wall acceleration")

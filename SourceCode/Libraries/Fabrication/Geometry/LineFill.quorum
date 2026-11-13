@@ -12,7 +12,9 @@ cross, and every other line runs backwards so the nozzle zigzags.
 FillJoined chains the lines into continuous zigzags instead: each line's end
 is linked to the next line's start along the region's edge, so the nozzle
 keeps extruding rather than stopping, jumping and starting again (used on the
-first layer, where every loose line end can lift off the bed).
+first layer, where every loose line end can lift off the bed, on top surfaces,
+and on all solid fill and sparse infill when PathGenerator's SetJoinSkin /
+SetJoinInfill are on).
 
 Attribute: Example
 

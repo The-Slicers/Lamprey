@@ -1,6 +1,7 @@
 package Tests.Fabrication.Slicing
 
 use Libraries.Containers.Array
+use Libraries.Compute.Math
 use Libraries.Fabrication.Geometry.Contour
 use Libraries.Fabrication.Geometry.PathRole
 use Libraries.Fabrication.Slicing.PathGenerator
@@ -12,6 +13,7 @@ use Tests.TestModels
 class PathOrdererTest is LampreyTest
     TestModels models
     PathRole roles
+    Math math
 
     on create
         SetName("PathOrderer")
@@ -21,6 +23,8 @@ class PathOrdererTest is LampreyTest
         CubeOrder()
         SkirtFirst()
         Cleanup()
+        TopSurfaceLast()
+        SeamOnCorners()
     end
 
     action CubeOrder
@@ -123,5 +127,141 @@ class PathOrdererTest is LampreyTest
         Array<Contour> ordered = orderer:Order(outlines, walls, skin, none, 1)
         ExpectInteger(ordered:GetSize(), 2, "the wall and the keepShort line remain")
         ExpectInteger(orderer:GetDroppedCount(), 2, "the 0.4 mm loop and the 0.1 mm line are dropped")
+    end
+
+    action TopSurfaceLast
+        Case("top surface and ironing, in one sweep")
+        Array<Contour> outlines = models:Outlines(models:Cube(), 0.2)
+        integer planes = models:GetLastPlaneCount()
+        PathGenerator paths
+        paths:SetWallCount(3)
+        paths:SetTopSurfaceLayers(1)
+        paths:SetIroning(true, 0.1, 0.2)
+        paths:Generate(outlines, planes)
+        PathOrderer orderer
+        orderer:SetTopSurface(paths:GetTopSurface())
+        orderer:SetIroning(paths:GetIroning())
+        Array<Contour> ordered = orderer:Order(outlines, paths:GetWalls(), paths:GetSkin(), paths:GetInfill(), planes)
+
+        // layer 99: walls, then the top surface, then the ironing over it
+        Array<integer> layerRoles
+        Array<Contour> surface
+        integer i = 0
+        repeat while i < ordered:GetSize()
+            Contour path = ordered:Get(i)
+            if path:planeIndex = 99
+                layerRoles:Add(path:role)
+                if path:role = roles:TOP_SURFACE
+                    surface:Add(path)
+                end
+            end
+            i = i + 1
+        end
+        integer topCount = 0
+        integer ironCount = 0
+        boolean inOrder = true
+        integer stage = 0      // 0 walls, 1 top surface, 2 ironing
+        i = 0
+        repeat while i < layerRoles:GetSize()
+            integer role = layerRoles:Get(i)
+            integer kind = 0
+            if role = roles:TOP_SURFACE
+                kind = 1
+                topCount = topCount + 1
+            elseif role = roles:IRONING
+                kind = 2
+                ironCount = ironCount + 1
+            elseif role not= roles:OUTER_WALL and role not= roles:INNER_WALL
+                kind = 3
+            end
+            if kind < stage or kind = 3
+                inOrder = false
+            end
+            stage = kind
+            i = i + 1
+        end
+        ExpectTrue(topCount > 0, "the top layer has top surface paths")
+        ExpectTrue(ironCount > 0, "and ironing")
+        ExpectTrue(inOrder, "walls, then top surface, then ironing, and nothing else on the top layer")
+
+        // one sweep: across the surface (perpendicular to its 135 degree
+        // lines, measured by x + y) the nozzle only ever moves one way
+        boolean up = true
+        boolean down = true
+        boolean havePrevious = false
+        number previous = 0.0
+        i = 0
+        repeat while i < surface:GetSize()
+            Contour line = surface:Get(i)
+            integer k = 0
+            repeat while k < line:GetSize()
+                number across = line:xs:Get(k) + line:ys:Get(k)
+                if havePrevious
+                    if across < previous - 0.001
+                        up = false
+                    end
+                    if across > previous + 0.001
+                        down = false
+                    end
+                end
+                previous = across
+                havePrevious = true
+                k = k + 1
+            end
+            i = i + 1
+        end
+        ExpectTrue(up or down, "the top surface is laid in one direction, line after line")
+    end
+
+    /*
+    A loop like a boat seen from the side: a straight bottom and ends, and
+    a smooth arched top that peaks at (10, 13). Its corners are at (0, 0),
+    (20, 0), (0, 10) and (20, 10).
+    */
+    action ArchLoop returns Contour
+        Contour loop
+        loop:AddPoint(0, 0)
+        loop:AddPoint(20, 0)
+        loop:AddPoint(20, 10)
+        integer i = 39
+        repeat while i >= 1
+            number x = cast(number, i) * 0.5
+            loop:AddPoint(x, 10 + 3 * math:Sine(3.141592653589793 * x / 20))
+            i = i - 1
+        end
+        loop:AddPoint(0, 10)
+        loop:closed = true
+        loop:planeIndex = 0
+        loop:wallIndex = 0
+        return loop
+    end
+
+    action SeamOnCorners
+        Case("seams on corners")
+        Array<Contour> outlines
+        outlines:Add(ArchLoop())
+        Array<Contour> walls
+        walls:Add(ArchLoop())
+        Array<Contour> none
+
+        PathOrderer plain
+        plain:SetSeamPoint(0, 1000000)
+        Array<Contour> plainOrder = plain:Order(outlines, walls, none, none, 1)
+        ExpectInteger(plainOrder:GetSize(), 1, "one wall")
+        if plainOrder:GetSize() = 1
+            Contour wall = plainOrder:Get(0)
+            ExpectNumber(wall:HeadX(), 10, 0.01, "without corners: the seam at the top of the arch (x)")
+            ExpectNumber(wall:HeadY(), 13, 0.01, "without corners: the seam at the top of the arch (y)")
+        end
+
+        PathOrderer cornered
+        cornered:SetSeamPoint(0, 1000000)
+        cornered:SetSeamCorners(true)
+        Array<Contour> cornerOrder = cornered:Order(outlines, walls, none, none, 1)
+        if cornerOrder:GetSize() = 1
+            Contour wall2 = cornerOrder:Get(0)
+            ExpectNumber(wall2:HeadX(), 0, 0.01, "with corners: the seam on the corner nearest the back (x)")
+            ExpectNumber(wall2:HeadY(), 10, 0.01, "with corners: the seam on the corner nearest the back (y)")
+        end
     end
 end

@@ -7,6 +7,7 @@ use Libraries.System.FileWriter
 use Libraries.Data.Formats.NumberFormatter
 use Libraries.Fabrication.ArgumentChecker
 use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Geometry.ContourLayers
 use Libraries.Fabrication.Geometry.GeometryUtilities
 use Libraries.Fabrication.Geometry.PathRole
 
@@ -25,7 +26,9 @@ Marlin-flavoured G-code.
   get their minimum cooling time.
 - ;LAYER: and ;TYPE: comments use Cura's names, so G-code previewers can
   colour moves by feature. SetBambuExtras adds the header block and progress
-  reports Bambu Lab printers use.
+  reports Bambu Lab printers use, and Bambu Studio's own "; FEATURE: "
+  names (Outer wall, Top surface, Ironing, Overhang wall, Gap infill, ...)
+  so its preview shows each feature.
 
 The printer's own start and end G-code come from two text files (see
 SetStartGCodeFile). Placeholders like {BED_TEMP} in them are filled in when
@@ -96,6 +99,38 @@ class GcodeWriter
     number infillSpeed = 60.0
     number supportSpeed = 50.0
     number firstLayerSpeed = 20.0
+    // top surfaces (PathRole TOP_SURFACE) and their ironing (IRONING)
+    number topSurfaceSpeed = 30.0
+    number topSurfaceFlow = 1.0
+    number ironingSpeed = 15.0
+    number ironingFlow = 0.15
+    number ironingSpacing = 0.1
+    // walls that hang past the layer below slow to these speeds (mm/s):
+    // 25-50%, 50-75% and 75-100% of the line width unsupported (0 = no
+    // slowdown for that much)
+    // seams: outer wall loops stop seamGap mm short of where they started,
+    // then the nozzle wipes wipeDistance mm along the wall while retracting
+    // (0 = off)
+    number seamGap = 0.0
+    number wipeDistance = 0.0
+    number overhangSpeed25 = 0.0
+    number overhangSpeed50 = 0.0
+    number overhangSpeed75 = 0.0
+    // the model's outlines, to measure overhangs against (SetModelOutlines)
+    ContourLayers outlineLayers
+    boolean haveOutlines = false
+    // per-segment speed caps for the paths of the current Write:
+    // segmentCap[capStart[i] + s] for segment s of path i; capStart[i] = -1
+    // when path i has none
+    Array<number> segmentCap
+    Array<integer> capStart
+    // the outlines of the layer below the one being measured, with their boxes
+    integer belowLayer = -2
+    Array<Contour> belowLoops
+    Array<number> belowLowX
+    Array<number> belowHighX
+    Array<number> belowLowY
+    Array<number> belowHighY
 
     // Most plastic the hotend can melt, in mm^3/s (0 = no limit). Every
     // speed is capped at maxFlow / (lineWidth * layerHeight * flow).
@@ -177,12 +212,18 @@ class GcodeWriter
     number estimatedSeconds = 0.0
 
     // Bambu Lab extras: header block, layer / progress reports (M73, M991)
+    // and Bambu Studio's "; FEATURE: " names
     boolean bambu = false
+    // the skirt loops are a brim (named "Brim" for Bambu Studio)
+    boolean brim = false
+    // the last "; FEATURE: " written ("" = none yet)
+    text lastFeature = ""
 
     // accelerations in mm/s^2 (0 = leave the printer's setting alone)
     number accelOuterWall = 0.0
     number accelInnerWall = 0.0
     number accelSkin = 0.0
+    number accelTopSurface = 0.0      // 0 = the same as accelSkin
     number accelInfill = 0.0
     number accelSupport = 0.0
     number accelFirstLayer = 0.0
@@ -628,6 +669,162 @@ class GcodeWriter
     end
 
     /*
+    How top surfaces (PathGenerator:SetTopSurfaceLayers) are printed: their
+    speed, an extrusion multiplier on top of SetFlow (a little over 1, such
+    as 1.03, closes the gaps between lines), and their acceleration (0 =
+    the same as skin). On the first layer the speed is never above the first
+    layer speed.
+
+    Attribute: Parameter speed Top surface speed (mm/s).
+    Attribute: Parameter flowRatio Extra extrusion multiplier for top surfaces.
+    Attribute: Parameter acceleration Top surface acceleration (mm/s^2); 0 = the skin's.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetTopSurface(30, 1.03, 0)      // slower, 3% more plastic
+        gcode:Write(ordered, "Outputs/part.gcode")
+    */
+    action SetTopSurface(number speed, number flowRatio, number acceleration)
+        checker:RequirePositive("GcodeWriter:SetTopSurface speed", speed)
+        checker:RequirePositive("GcodeWriter:SetTopSurface flowRatio", flowRatio)
+        checker:RequireAtLeast("GcodeWriter:SetTopSurface acceleration", acceleration, 0)
+        topSurfaceSpeed = speed
+        topSurfaceFlow = flowRatio
+        accelTopSurface = acceleration
+    end
+
+    /*
+    How ironing (PathGenerator:SetIroning) is printed. flowRatio is the
+    share of a full layer's plastic laid over the area ironed, so 0.15 puts
+    back 15% of a layer: enough to fill the gaps between the top surface's
+    lines, not enough to pile up. spacing must match the spacing given to
+    PathGenerator:SetIroning, since the plastic per mm of ironing line
+    depends on it.
+
+    Attribute: Parameter speed Ironing speed (mm/s); 15 - 30 is typical.
+    Attribute: Parameter flowRatio Share of a full layer's plastic, 0 to 1; 0.1 - 0.2 is typical.
+    Attribute: Parameter spacing Distance between ironing lines (mm).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetIroning(15, 0.15, 0.1)
+        gcode:Write(ordered, "Outputs/part.gcode")
+    */
+    action SetIroning(number speed, number flowRatio, number spacing)
+        checker:RequirePositive("GcodeWriter:SetIroning speed", speed)
+        checker:RequireRange("GcodeWriter:SetIroning flowRatio", flowRatio, 0, 1)
+        checker:RequirePositive("GcodeWriter:SetIroning spacing", spacing)
+        ironingSpeed = speed
+        ironingFlow = flowRatio
+        ironingSpacing = spacing
+    end
+
+    /*
+    How the outer wall's seam is closed. A loop that ends exactly where it
+    started lays its last bit of plastic on top of its first and leaves a
+    bump, and a nozzle that leaves the seam without retracting oozes a
+    string or a blob there. So each outer wall loop stops `gap` mm short of
+    its start, and then the nozzle keeps going along the wall for `wipe` mm
+    without extruding, pulling the filament back as it goes (the whole
+    retraction, if the retraction limit allows it), before travelling on.
+    Bambu Studio uses a gap of 15% of the nozzle (0.06 mm) and a 2 mm wipe.
+    0 turns either off.
+
+    Attribute: Parameter gap How far short of its start an outer wall loop stops (mm).
+    Attribute: Parameter wipe How far the nozzle wipes along the wall afterwards (mm).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetSeam(0.06, 2)
+        gcode:Write(ordered, "Outputs/part.gcode")
+    */
+    action SetSeam(number gap, number wipe)
+        checker:RequireAtLeast("GcodeWriter:SetSeam gap", gap, 0)
+        checker:RequireAtLeast("GcodeWriter:SetSeam wipe", wipe, 0)
+        seamGap = gap
+        wipeDistance = wipe
+    end
+
+    /*
+    The model's outlines (from ContourGenerator:Build), so overhanging walls
+    can be found: a wall segment is measured against the outline of the
+    layer below it. Needed for SetOverhangSpeeds.
+
+    Attribute: Parameter contours The outlines of every plane.
+    Attribute: Parameter planeCount The number of planes.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetModelOutlines(outlines, 100)
+        gcode:SetOverhangSpeeds(50, 30, 10)
+        gcode:Write(ordered, "Outputs/part.gcode")
+    */
+    action SetModelOutlines(Array<Contour> contours, integer planeCount)
+        outlineLayers:Index(contours, planeCount, true)
+        haveOutlines = true
+    end
+
+    /*
+    Walls that hang out past the layer below curl up and look rough when
+    printed fast. Each wall segment is measured against the layer below
+    (see SetModelOutlines): how much of the line's width has nothing under
+    it. Segments with 25-50%, 50-75% or 75% and more unsupported slow down
+    to these speeds (mm/s); 0 leaves that much overhang at full speed. A
+    speed is only ever lowered, never raised. Bambu Studio's A1 and P1/X1
+    profiles use 50, 30 and 10.
+
+    Attribute: Parameter quarter Speed for 25-50% unsupported (mm/s); 0 = no slowdown.
+    Attribute: Parameter half Speed for 50-75% unsupported (mm/s); 0 = no slowdown.
+    Attribute: Parameter threeQuarters Speed for 75-100% unsupported (mm/s); 0 = no slowdown.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetModelOutlines(outlines, 100)
+        gcode:SetOverhangSpeeds(50, 30, 10)
+        gcode:Write(ordered, "Outputs/part.gcode")
+    */
+    action SetOverhangSpeeds(number quarter, number half, number threeQuarters)
+        checker:RequireAtLeast("GcodeWriter:SetOverhangSpeeds quarter", quarter, 0)
+        checker:RequireAtLeast("GcodeWriter:SetOverhangSpeeds half", half, 0)
+        checker:RequireAtLeast("GcodeWriter:SetOverhangSpeeds threeQuarters", threeQuarters, 0)
+        overhangSpeed25 = quarter
+        overhangSpeed50 = half
+        overhangSpeed75 = threeQuarters
+    end
+
+    /*
     Bambu Lab printers: write the header block and the layer / progress
     reports their screen, time estimate and timelapse use:
     M73 P<percent> R<minutes left>, M73 L<layer>, M991 S0 P<layer>.
@@ -647,6 +844,29 @@ class GcodeWriter
     */
     action SetBambuExtras(boolean toggle)
         bambu = toggle
+    end
+
+    /*
+    Whether the skirt loops (PathRole SKIRT) are a brim. Only changes their
+    name in Bambu Studio's "; FEATURE: " comments ("Brim" instead of
+    "Skirt"); G-code previewers that read Cura's ;TYPE: call both SKIRT.
+
+    Attribute: Parameter toggle True for a brim.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Printing.GcodeWriter
+
+        Array<Contour> ordered      // from PathOrderer:Order
+        GcodeWriter gcode
+        gcode:SetBambuExtras(true)
+        gcode:SetBrim(true)
+        gcode:Write(ordered, "Outputs/part.gcode")
+    */
+    action SetBrim(boolean toggle)
+        brim = toggle
     end
 
     /*
@@ -902,6 +1122,7 @@ class GcodeWriter
         skippedRetracts = 0
         lastAccel = -1
         CenterOnBed(paths)
+        PlanOverhangs(paths)
         PlanLayerSpeeds(paths)
         FindTopZ(paths)
         FindFirstLayerBox(paths)
@@ -933,7 +1154,7 @@ class GcodeWriter
                 layer = path:planeIndex
                 ChangeLayer(layer)
             end
-            WritePath(path, layer)
+            WritePath(path, layer, i)
             i = i + 1
         end
 
@@ -1072,6 +1293,7 @@ class GcodeWriter
     // ------------------------------------------------------------ sections
 
     private action WriteStart
+        lastFeature = ""
         if dryRun
             Line(";DRY RUN generated by the Lamprey slicer")
             Line(";No heating, no extrusion. Every move is lifted " + Fixed(dryRunLift, 1) + " mm above the bed.")
@@ -1441,7 +1663,7 @@ class GcodeWriter
         return cast(integer, fraction * cast(number, fanMax) + 0.5)
     end
 
-    private action WritePath(Contour path, integer layer)
+    private action WritePath(Contour path, integer layer, integer index)
         integer n = path:GetSize()
         if n < 2
             return now
@@ -1449,10 +1671,17 @@ class GcodeWriter
 
         number speed = utils:Max2(SpeedFor(path, layer) * LayerFactor(layer), minPrintSpeed)
         Line(";TYPE:" + roles:GetFeatureName(path:role))
+        text feature = BambuFeature(path, layer)
+        Feature(feature)
 
         // a new tine, or a switch between model and support, means crossing
         // an air gap: always retract for it, however short the move
+        // short hops inside infill, or between ironing zigzags (the nozzle
+        // stays over printed plastic), don't need a retract
         boolean infillToInfill = path:role = roles:INFILL and lastRole = roles:INFILL
+        if path:role = roles:IRONING and lastRole = roles:IRONING
+            infillToInfill = true
+        end
         boolean supportNow = roles:IsSupport(path:role)
         boolean supportBefore = roles:IsSupport(lastRole)
         boolean newPart = path:role = roles:SUPPORT_WALL or (lastRole >= 0 and supportNow not= supportBefore)
@@ -1461,7 +1690,7 @@ class GcodeWriter
         Unretract()
         SetAccel(AccelFor(path, layer))
 
-        number e = lineWidth * layerHeight / filamentArea * flow
+        number e = lineWidth * layerHeight / filamentArea * flow * RoleFlow(path)
         if layer = 0
             e = e * firstLayerFlow
         end
@@ -1469,6 +1698,7 @@ class GcodeWriter
         if path:closed
             segments = n
         end
+        boolean outerLoop = path:closed and path:role = roles:OUTER_WALL
         integer i = 0
         repeat while i < segments
             integer k = i + 1
@@ -1480,38 +1710,374 @@ class GcodeWriter
             number dx = x - posX
             number dy = y - posY
             number len = math:SquareRoot(dx * dx + dy * dy)
+            if outerLoop and seamGap > 0 and i = segments - 1 and len > seamGap + 0.0001
+                // the closing segment stops seamGap short of the start
+                x = x - dx * seamGap / len
+                y = y - dy * seamGap / len
+                dx = x - posX
+                dy = y - posY
+                len = len - seamGap
+            end
             if len > 0.0001
                 number amount = len * e
                 text move = "G1 X" + Fixed(x, 3) + " Y" + Fixed(y, 3)
                 if not dryRun
                     move = move + " E" + Fixed(amount, 5)
                 end
-                integer feed = Feed(speed)
+                // an overhanging stretch of wall goes slower
+                number segmentSpeed = speed
+                number cap = SegmentCap(index, i)
+                if cap > 0 and cap < segmentSpeed
+                    segmentSpeed = cap
+                end
+                // and Bambu Studio shows it as overhang wall
+                if cap > 0
+                    Feature("Overhang wall")
+                else
+                    Feature(feature)
+                end
+                integer feed = Feed(segmentSpeed)
                 if feed not= lastSpeed
                     move = move + " F" + feed
                     lastSpeed = feed
                 end
                 Line(move)
                 totalFilament = totalFilament + amount
-                totalSeconds = totalSeconds + len / speed
+                totalSeconds = totalSeconds + len / segmentSpeed
                 posX = x
                 posY = y
             end
             i = i + 1
         end
+        if outerLoop and wipeDistance > 0
+            Wipe(path)
+        end
+    end
+
+    // After an outer wall loop: keep going along the start of the loop for
+    // wipeDistance mm without extruding, retracting along the way, so the
+    // seam is smoothed over instead of left with a blob, and nothing oozes
+    // on the way to the next path. Done at 80% of the travel speed, like
+    // Bambu Studio (the printer slows the move if the retraction can't keep up).
+    private action Wipe(Contour path)
+        integer n = path:GetSize()
+        if dryRun or retracted or n < 2
+            return now
+        end
+        number total = utils:Min2(wipeDistance, utils:PathLength(path))
+        if total < 0.05
+            return now
+        end
+        boolean pull = retractLength > 0 and TakeRetract()
+        number wipeSpeed = travelSpeed * 0.8
+        number done = 0.0
+        number pulled = 0.0
+        integer k = 1
+        integer guard = 0
+        repeat while done < total - 0.0001 and guard <= n
+            integer target = k mod n
+            number tx = path:xs:Get(target) + offsetX
+            number ty = path:ys:Get(target) + offsetY
+            number dx = tx - posX
+            number dy = ty - posY
+            number dist = math:SquareRoot(dx * dx + dy * dy)
+            if dist > 0.0001
+                number step = utils:Min2(dist, total - done)
+                number x = posX + dx * step / dist
+                number y = posY + dy * step / dist
+                text move = "G1 X" + Fixed(x, 3) + " Y" + Fixed(y, 3)
+                if pull
+                    number back = retractLength * step / total
+                    if done + step >= total - 0.0001
+                        back = retractLength - pulled
+                    end
+                    move = move + " E-" + Fixed(back, 5)
+                    pulled = pulled + back
+                end
+                integer feed = Feed(wipeSpeed)
+                if feed not= lastSpeed
+                    move = move + " F" + feed
+                    lastSpeed = feed
+                end
+                Line(move)
+                totalSeconds = totalSeconds + step / wipeSpeed
+                posX = x
+                posY = y
+                done = done + step
+            end
+            k = k + 1
+            guard = guard + 1
+        end
+        if pull
+            if pulled < retractLength - 0.00001
+                Line("G1 E-" + Fixed(retractLength - pulled, 5) + " F" + Feed(retractSpeed))
+            end
+            retracted = true
+            lastSpeed = -1
+        end
+    end
+
+    // ------------------------------------------------------------ overhangs
+
+    // Works out, for every wall segment of every path, the speed its
+    // overhang allows (segmentCap / capStart). Nothing is stored unless
+    // overhang speeds and the model's outlines were given.
+    private action PlanOverhangs(Array<Contour> paths)
+        segmentCap:Empty()
+        capStart:Empty()
+        belowLayer = -2
+        boolean active = haveOutlines and (overhangSpeed25 > 0 or overhangSpeed50 > 0 or overhangSpeed75 > 0)
+        integer i = 0
+        repeat while i < paths:GetSize()
+            Contour path = paths:Get(i)
+            integer layer = path:planeIndex
+            boolean wall = path:role = roles:OUTER_WALL or path:role = roles:INNER_WALL
+            if active and wall and layer >= 1 and path:GetSize() >= 2
+                capStart:Add(segmentCap:GetSize())
+                PrepareBelow(layer - 1)
+                integer n = path:GetSize()
+                integer segments = n - 1
+                if path:closed
+                    segments = n
+                end
+                integer s = 0
+                repeat while s < segments
+                    integer k = s + 1
+                    if k = n
+                        k = 0
+                    end
+                    number mx = (path:xs:Get(s) + path:xs:Get(k)) / 2.0
+                    number my = (path:ys:Get(s) + path:ys:Get(k)) / 2.0
+                    segmentCap:Add(OverhangCap(Unsupported(mx, my)))
+                    s = s + 1
+                end
+            else
+                capStart:Add(-1)
+            end
+            i = i + 1
+        end
+    end
+
+    // The speed cap for segment `segment` of path `index` (0 = none).
+    private action SegmentCap(integer index, integer segment) returns number
+        if index < 0 or index >= capStart:GetSize()
+            return 0.0
+        end
+        integer start = capStart:Get(index)
+        if start < 0
+            return 0.0
+        end
+        return segmentCap:Get(start + segment)
+    end
+
+    // The speed for a share of the line width hanging in the air.
+    private action OverhangCap(number unsupported) returns number
+        if unsupported >= 0.75
+            return overhangSpeed75
+        elseif unsupported >= 0.5
+            return overhangSpeed50
+        elseif unsupported >= 0.25
+            return overhangSpeed25
+        end
+        return 0.0
+    end
+
+    // Loads the outlines of `layer` and their bounding boxes, unless they
+    // are already loaded.
+    private action PrepareBelow(integer layer)
+        if layer = belowLayer
+            return now
+        end
+        belowLayer = layer
+        belowLoops = outlineLayers:GetLayer(layer)
+        belowLowX:Empty()
+        belowHighX:Empty()
+        belowLowY:Empty()
+        belowHighY:Empty()
+        integer c = 0
+        repeat while c < belowLoops:GetSize()
+            Contour loop = belowLoops:Get(c)
+            number lowX = 0.0
+            number highX = 0.0
+            number lowY = 0.0
+            number highY = 0.0
+            integer v = 0
+            repeat while v < loop:GetSize()
+                number vx = loop:xs:Get(v)
+                number vy = loop:ys:Get(v)
+                if v = 0 or vx < lowX
+                    lowX = vx
+                end
+                if v = 0 or vx > highX
+                    highX = vx
+                end
+                if v = 0 or vy < lowY
+                    lowY = vy
+                end
+                if v = 0 or vy > highY
+                    highY = vy
+                end
+                v = v + 1
+            end
+            belowLowX:Add(lowX)
+            belowHighX:Add(highX)
+            belowLowY:Add(lowY)
+            belowHighY:Add(highY)
+            c = c + 1
+        end
+    end
+
+    // How much of a line centred on (x, y) has nothing under it, as a share
+    // of the line width (0 to 1), measured against the outlines loaded by
+    // PrepareBelow. A line whose centre sits on the edge below is half
+    // unsupported; one a half line width or more inside is fully supported.
+    private action Unsupported(number x, number y) returns number
+        // only edges within a line width matter: further in is fully
+        // supported, further out fully in the air
+        number reach = lineWidth
+        number nearest2 = reach * reach
+        boolean inside = false
+        integer c = 0
+        repeat while c < belowLoops:GetSize()
+            Contour loop = belowLoops:Get(c)
+            integer n = loop:GetSize()
+            boolean near = x >= belowLowX:Get(c) - reach and x <= belowHighX:Get(c) + reach
+            if near
+                near = y >= belowLowY:Get(c) - reach and y <= belowHighY:Get(c) + reach
+            end
+            if n >= 3 and near
+                // even-odd: holes are loops too
+                if loop:ContainsPoint(x, y)
+                    inside = not inside
+                end
+                integer j = n - 1
+                integer k = 0
+                repeat while k < n
+                    number ax = loop:xs:Get(j)
+                    number ay = loop:ys:Get(j)
+                    number bx = loop:xs:Get(k)
+                    number by = loop:ys:Get(k)
+                    // skip edges whose box is out of reach
+                    boolean skip = (ax < x - reach and bx < x - reach) or (ax > x + reach and bx > x + reach)
+                    if not skip
+                        skip = (ay < y - reach and by < y - reach) or (ay > y + reach and by > y + reach)
+                    end
+                    if not skip
+                        number d2 = utils:SegmentDistance2(x, y, ax, ay, bx, by)
+                        if d2 < nearest2
+                            nearest2 = d2
+                        end
+                    end
+                    j = k
+                    k = k + 1
+                end
+            end
+            c = c + 1
+        end
+        number d = math:SquareRoot(nearest2)
+        number share = 0.0
+        if inside
+            share = (lineWidth / 2.0 - d) / lineWidth
+        else
+            share = (lineWidth / 2.0 + d) / lineWidth
+        end
+        if share < 0
+            return 0.0
+        end
+        if share > 1
+            return 1.0
+        end
+        return share
+    end
+
+    // Seconds the overhang slowdown adds to a path printed at `speed`.
+    private action OverhangSeconds(integer index, Contour path, number speed) returns number
+        if index < 0 or index >= capStart:GetSize()
+            return 0.0
+        end
+        if capStart:Get(index) < 0
+            return 0.0
+        end
+        number extra = 0.0
+        integer n = path:GetSize()
+        integer segments = n - 1
+        if path:closed
+            segments = n
+        end
+        integer s = 0
+        repeat while s < segments
+            integer k = s + 1
+            if k = n
+                k = 0
+            end
+            number cap = SegmentCap(index, s)
+            if cap > 0 and cap < speed
+                number dx = path:xs:Get(k) - path:xs:Get(s)
+                number dy = path:ys:Get(k) - path:ys:Get(s)
+                number len = math:SquareRoot(dx * dx + dy * dy)
+                extra = extra + len / cap - len / speed
+            end
+            s = s + 1
+        end
+        return extra
     end
 
     // The speed for a path, capped by the hotend's melt limit.
     private action SpeedFor(Contour path, integer layer) returns number
         number speed = BaseSpeed(path, layer)
         if maxFlow > 0
-            speed = utils:Min2(speed, maxFlow / (lineWidth * layerHeight * flow))
+            speed = utils:Min2(speed, maxFlow / (lineWidth * layerHeight * flow * RoleFlow(path)))
         end
         return speed
     end
 
+    // The name Bambu Studio's preview gives a path (see PathRole:GetBambuFeatureName):
+    // solid fill on the first layer is its bottom surface, and the short
+    // lines PathGenerator marks keepShort (gap fill, thin-part center lines
+    // and dots) are gap infill.
+    private action BambuFeature(Contour path, integer layer) returns text
+        if path:role = roles:SKIN
+            if path:keepShort
+                return "Gap infill"
+            elseif layer = 0
+                return "Bottom surface"
+            end
+        elseif path:role = roles:SKIRT and brim
+            return "Brim"
+        end
+        return roles:GetBambuFeatureName(path:role)
+    end
+
+    // Writes Bambu Studio's "; FEATURE: " comment when the feature changes
+    // (Bambu extras only).
+    private action Feature(text name)
+        if not bambu or name = lastFeature
+            return now
+        end
+        Line("; FEATURE: " + name)
+        lastFeature = name
+    end
+
+    // Extrusion multiplier for a path's role, on top of SetFlow: 1 except
+    // for top surfaces and ironing. Ironing lines lie ironingSpacing apart
+    // instead of a line width, so their share of a layer is spread over
+    // that much less width.
+    private action RoleFlow(Contour path) returns number
+        if path:role = roles:TOP_SURFACE
+            return topSurfaceFlow
+        elseif path:role = roles:IRONING
+            return ironingFlow * ironingSpacing / lineWidth
+        end
+        return 1.0
+    end
+
     private action BaseSpeed(Contour path, integer layer) returns number
         if layer = 0
+            if path:role = roles:TOP_SURFACE
+                return utils:Min2(firstLayerSpeed, topSurfaceSpeed)
+            elseif path:role = roles:IRONING
+                return utils:Min2(firstLayerSpeed, ironingSpeed)
+            end
             return firstLayerSpeed
         end
         if path:role = roles:OUTER_WALL
@@ -1520,6 +2086,10 @@ class GcodeWriter
             return innerWallSpeed
         elseif path:role = roles:SKIN
             return skinSpeed
+        elseif path:role = roles:TOP_SURFACE
+            return topSurfaceSpeed
+        elseif path:role = roles:IRONING
+            return ironingSpeed
         elseif path:role = roles:SKIRT
             return firstLayerSpeed
         elseif roles:IsSupport(path:role)
@@ -1557,10 +2127,14 @@ class GcodeWriter
         // seconds spent extruding, and seconds spent on everything else
         Array<number> seconds
         Array<number> overhead
+        // extra seconds the overhang slowdown adds (it isn't stretched by
+        // the cooling slowdown, so it is kept apart from `seconds`)
+        Array<number> overhangTime
         i = 0
         repeat while i <= top
             seconds:Add(0.0)
             overhead:Add(0.0)
+            overhangTime:Add(0.0)
             i = i + 1
         end
 
@@ -1580,6 +2154,7 @@ class GcodeWriter
             if pl >= 0 and path2:GetSize() >= 2
                 number t = seconds:Get(pl) + utils:PathLength(path2) / SpeedFor(path2, pl)
                 seconds:Set(pl, t)
+                overhangTime:Set(pl, overhangTime:Get(pl) + OverhangSeconds(i, path2, SpeedFor(path2, pl)))
 
                 number extra = 0.0
                 if pl not= lastPlane
@@ -1621,6 +2196,7 @@ class GcodeWriter
             number printing = seconds:Get(i)
             number other = overhead:Get(i)
             number factor = 1.0
+            other = other + overhangTime:Get(i)
             if minLayerTime > 0 and printing > 0 and printing + other < minLayerTime
                 factor = printing / (minLayerTime - other)
                 slowedLayers = slowedLayers + 1
@@ -1643,7 +2219,7 @@ class GcodeWriter
             integer pl3 = path3:planeIndex
             if pl3 >= 0 and path3:GetSize() >= 2
                 number slowed = utils:Max2(SpeedFor(path3, pl3) * layerFactor:Get(pl3), minPrintSpeed)
-                actual:Set(pl3, actual:Get(pl3) + utils:PathLength(path3) / slowed)
+                actual:Set(pl3, actual:Get(pl3) + utils:PathLength(path3) / slowed + OverhangSeconds(i, path3, slowed))
             end
             i = i + 1
         end
@@ -1812,6 +2388,11 @@ class GcodeWriter
             return accelInnerWall
         elseif path:role = roles:SKIN
             return accelSkin
+        elseif roles:IsTopSurface(path:role)
+            if accelTopSurface > 0
+                return accelTopSurface
+            end
+            return accelSkin
         elseif path:role = roles:SKIRT
             return accelFirstLayer
         elseif roles:IsSupport(path:role)
@@ -1844,28 +2425,37 @@ class GcodeWriter
             return now
         end
         if not retracted
-            // how many retracts happened within the last retractWindow mm of filament?
-            // (the history only grows, so count backwards until out of the window)
-            integer recent = 0
-            integer h = retractHistory:GetSize() - 1
-            boolean inWindow = true
-            repeat while h >= 0 and inWindow
-                if totalFilament - retractHistory:Get(h) < retractWindow
-                    recent = recent + 1
-                    h = h - 1
-                else
-                    inWindow = false
-                end
-            end
-            if recent >= maxRetracts
-                skippedRetracts = skippedRetracts + 1
+            if not TakeRetract()
                 return now
             end
-            retractHistory:Add(totalFilament)
             Line("G1 E-" + Fixed(retractLength, 3) + " F" + Feed(retractSpeed))
             retracted = true
             lastSpeed = -1
         end
+    end
+
+    // Whether the retraction limit (SetRetractionLimit) allows a retract
+    // now. If it does the retract is counted; if not, the skip is.
+    private action TakeRetract returns boolean
+        // how many retracts happened within the last retractWindow mm of filament?
+        // (the history only grows, so count backwards until out of the window)
+        integer recent = 0
+        integer h = retractHistory:GetSize() - 1
+        boolean inWindow = true
+        repeat while h >= 0 and inWindow
+            if totalFilament - retractHistory:Get(h) < retractWindow
+                recent = recent + 1
+                h = h - 1
+            else
+                inWindow = false
+            end
+        end
+        if recent >= maxRetracts
+            skippedRetracts = skippedRetracts + 1
+            return false
+        end
+        retractHistory:Add(totalFilament)
+        return true
     end
 
     private action Unretract

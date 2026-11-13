@@ -156,12 +156,19 @@ class SliceJob
         Log("paths: " + walls:GetSize() + " walls, " + skin:GetSize() + " solid lines, " + infill:GetSize()
             + " infill lines (" + paths:GetDroppedLoopCount() + " bad inset loops dropped, "
             + paths:GetRebuiltIslandCount() + " thin islands rebuilt)")
+        Array<Contour> topSurface = paths:GetTopSurface()
+        Array<Contour> ironing = paths:GetIroning()
+        if topSurface:GetSize() > 0 or ironing:GetSize() > 0
+            Log("top surfaces: " + topSurface:GetSize() + " top surface paths, " + ironing:GetSize() + " ironing paths")
+        end
 
         // everything on the first layer, for the skirt / brim to go around
         Array<Contour> base = contours:CopyToArray()
 
         PathOrderer orderer
         ConfigureOrderer(profile, orderer)
+        orderer:SetTopSurface(topSurface)
+        orderer:SetIroning(ironing)
 
         if profile:GetBoolean("supportsEnabled")
             TreeSupport trees
@@ -169,7 +176,8 @@ class SliceJob
             trees:Generate(contours, planeCount)
             Log("support: " + trees:GetTipCount() + " tines (" + trees:GetDroppedTips() + " dropped for lack of room), "
                 + trees:GetReachedBed() + " trunks reach the bed, " + trees:GetRestedOnModel() + " branches rest on the model; skipped "
-                + trees:GetSkippedBridgeCount() + " bridgeable and " + trees:GetSkippedSmallCount() + " tiny-overhang tine spots")
+                + trees:GetSkippedBridgeCount() + " bridgeable, " + trees:GetSkippedSmallCount() + " tiny-overhang and "
+                + trees:GetSkippedLowCount() + " near-bed tine spots")
             Array<Contour> supportAreas = trees:GetAreas()
             integer i = 0
             repeat while i < supportAreas:GetSize()
@@ -194,6 +202,7 @@ class SliceJob
 
         GcodeWriter gcode
         ConfigureGcode(profile, gcode)
+        gcode:SetModelOutlines(contours, planeCount)
         gcode:Write(ordered, gcodePath)
         Warn(gcode:GetWarnings(), "")
         Log("Wrote " + gcodePath + ": " + format:Fixed(gcode:GetFilamentLength() / 1000.0, 2) + " m of filament, about "
@@ -244,6 +253,11 @@ class SliceJob
         paths:SetTopLayers(profile:GetInteger("topLayers"))
         paths:SetBottomLayers(profile:GetInteger("bottomLayers"))
         paths:SetJoinFirstLayer(profile:GetBoolean("joinFirstLayer"))
+        paths:SetJoinSkin(profile:GetBoolean("joinSkin"))
+        paths:SetJoinInfill(profile:GetBoolean("joinInfill"))
+        paths:SetTopSurfaceLayers(profile:GetInteger("topSurfaceLayers"))
+        paths:SetGapFill(profile:GetBoolean("gapFill"))
+        paths:SetIroning(profile:GetBoolean("ironing"), profile:GetNumber("ironingSpacing"), profile:GetNumber("ironingInset"))
     end
 
     private action ConfigureSupports(Profile profile, TreeSupport trees)
@@ -263,6 +277,7 @@ class SliceJob
         trees:SetBedRouting(profile:GetBoolean("supportBedRouting"))
         trees:SetBridging(profile:GetNumber("supportMaxBridge"))
         trees:SetMinOverhangArea(profile:GetNumber("supportMinOverhangArea"))
+        trees:SetMinHeight(profile:GetNumber("supportMinHeight"))
     end
 
     private action ConfigureAdhesion(Profile profile, SkirtGenerator skirtGen)
@@ -276,6 +291,7 @@ class SliceJob
 
     private action ConfigureOrderer(Profile profile, PathOrderer orderer)
         orderer:SetSeamPoint(profile:GetNumber("seamX"), profile:GetNumber("seamY"))
+        orderer:SetSeamCorners(profile:GetBoolean("seamCorners"))
         orderer:SetCleanup(profile:GetNumber("minLoopLength"), profile:GetNumber("minLineLength"), profile:GetNumber("minSegmentLength"))
     end
 
@@ -296,6 +312,13 @@ class SliceJob
             profile:GetNumber("skinSpeed"), profile:GetNumber("infillSpeed"),
             profile:GetNumber("supportSpeed"), profile:GetNumber("firstLayerSpeed"))
         gcode:SetTravelSpeed(profile:GetNumber("travelSpeed"))
+        gcode:SetTopSurface(profile:GetNumber("topSurfaceSpeed"), profile:GetNumber("topSurfaceFlow"),
+            profile:GetNumber("accelTopSurface"))
+        gcode:SetIroning(profile:GetNumber("ironingSpeed"), profile:GetNumber("ironingFlow"),
+            profile:GetNumber("ironingSpacing"))
+        gcode:SetSeam(profile:GetNumber("seamGap"), profile:GetNumber("wipeDistance"))
+        gcode:SetOverhangSpeeds(profile:GetNumber("overhangSpeed25"), profile:GetNumber("overhangSpeed50"),
+            profile:GetNumber("overhangSpeed75"))
         gcode:SetInfillTravel(profile:GetNumber("infillTravelLimit"))
         gcode:SetAccelerations(profile:GetNumber("accelOuterWall"), profile:GetNumber("accelInnerWall"),
             profile:GetNumber("accelSkin"), profile:GetNumber("accelInfill"),
@@ -320,6 +343,7 @@ class SliceJob
         gcode:SetCoolingPause(profile:GetNumber("coolingLift"), profile:GetNumber("coolingClearance"))
 
         gcode:SetBambuExtras(profile:GetBoolean("bambuExtras"))
+        gcode:SetBrim(profile:GetText("adhesionType") = "brim")
         gcode:SetStartGCodeFile(profile:GetText("startGcodeFile"))
         gcode:SetEndGCodeFile(profile:GetText("endGcodeFile"))
         gcode:SetDryRun(profile:GetBoolean("dryRun"), profile:GetNumber("dryRunLift"))
