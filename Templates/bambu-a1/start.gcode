@@ -52,7 +52,7 @@ M1006 A0 B10 L100 C44 D10 M80 E39 F10 N80
 M1006 A0 B10 L100 C0 D10 M60 E0 F10 N80
 M1006 A43 B10 L100 C46 D10 M60 E39 F10 N80
 M1006 W
-M18 
+M18
 ;=====start printer sound ===================
 
 ;=====avoid end stop =================
@@ -228,7 +228,7 @@ M622 J1
         M400
         M106 P1 S0
     M623
-    
+
     G1 X-48.2 F3000
     M400
     M984 A0.1 E1 S1 F{CALI_FLOW} H{NOZZLE_DIAMETER}
@@ -489,7 +489,13 @@ M211 R; pop softend status
 ;M73 P1.717
 
 ;===== bed leveling ==================================
-M1002 judge_flag g29_before_print_flag
+; CHANGE (Lamprey): the bed is always probed under the first layer, whether or
+; not "Bed Leveling" was ticked when the print was sent. Bambu's code only
+; probes when the printer's g29_before_print_flag is set, and otherwise reuses
+; the last saved mesh and re-homes instead. To go back to Bambu's behaviour,
+; restore the "M1002 judge_flag g29_before_print_flag" / "M622 J1" ... "M623"
+; wrapper around the G29 block, and the "home after wipe mouth" block
+; (M622 J0 / G28 / M623) after it.
 
 G90
 G1 Z5 F1200
@@ -500,24 +506,14 @@ M190 S{BED_TEMP}; ensure bed temp
 M109 S140
 M106 S0 ; turn off fan , too noisy
 
-M622 J1
-    M1002 gcode_claim_action : 1
-    G29 A1 X{FIRST_MIN_X} Y{FIRST_MIN_Y} I{FIRST_SIZE_X} J{FIRST_SIZE_Y}
-    M400
-    M500 ; save cali data
-M623
+M1002 gcode_claim_action : 1
+G29 A1 X{FIRST_MIN_X} Y{FIRST_MIN_Y} I{FIRST_SIZE_X} J{FIRST_SIZE_Y}
+M400
+M500 ; save cali data
 ;===== bed leveling end ================================
 
-;===== home after wipe mouth============================
-M1002 judge_flag g29_before_print_flag
-M622 J0
-
-    M1002 gcode_claim_action : 13
-    G28
-
-M623
-
-;===== home after wipe mouth end =======================
+; (Bambu's "home after wipe mouth" block, a G28 run only when bed leveling is
+; skipped, is left out: leveling always runs now.)
 
 ;M400
 ;M73 P1.717

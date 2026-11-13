@@ -61,6 +61,10 @@ class TreeSupport
     integer topGapLayers = 1
     number lookDown = 1.0
     number density = 0.15
+    // fill density of the support's first layer, on the bed; 0 = density.
+    // A sparse first layer leaves a wide support base held to the bed by its
+    // wall and a few lines, and a brim around it holds on to almost nothing.
+    number firstLayerDensity = 0.0
     number baseFlare = 1.0
     integer baseLayers = 5
 
@@ -395,6 +399,30 @@ class TreeSupport
     action SetDensity(number value)
         checker:RequireRange("TreeSupport:SetDensity value", value, 0, 1)
         density = value
+    end
+
+    /*
+    The fill density of the support's first layer, on the bed (0 to 1; 0 =
+    the same as SetDensity). 1 prints it solid, in continuous zigzags, so a
+    wide support base sticks to the bed as well as the model does, and a
+    brim around it has something to hold on to.
+
+    Attribute: Parameter value The density, 0 to 1; 0 uses the ordinary support density.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetFirstLayerDensity(1.0)     // solid on the bed
+        trees:Generate(outlines, 100)
+    */
+    action SetFirstLayerDensity(number value)
+        checker:RequireRange("TreeSupport:SetFirstLayerDensity value", value, 0, 1)
+        firstLayerDensity = value
     end
 
     /*
@@ -2110,8 +2138,19 @@ class TreeSupport
                     lineFill:Fill(roof, layer, lineWidth / util:Min2(roofDensity, 1.0), lineWidth, layerLines)
                 end
             end
-            if density > 0 and sparse:GetSize() > 0
-                lineFill:Fill(sparse, layer, lineWidth / util:Min2(density, 1.0), lineWidth, layerLines)
+            // the first layer may be denser (solid), so the base sticks to the bed
+            number fillDensity = density
+            if layer = 0 and firstLayerDensity > 0
+                fillDensity = firstLayerDensity
+            end
+            if fillDensity > 0 and sparse:GetSize() > 0
+                number spacing = lineWidth / util:Min2(fillDensity, 1.0)
+                if layer = 0 and firstLayerDensity > 0
+                    // continuous zigzags: no loose line ends to lift off the bed
+                    lineFill:FillJoined(sparse, layer, spacing, lineWidth, layerLines)
+                else
+                    lineFill:Fill(sparse, layer, spacing, lineWidth, layerLines)
+                end
             end
         end
 

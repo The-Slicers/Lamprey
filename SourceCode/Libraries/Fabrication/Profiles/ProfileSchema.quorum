@@ -90,6 +90,7 @@ class ProfileSchema
         AddInteger("supports", "supportTopGapLayers", "1", 0, 20, "Empty layers between a tip and the model above it")
         AddInteger("supports", "supportBottomGapLayers", "1", 0, 20, "Empty layers between a branch and the model it rests on")
         AddNumber("supports", "supportDensity", "0.15", 0.01, 1, "Fill density inside branches")
+        AddNumber("supports", "supportFirstLayerDensity", "0", 0, 1, "Fill density of the support's first layer, on the bed; 1 = solid, so a wide support base and the brim around it stick; 0 = same as supportDensity")
         AddInteger("supports", "supportRoofLayers", "2", 0, 20, "Dense layers at the top of each tip")
         AddNumber("supports", "supportRoofDensity", "0.8", 0, 1, "Fill density of the roof layers")
         AddNumber("supports", "supportBaseFlare", "1.0", 0, 20, "Extra width where branches meet the bed (mm)")

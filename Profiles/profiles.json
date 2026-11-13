@@ -59,13 +59,14 @@
         "supportBaseFlare": 2.0,
         "_minHeightNote": "No posts under overhangs lower than 2 mm above the bed (they caused stringing at the base). Needs supportMinHeight in ProfileSchema, SliceJob and TreeSupport.",
         "supportMinHeight": 2.0,
+        "supportFirstLayerDensity": 1.0,
 
         "outerWallSpeed": 200,
         "innerWallSpeed": 300,
         "skinSpeed": 200,
         "infillSpeed": 270,
         "supportSpeed": 100,
-        "firstLayerSpeed": 50,
+        "firstLayerSpeed": 30,
         "travelSpeed": 600,
         "_overhangNote": "Walls hanging past the layer below slow down like Bambu Studio's: 25-50% of the line unsupported 50 mm/s, 50-75% 30 mm/s, 75% and more 10 mm/s.",
         "overhangSpeed25": 50,
@@ -148,6 +149,7 @@
         "supportBaseFlare": 2.0,
         "_minHeightNote": "No posts under overhangs lower than 2 mm above the bed (they caused stringing at the base). Needs supportMinHeight in ProfileSchema, SliceJob and TreeSupport.",
         "supportMinHeight": 2.0,
+        "supportFirstLayerDensity": 1.0,
         "supportSpeed": 80,
         "accelSupport": 3000,
 
@@ -156,6 +158,9 @@
         "brimLoops": 12,
         "brimGap": 0,
         "firstLayerFlow": 1.05,
+
+        "fanOffLayers": 2,
+        "fanFullLayer": 5,
 
         "_joinNote": "Solid fill and sparse infill are chained into zigzags, so each layer has a few long paths instead of a separate start, stop and jump for every line.",
         "joinSkin": true,
@@ -210,6 +215,7 @@
         "supportTopGapLayers": 1,
         "supportRestWidth": 3.0,
         "supportRestLookAhead": 3.0,
+        "supportFirstLayerDensity": 1.0,
         "adhesionType": "none",
 
         "outerWallSpeed": 25,

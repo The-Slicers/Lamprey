@@ -270,6 +270,7 @@ class SliceJob
         trees:SetGaps(profile:GetNumber("supportXYGap"), profile:GetNumber("supportTineXYGap"), profile:GetInteger("supportTopGapLayers"))
         trees:SetBottomGap(profile:GetInteger("supportBottomGapLayers"))
         trees:SetDensity(profile:GetNumber("supportDensity"))
+        trees:SetFirstLayerDensity(profile:GetNumber("supportFirstLayerDensity"))
         trees:SetRoof(profile:GetInteger("supportRoofLayers"), profile:GetNumber("supportRoofDensity"))
         trees:SetBase(profile:GetNumber("supportBaseFlare"), profile:GetInteger("supportBaseLayers"))
         trees:SetTip(profile:GetNumber("supportTipDiameter"), profile:GetNumber("supportTipLength"))
