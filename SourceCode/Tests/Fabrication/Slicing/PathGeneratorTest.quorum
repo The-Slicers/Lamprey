@@ -35,7 +35,63 @@ class PathGeneratorTest is LampreyTest
         TopSurfaceOfALedge()
         Ironing()
         GapFill()
+        JaggedOutline()
         RejectsBadSettings()
+    end
+
+    /*
+    A 20 mm square whose sides are 0.1 mm sawteeth, like a layer of a
+    decimated mesh. The offsetter leaves spurs at the notches; they are cut
+    off, instead of every island being rebuilt with the exact inset on every
+    layer (which made such models take hours).
+    */
+    action JaggedOutline
+        Case("a jagged outline")
+        Contour jagged
+        integer side = 0
+        repeat while side < 4
+            integer i = 0
+            repeat while i < 40
+                number t = 0.5 * cast(number, i)
+                number tooth = 0.0
+                if i mod 2 = 1
+                    tooth = 0.1
+                end
+                if side = 0
+                    jagged:AddPoint(t, tooth)
+                elseif side = 1
+                    jagged:AddPoint(20 - tooth, t)
+                elseif side = 2
+                    jagged:AddPoint(20 - t, 20 - tooth)
+                else
+                    jagged:AddPoint(tooth, 20 - t)
+                end
+                i = i + 1
+            end
+            side = side + 1
+        end
+        jagged:closed = true
+        jagged:planeIndex = 0
+        Array<Contour> outline
+        outline:Add(jagged)
+
+        PathGenerator paths
+        paths:SetLineWidth(0.4)
+        paths:SetWallCount(3)
+        paths:SetInfillDensity(0.2)
+        paths:Generate(outline, 1)
+        Array<Contour> walls = paths:GetWalls()
+        ExpectInteger(walls:GetSize(), 3, "three walls")
+        ExpectInteger(paths:GetRebuiltIslandCount(), 0, "no island needed the exact inset")
+        ExpectAtLeast(paths:GetTrimmedLoopCount(), 1, "spurs were cut off instead")
+        integer w = 0
+        repeat while w < walls:GetSize()
+            Contour wall = walls:Get(w)
+            if wall:wallIndex = 0
+                ExpectNumber(wall:Area(), 379.906, 0.01, "the outer wall is where the exact inset puts it")
+            end
+            w = w + 1
+        end
     end
 
     action Generated(number density) returns PathGenerator

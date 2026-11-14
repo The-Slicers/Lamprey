@@ -6,14 +6,17 @@ use Libraries.Fabrication.ArgumentChecker
 use Libraries.Fabrication.Geometry.Contour
 use Libraries.Fabrication.Geometry.ContourSimplifier
 use Libraries.Fabrication.Geometry.GeometryUtilities
+use Libraries.Fabrication.Geometry.PolygonOperations
 
 /*
 The ContourGenerator class joins MeshSlicer's segments into the outlines of
 each layer. Segments that share a mesh edge are chained exactly; chains left
 open by a damaged mesh are bridged across gaps up to maxGap. Each loop is
-then simplified, specks smaller than the minimum area are dropped, and every
-loop is oriented: outer loops counter-clockwise, holes clockwise with isHole
-set and depth counting the loops around them.
+then simplified and specks smaller than the minimum area are dropped. On a
+layer where loops cross each other (parts of a model that overlap) or
+themselves (a self-intersecting mesh), the loops are replaced by their union.
+Then every loop is oriented: outer loops counter-clockwise, holes clockwise
+with isHole set and depth counting the loops around them.
 
 Attribute: Example
 
@@ -41,9 +44,13 @@ class ContourGenerator
     integer pointsAfter = 0
     integer droppedCount = 0
     integer openCount = 0
+    boolean mergeCrossings = true
+    integer mergedCount = 0
+    integer mergedPlanes = 0
 
     GeometryUtilities util
     ContourSimplifier simplifier
+    PolygonOperations ops
     ArgumentChecker checker
 
     /*
@@ -89,6 +96,74 @@ class ContourGenerator
     action SetMinArea(number area)
         checker:RequireAtLeast("ContourGenerator:SetMinArea area", area, 0)
         minArea = area
+    end
+
+    /*
+    true (the default): on a layer where loops cross each other or
+    themselves, replace them by their union (everything inside at least one
+    loop, going by the direction the mesh gave each loop). false: keep them
+    as sliced. Overlapping loops confuse the inside / outside test, so a
+    part that sticks out of another (eye lenses set into a head, say) can
+    turn the whole outline into a hole, which gets no walls or fill.
+
+    Attribute: Parameter toggle Whether to merge crossing loops.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.ContourGenerator
+        use Libraries.Fabrication.Slicing.Segment
+
+        Array<Segment> segments     // from MeshSlicer:Slice(planes)
+        ContourGenerator generator
+        generator:SetMergeCrossings(false)      // keep overlapping loops as they are
+        Array<Contour> outlines = generator:Build(segments, 100, 0.2)
+    */
+    action SetMergeCrossings(boolean toggle)
+        mergeCrossings = toggle
+    end
+
+    /*
+    How many loops the last Build merged because they crossed.
+
+    Attribute: Returns How many loops the last Build replaced by a union (0 for a clean mesh).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.ContourGenerator
+        use Libraries.Fabrication.Slicing.Segment
+
+        Array<Segment> segments     // from MeshSlicer:Slice(planes)
+        ContourGenerator generator
+        Array<Contour> outlines = generator:Build(segments, 100, 0.2)
+        output generator:GetMergedCount() + " crossing loops merged on " + generator:GetMergedPlaneCount() + " layers"
+    */
+    action GetMergedCount returns integer
+        return mergedCount
+    end
+
+    /*
+    How many layers of the last Build had crossing loops merged.
+
+    Attribute: Returns How many layers of the last Build had crossing loops merged.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.ContourGenerator
+        use Libraries.Fabrication.Slicing.Segment
+
+        Array<Segment> segments     // from MeshSlicer:Slice(planes)
+        ContourGenerator generator
+        Array<Contour> outlines = generator:Build(segments, 100, 0.2)
+        output generator:GetMergedPlaneCount() + " layers had overlapping loops"
+    */
+    action GetMergedPlaneCount returns integer
+        return mergedPlanes
     end
 
     /*
@@ -227,6 +302,8 @@ class ContourGenerator
         droppedCount = 0
         flippedCount = 0
         openCount = 0
+        mergedCount = 0
+        mergedPlanes = 0
 
         Array<integer> planeOf
         integer s = 0
@@ -318,6 +395,10 @@ class ContourGenerator
             i = i + 1
         end
 
+        if mergeCrossings
+            cleaned = MergeCrossings(cleaned, planeIndex)
+        end
+
         OrientPlane(cleaned)
 
         i = 0
@@ -325,6 +406,75 @@ class ContourGenerator
             result:Add(cleaned:Get(i))
             i = i + 1
         end
+    end
+
+    // Loops that cross each other (overlapping parts of a model) or
+    // themselves (a self-intersecting mesh) break the inside / outside count
+    // OrientPlane relies on: a part sticking out of another can make the
+    // whole outline a "hole". If any loop of the plane crosses, all the
+    // plane's closed loops are replaced by their union: everything with
+    // positive winding, in the direction MeshSlicer:EmitSegment gave each
+    // loop. The whole plane is merged, not just the loops that cross,
+    // because a hole only comes out right together with the outline around it.
+    private action MergeCrossings(Array<Contour> loops, integer planeIndex) returns Array<Contour>
+        Array<Contour> closedLoops
+        Array<Contour> others
+        integer i = 0
+        repeat while i < loops:GetSize()
+            Contour candidate = loops:Get(i)
+            if candidate:closed and candidate:GetSize() >= 3
+                closedLoops:Add(candidate)
+            else
+                others:Add(candidate)
+            end
+            i = i + 1
+        end
+
+        Array<integer> pairA
+        Array<integer> pairB
+        ops:FindCrossings(closedLoops, pairA, pairB)
+        if pairA:GetSize() = 0
+            return loops
+        end
+
+        // A model whose triangles all face inward gives clockwise outlines;
+        // the sign of the total area says which way this mesh runs.
+        number total = 0.0
+        i = 0
+        repeat while i < closedLoops:GetSize()
+            Contour summed = closedLoops:Get(i)
+            total = total + summed:SignedArea2()
+            i = i + 1
+        end
+        boolean reversed = total < 0
+        ops:Clear()
+        i = 0
+        repeat while i < closedLoops:GetSize()
+            Contour added = closedLoops:Get(i)
+            ops:AddPoints(added:xs, added:ys, reversed)
+            i = i + 1
+        end
+        Array<Contour> merged = ops:Resolve(1, planeIndex)
+        mergedCount = mergedCount + closedLoops:GetSize()
+        mergedPlanes = mergedPlanes + 1
+
+        Array<Contour> result
+        i = 0
+        repeat while i < merged:GetSize()
+            Contour piece = merged:Get(i)
+            if minArea > 0 and piece:Area() < minArea
+                droppedCount = droppedCount + 1
+            else
+                result:Add(piece)
+            end
+            i = i + 1
+        end
+        i = 0
+        repeat while i < others:GetSize()
+            result:Add(others:Get(i))
+            i = i + 1
+        end
+        return result
     end
 
     // sets depth and or isHole for each loop by counting the

@@ -52,6 +52,7 @@ class ProfileSchema
         AddNumber("slicing", "contourMaxGap", "0.2", 0, 5, "Largest gap closed when joining slice segments into loops (mm)")
         AddNumber("slicing", "simplifyTolerance", "0.02", 0, 1, "How far loops may move when simplified (mm)")
         AddNumber("slicing", "minContourArea", "0.05", 0, 100, "Loops smaller than this are dropped (mm^2)")
+        AddBoolean("slicing", "mergeCrossingLoops", "true", "Merge a layer's loops into one shape where they cross (overlapping parts, self-intersecting meshes)")
 
         // ---- walls and infill ----
         AddNumber("paths", "lineWidth", "0.4", 0.1, 3.0, "Extrusion width (mm)")
@@ -84,7 +85,7 @@ class ProfileSchema
         AddNumber("supports", "supportTipDiameter", "1.0", 0.1, 10, "Contact tip diameter (mm)")
         AddNumber("supports", "supportTipLength", "1.0", 0, 50, "How far a tip runs straight down before it may lean (mm)")
         AddNumber("supports", "supportGrowthAngle", "5.0", 0, 45, "How fast branches thicken going down (degrees)")
-        AddNumber("supports", "supportMaxRadius", "4.0", 0.2, 50, "Thickest a branch may get (mm radius)")
+        AddNumber("supports", "supportMaxRadius", "4.0", 0.2, 50, "Thickest a full trunk may get (mm radius); trunks carrying fewer tines stay thinner")
         AddNumber("supports", "supportXYGap", "0.8", 0, 10, "Gap between branches and the model (mm)")
         AddNumber("supports", "supportTineXYGap", "0.3", 0, 10, "Gap between tines and the model (mm)")
         AddInteger("supports", "supportTopGapLayers", "1", 0, 20, "Empty layers between a tip and the model above it")
@@ -100,6 +101,8 @@ class ProfileSchema
         AddBoolean("supports", "supportBedRouting", "true", "Route branches around the model down to the bed")
         AddNumber("supports", "supportMaxBridge", "0", 0, 100, "Longest span left to bridge instead of supported (mm); 0 = off")
         AddNumber("supports", "supportMinOverhangArea", "0.5", 0, 1000, "Overhang islands smaller than this get no tines (mm^2); 0 = off")
+        AddInteger("supports", "supportMaxBranches", "8", 0, 1000, "Most tines one trunk may carry: fewer gives more, lighter trees that come off one at a time; 0 = no limit")
+        AddNumber("supports", "supportBranchGap", "1.0", 0, 20, "Gap kept between trunks that can't merge any more, so each tree prints separately (mm); 0 = none")
         AddNumber("supports", "supportMinHeight", "0", 0, 1000, "Overhangs closer to the bed than this get no tines: they sag onto the bed instead of needing tiny posts (mm); 0 = off")
 
         // ---- skirt / brim ----

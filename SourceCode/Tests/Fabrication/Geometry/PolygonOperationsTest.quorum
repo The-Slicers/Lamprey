@@ -23,6 +23,55 @@ class PolygonOperationsTest is LampreyTest
         Disjoint()
         Holes()
         Contained()
+        Crossings()
+    end
+
+    action Crossings
+        Case("finding loops that cross")
+        Array<integer> first
+        Array<integer> second
+        Array<Contour> overlapping
+        overlapping:Add(models:Square(0, 0, 10, 0))
+        overlapping:Add(models:Square(5, 5, 10, 0))
+        ops:FindCrossings(overlapping, first, second)
+        ExpectInteger(first:GetSize(), 2, "overlapping squares' outlines cross twice")
+        if first:GetSize() > 0
+            ExpectTrue(first:Get(0) not= second:Get(0), "the crossing is between the two squares")
+        end
+
+        Array<Contour> sharingEdge
+        sharingEdge:Add(models:Square(0, 0, 10, 0))
+        sharingEdge:Add(models:Square(10, 0, 10, 0))
+        ops:FindCrossings(sharingEdge, first, second)
+        ExpectInteger(first:GetSize(), 0, "squares that share an edge only touch")
+
+        Array<Contour> sharingCorner
+        sharingCorner:Add(models:Square(0, 0, 10, 0))
+        sharingCorner:Add(models:Square(10, 10, 10, 0))
+        ops:FindCrossings(sharingCorner, first, second)
+        ExpectInteger(first:GetSize(), 0, "squares that share a corner only touch")
+
+        Array<Contour> ring
+        ring:Add(models:Square(0, 0, 20, 0))
+        ring:Add(models:HoleSquare(5, 5, 5, 0))
+        ops:FindCrossings(ring, first, second)
+        ExpectInteger(first:GetSize(), 0, "a hole inside an outline doesn't cross it")
+
+        Contour bowTie
+        bowTie:AddPoint(0, 0)
+        bowTie:AddPoint(10, 10)
+        bowTie:AddPoint(10, 0)
+        bowTie:AddPoint(0, 10)
+        bowTie:closed = true
+        ops:FindCrossings(models:ListOf(bowTie), first, second)
+        ExpectInteger(first:GetSize(), 1, "a bow tie crosses itself once")
+        if first:GetSize() > 0
+            ExpectTrue(first:Get(0) = 0 and second:Get(0) = 0, "the crossing is reported as loop 0 with itself")
+        end
+
+        // FindCrossings leaves nothing behind for the next operation
+        Array<Contour> union = ops:Union(models:ListOf(models:Square(0, 0, 10, 0)), models:ListOf(models:Square(5, 5, 10, 0)), 0)
+        ExpectNumber(models:NetArea(union), 175, 0.0001, "a union afterwards is unaffected")
     end
 
     action Overlapping

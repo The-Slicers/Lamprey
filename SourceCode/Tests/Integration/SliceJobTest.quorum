@@ -146,7 +146,8 @@ class SliceJobTest is LampreyTest
         SliceJob job
         job:SetVerbose(false)
         text gcodePath = files:Path("slice/a1-archive.gcode")
-        text archive = job:Run(models:Cube(), profiles:Require("bambu-a1"), gcodePath)
+        Profile a1 = profiles:Require("bambu-a1")
+        text archive = job:Run(models:Cube(), a1, gcodePath)
         ExpectText(archive, files:Path("slice/a1-archive.gcode.3mf"), "Run returns the archive")
         ZipReader zip
         ExpectTrue(zip:HasEntry(archive, "Metadata/plate_1.gcode"), "the archive holds the G-code")
@@ -159,7 +160,7 @@ class SliceJobTest is LampreyTest
         file:SetPath(gcodePath)
         text written = file:Read()
         ExpectTrue(written:StartsWith("; HEADER_BLOCK_START"), "the G-code has Bambu's header")
-        ExpectContains(written, "M1002 set_filament_type:PLA", "the start code names the filament")
+        ExpectContains(written, "M1002 set_filament_type:" + a1:GetText("filamentType"), "the start code names the profile's filament")
         ExpectContains(written, "M620 S0A", "filament 1 comes from the AMS lite or the external spool")
         ExpectContains(written, "G29 A1 X", "the bed mesh covers the print")
         text placeholders = "{FILAMENT_TYPE} {FIRST_CENTER_Y} {PARK_Z_UP} {PARK_Z_UP_BACK} {PRIME_FEED} {PRIME_FEED_SLOW} {LINE_FEED} {CALI_FEED} {CALI_FLOW} {FLOW_FEED} {NOZZLE_TEMP_LESS_50}"

@@ -15,8 +15,13 @@ use Libraries.Fabrication.Geometry.PolygonOperations
 The TreeSupport class grows tree supports under a model's overhangs. Thin
 tines are seeded on a triangular grid wherever the model's underside is too
 steep to print on its own (and along overhanging edges), then grown down
-layer by layer: branches lean toward each other and merge, thicken with the
-load they carry, keep clear of the model, and route around it toward the bed.
+layer by layer: each branch leans toward its nearest neighbour and merges
+with it, so a trunk forks into branches that fork again, like a real tree.
+A trunk carries at most maxBranches tines; trunks that are full are held
+branchGap apart, so a wide overhang gets several separate trees that come
+off one at a time instead of one fused clump. Branches thicken with the
+load they carry (only a full trunk reaches the maximum radius), keep clear
+of the model, and route around it toward the bed.
 A branch with no way down rests on the model, preferably where the model is
 wide enough to hold it.
 
@@ -67,6 +72,12 @@ class TreeSupport
     number firstLayerDensity = 0.0
     number baseFlare = 1.0
     integer baseLayers = 5
+
+    // Branches merge pairwise into trunks carrying at most maxBranches tines
+    // (0 = no limit). Trunks that can't take each other any more keep
+    // branchGap mm between them, so each tree stays separate.
+    integer maxBranches = 8
+    number branchGap = 1.0
 
     // Branches may only come to rest on the model where they land at least
     // minRestWidth / 2 inside its edge (a plinth, shoulders), never on a spear
@@ -184,6 +195,7 @@ class TreeSupport
     integer skippedBridges = 0
     integer skippedSmall = 0
     integer skippedLow = 0
+    integer maxLoad = 0
     number travelX = 0.0
     number travelY = 0.0
 
@@ -310,9 +322,11 @@ class TreeSupport
 
     /*
     How fast branches thicken going down, and the thickest they may get.
+    Only a full trunk (the SetBranching limit of tines) may reach maxR; a
+    branch carrying fewer stays thinner however tall it is.
 
     Attribute: Parameter degrees The growth angle (degrees, 0 to 89).
-    Attribute: Parameter maxR The largest branch radius (mm).
+    Attribute: Parameter maxR The largest radius of a full trunk (mm).
 
     Attribute: Example
 
@@ -545,6 +559,35 @@ class TreeSupport
     end
 
     /*
+    How the branches join up. Each branch leans toward its nearest neighbour
+    and merges with it, as long as the trunk they make carries at most
+    maxTines tines; a trunk that is full stops taking branches. Branches that
+    can't merge are kept `gap` mm apart (edge to edge), so each tree prints
+    separately and comes off on its own. More tines per trunk: fewer,
+    thicker trunks. Fewer: more, lighter ones.
+
+    Attribute: Parameter maxTines The most tines one trunk may carry; 0 = no limit.
+    Attribute: Parameter gap The space kept between trunks that can't merge (mm); 0 = none.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetBranching(8, 1.0)      // up to 8 tines per trunk, trunks 1 mm apart
+        trees:Generate(outlines, 100)
+    */
+    action SetBranching(integer maxTines, number gap)
+        checker:RequireAtLeast("TreeSupport:SetBranching maxTines", maxTines, 0)
+        checker:RequireAtLeast("TreeSupport:SetBranching gap", gap, 0)
+        maxBranches = maxTines
+        branchGap = gap
+    end
+
+    /*
     The longest span (mm) left to bridge instead of supported; 0 = off.
 
     Attribute: Parameter maxLength The longest bridge (mm); 0 turns bridging off.
@@ -713,6 +756,27 @@ class TreeSupport
     end
 
     /*
+    The most tines any one trunk carried in the last Generate (at most the
+    SetBranching limit, unless that is 0).
+
+    Attribute: Returns The heaviest trunk's load, in tines; 0 with no supports.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:Generate(outlines, 100)
+        output "the heaviest trunk carries " + trees:GetMaxTrunkLoad() + " tines"
+    */
+    action GetMaxTrunkLoad returns integer
+        return maxLoad
+    end
+
+    /*
     How many branches came to rest on the model instead.
 
     Attribute: Returns How many branches came to rest on the model instead.
@@ -822,6 +886,7 @@ class TreeSupport
         skippedBridges = 0
         skippedSmall = 0
         skippedLow = 0
+        maxLoad = 0
         travelX = 0.0
         travelY = 0.0
         planeTotal = planeCount
@@ -1339,6 +1404,9 @@ class TreeSupport
                         nodeWeight:Add(1)
                         nodeR:Add(tipRadius)
                         nodeSq:Add(false)
+                        if maxLoad < 1
+                            maxLoad = 1
+                        end
                     else
                         droppedTips = droppedTips + 1
                     end
@@ -1393,7 +1461,7 @@ class TreeSupport
                             newY:Set(i, placeY)
                         elseif status = 0
                             // on course for the bed: join neighbours unless that leads off course
-                            if LeanTarget(i, nodeX, nodeY, nodeWeight, near)
+                            if LeanTarget(i, nodeX, nodeY, nodeWeight, nodeR, near)
                                 number tx = placeX
                                 number ty = placeY
                                 if AvoidClearance(layer - 1, tx, ty, need + 1.0) >= need
@@ -1420,7 +1488,7 @@ class TreeSupport
                                 steered = SteerClear(layer - 1, px, py, need)
                             end
                             if not steered
-                                steered = LeanTarget(i, nodeX, nodeY, nodeWeight, near)
+                                steered = LeanTarget(i, nodeX, nodeY, nodeWeight, nodeR, near)
                             end
                             if steered
                                 newX:Set(i, placeX)
@@ -1432,7 +1500,9 @@ class TreeSupport
                 end
 
                 // 2. merge branches that now meet: within one step of each
-                // other, or one wholly inside the other
+                // other, one wholly inside the other, or one's centre inside
+                // the other (they'd only print as one fused blob otherwise),
+                // unless the trunk would carry more than maxBranches tines
                 Array<boolean> alive
                 Array<integer> into
                 Array<number> mergedR
@@ -1460,7 +1530,9 @@ class TreeSupport
                                 number md2 = mdx * mdx + mdy * mdy
                                 number ri = mergedR:Get(i)
                                 number rm = mergedR:Get(m)
-                                integer how = 0     // 1 weighted average, 2 keep i's spot, 3 take m's spot
+                                // 1 weighted average, 2 keep i's spot, 3 take m's spot,
+                                // 4 the smallest circle holding both
+                                integer how = 0
                                 if md2 <= merge2
                                     how = 1
                                 else
@@ -1469,6 +1541,13 @@ class TreeSupport
                                         how = 2
                                     elseif md + ri <= rm
                                         how = 3
+                                    elseif md <= util:Max2(ri, rm)
+                                        how = 4
+                                    end
+                                end
+                                if how > 0 and maxBranches > 0
+                                    if nodeWeight:Get(i) + nodeWeight:Get(m) > maxBranches
+                                        how = 0     // trunk full: LeanTarget holds them apart
                                     end
                                 end
                                 if how > 0
@@ -1481,11 +1560,36 @@ class TreeSupport
                                         newX:Set(i, newX:Get(m))
                                         newY:Set(i, newY:Get(m))
                                     end
+                                    number mergedRadius = util:Max2(ri, rm)
+                                    if how = 4
+                                        // the smallest circle holding both branches, so
+                                        // neither is left overhanging the layer below
+                                        number pairD = math:SquareRoot(md2)
+                                        mergedRadius = (pairD + ri + rm) / 2.0
+                                        number bigX = newX:Get(i)
+                                        number bigY = newY:Get(i)
+                                        number smallX = newX:Get(m)
+                                        number smallY = newY:Get(m)
+                                        number bigR = ri
+                                        if rm > ri
+                                            bigX = newX:Get(m)
+                                            bigY = newY:Get(m)
+                                            smallX = newX:Get(i)
+                                            smallY = newY:Get(i)
+                                            bigR = rm
+                                        end
+                                        number shiftT = (mergedRadius - bigR) / pairD
+                                        newX:Set(i, bigX + (smallX - bigX) * shiftT)
+                                        newY:Set(i, bigY + (smallY - bigY) * shiftT)
+                                    end
                                     nodeWeight:Set(i, nodeWeight:Get(i) + nodeWeight:Get(m))
+                                    if nodeWeight:Get(i) > maxLoad
+                                        maxLoad = nodeWeight:Get(i)
+                                    end
                                     if nodeDist:Get(m) > nodeDist:Get(i)
                                         nodeDist:Set(i, nodeDist:Get(m))
                                     end
-                                    mergedR:Set(i, util:Max2(ri, rm))
+                                    mergedR:Set(i, mergedRadius)
                                     if nodeSq:Get(m)
                                         nodeSq:Set(i, true)
                                     end
@@ -1578,60 +1682,130 @@ class TreeSupport
         end
     end
 
-    // Radius on the next layer. It grows with height (growthAngle) and with
-    // the tines carried (cross-section roughly proportional to load), capped
-    // at maxRadius. Load-driven growth is limited so that growth plus a full
-    // lean never overhangs more than the support angle allows.
+    // Radius on the next layer. It grows with height (growthAngle, for a tall
+    // branch's stiffness) and with the tines carried (cross-section roughly
+    // proportional to load), up to LoadCeiling: how thick a branch carrying
+    // this many tines may get. Only a full trunk (maxBranches tines) may reach
+    // maxRadius, so a lone tip under a wing doesn't become a 10 mm pillar just
+    // because it is tall. Load-driven growth is limited so that growth plus a
+    // full lean never overhangs more than the support angle allows.
+    //
+    // A branch wider than that (merged on contact, or caught on an edge)
+    // narrows going down, by what the support angle leaves after a full
+    // lean, so it is never wider than the layer below can hold.
     private action NextRadius(number r, integer dist, integer weight) returns number
         if dist < tineLayers
             return tipRadius
         end
         number byLoad = tipRadius * math:SquareRoot(cast(number, weight))
-        number target = util:Min2(maxRadius, util:Max2(Radius(dist), byLoad))
+        number target = util:Min2(LoadCeiling(weight), util:Max2(Radius(dist), byLoad))
+        if r > target
+            return util:Max2(target, r - util:Max2(0.0, allowed - maxMove))
+        end
         number rate = util:Max2(growth, allowed - maxMove)
-        number grown = util:Min2(target, r + rate)
-        return util:Max2(r, grown)
+        return util:Min2(target, r + rate)
     end
 
-    // Weight-weighted centroid of the branches within mergeSearch; one step
-    // toward it in placeX / placeY. Heavier branches move less.
-    private action LeanTarget(integer i, Array<number> xs, Array<number> ys, Array<integer> ws, Array<integer> found) returns boolean
+    // The thickest a branch carrying `weight` tines may get: tipRadius for
+    // none, maxRadius for a full trunk (maxBranches tines, or 8 with no
+    // limit), between them by the square root of the share of a full load.
+    private action LoadCeiling(integer weight) returns number
+        integer full = maxBranches
+        if full <= 0
+            full = 8
+        end
+        integer carried = weight
+        if carried > full
+            carried = full
+        end
+        number share = cast(number, carried) / cast(number, full)
+        return util:Min2(maxRadius, tipRadius + (maxRadius - tipRadius) * math:SquareRoot(share))
+    end
+
+    // One step (at most maxMove) for branch i, in placeX / placeY:
+    // - toward its partner, the nearest branch within mergeSearch that it may
+    //   still merge with (their tines together within maxBranches). Pairs that
+    //   choose each other meet and merge; seen from the bed up, each trunk
+    //   forks into a few branches that fork again. Of the two, the heavier
+    //   one moves less.
+    // - away from branches it may not merge with (the trunk would be over
+    //   maxBranches) that are closer than branchGap, edge to edge, harder the
+    //   closer they are, so full trunks stay separate trees.
+    // (Leaning toward the centroid of every branch within mergeSearch, as
+    // before, pulled a whole overhang's tines into one fused clump.)
+    // Returns false if the branch should go straight down.
+    private action LeanTarget(integer i, Array<number> xs, Array<number> ys, Array<integer> ws, Array<number> rs,
+                              Array<integer> found) returns boolean
         number x = xs:Get(i)
         number y = ys:Get(i)
+        integer wi = ws:Get(i)
+        number ri = rs:Get(i)
         found:Empty()
         NodeCandidates(x, y, mergeSearch, found)
         number lim2 = mergeSearch * mergeSearch
-        number sw = 0.0
-        number sx = 0.0
-        number sy = 0.0
+        integer best = -1
+        number bestD2 = lim2
+        number pushX = 0.0
+        number pushY = 0.0
         integer k = 0
         repeat while k < found:GetSize()
             integer j = found:Get(k)
             if j not= i
                 number ax = xs:Get(j) - x
                 number ay = ys:Get(j) - y
-                if ax * ax + ay * ay < lim2
-                    number w = cast(number, ws:Get(j))
-                    sw = sw + w
-                    sx = sx + xs:Get(j) * w
-                    sy = sy + ys:Get(j) * w
+                number d2 = ax * ax + ay * ay
+                if d2 < lim2
+                    boolean fits = maxBranches <= 0 or wi + ws:Get(j) <= maxBranches
+                    if fits
+                        if d2 < bestD2
+                            best = j
+                            bestD2 = d2
+                        end
+                    elseif branchGap > 0
+                        number d = math:SquareRoot(d2)
+                        number shortfall = branchGap - (d - ri - rs:Get(j))
+                        if shortfall > 0
+                            if d < 0.000001
+                                // on top of each other: split along x, by index
+                                ax = 1.0
+                                if i > j
+                                    ax = -1.0
+                                end
+                                ay = 0.0
+                                d = 1.0
+                            end
+                            pushX = pushX - ax / d * shortfall
+                            pushY = pushY - ay / d * shortfall
+                        end
+                    end
                 end
             end
             k = k + 1
         end
-        if sw <= 0
+
+        number moveX = 0.0
+        number moveY = 0.0
+        if best >= 0
+            number bd = math:SquareRoot(bestD2)
+            if bd > 0.000001
+                number wb = cast(number, ws:Get(best))
+                number step = util:Min2(maxMove, bd * wb / (cast(number, wi) + wb))
+                moveX = (xs:Get(best) - x) / bd * step
+                moveY = (ys:Get(best) - y) / bd * step
+            end
+        end
+        moveX = moveX + pushX
+        moveY = moveY + pushY
+        number len = math:SquareRoot(moveX * moveX + moveY * moveY)
+        if len < 0.000001
             return false
         end
-        number dx = sx / sw - x
-        number dy = sy / sw - y
-        number d = math:SquareRoot(dx * dx + dy * dy)
-        if d < 0.000001
-            return false
+        if len > maxMove
+            moveX = moveX / len * maxMove
+            moveY = moveY / len * maxMove
         end
-        number wi = cast(number, ws:Get(i))
-        number step = util:Min2(maxMove, d * sw / (wi + sw))
-        placeX = x + dx / d * step
-        placeY = y + dy / d * step
+        placeX = x + moveX
+        placeY = y + moveY
         return true
     end
 

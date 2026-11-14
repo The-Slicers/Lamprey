@@ -69,6 +69,19 @@ class TestModels
         return model
     end
 
+    /*
+    A 20 mm block with a 10 x 20 mm ledge 2 mm thick sticking out of its
+    side near the top (z 18 to 20): supports under it are 18 mm tall.
+    */
+    action HighLedge returns ModelData
+        ModelData model
+        Array<MeshData> meshes
+        meshes:Add(BoxMesh(0, 0, 0, 20, 20, 20))
+        meshes:Add(BoxMesh(20, 0, 18, 30, 20, 20))
+        model:SetMeshes(meshes)
+        return model
+    end
+
     /* One box as a mesh: 8 vertices, 12 triangles. */
     action BoxMesh(number x0, number y0, number z0, number x1, number y1, number z1) returns MeshData
         Number32BitArray vertices

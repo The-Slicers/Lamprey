@@ -92,6 +92,22 @@ class PathGenerator
     integer droppedLoops = 0
     // islands whose inset was rebuilt exactly (see ExactInset)
     integer rebuiltIslands = 0
+    // inset loops kept after cutting off their spurs (see TrimmedLoop)
+    integer trimmedLoops = 0
+    // print how far Generate has got (SetProgress)
+    boolean progress = false
+
+    // FitInset results for the plane being worked on, by depth (see CachedFitInset)
+    Array<number> cacheDepth
+    Array<integer> cacheStart
+    Array<integer> cacheCount
+    Array<Contour> cacheLoops
+
+    // scratch points for AddEdgeBands
+    Array<number> bandX
+    Array<number> bandY
+    number cos30 = 0.8660254037844386
+    number sin30 = 0.5
     // plane being worked on (PolygonOperations calls take it)
     integer plane = 0
 
@@ -390,6 +406,27 @@ class PathGenerator
     end
 
     /*
+    true: Generate prints how far it has got, every tenth of the layers, so
+    a slow model doesn't look like a hang. Off by default.
+
+    Attribute: Parameter toggle Whether to print progress.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:SetProgress(true)     // "walls: 10% (38 of 381 layers)" ...
+        paths:Generate(outlines, 381)
+    */
+    action SetProgress(boolean toggle)
+        progress = toggle
+    end
+
+    /*
     The wall loops of every plane from the last Generate.
 
     Attribute: Returns The wall loops of every plane from the last Generate.
@@ -539,6 +576,28 @@ class PathGenerator
     end
 
     /*
+    How many inset loops the last Generate kept after cutting off spurs
+    (points the offsetter folded too close to the outline) instead of
+    rebuilding their island with the exact, slower inset.
+
+    Attribute: Returns How many inset loops were trimmed.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.PathGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        PathGenerator paths
+        paths:Generate(outlines, 100)
+        output paths:GetTrimmedLoopCount() + " inset loops had spurs cut off"
+    */
+    action GetTrimmedLoopCount returns integer
+        return trimmedLoops
+    end
+
+    /*
     Makes the walls, skin and infill of every plane, replacing the results
     of an earlier call.
 
@@ -570,6 +629,7 @@ class PathGenerator
         gapStart:Empty()
         droppedLoops = 0
         rebuiltIslands = 0
+        trimmedLoops = 0
         planeTotal = planeCount
         modelLayers:Index(contours, planeCount, true)
 
@@ -577,6 +637,7 @@ class PathGenerator
         integer p = 0
         repeat while p < planeCount
             plane = p
+            ClearCache()
             innerStart:Add(inner:GetSize())
             gapStart:Add(gapAreas:GetSize())
             Array<Contour> layer = modelLayers:GetLayer(p)
@@ -592,7 +653,7 @@ class PathGenerator
                     else
                         // only where wall w fits from both sides: shrink past
                         // the far edge of this wall, then grow back to its centre
-                        deeper = FitInset(layer, lineWidth * cast(number, w + 1), false)
+                        deeper = CachedFitInset(layer, lineWidth * cast(number, w + 1), false)
                         ring = ExactOutset(deeper, lineWidth * 0.5)
                     end
                     integer r = 0
@@ -620,6 +681,7 @@ class PathGenerator
                     GapFill(layer, area, p)
                 end
             end
+            Progress("walls", p)
             p = p + 1
         end
         innerStart:Add(inner:GetSize())
@@ -633,6 +695,7 @@ class PathGenerator
         p = 0
         repeat while p < planeCount
             plane = p
+            ClearCache()
             Array<Contour> layer2 = modelLayers:GetLayer(p)
             Array<Contour> innerArea = InnerContours(p)
             if layer2:GetSize() > 0 and innerArea:GetSize() > 0
@@ -669,6 +732,7 @@ class PathGenerator
                     end
                 end
             end
+            Progress("fill", p)
             p = p + 1
         end
     end
@@ -685,6 +749,17 @@ class PathGenerator
         end
     end
 
+    // Prints "walls: 30% (114 of 381 layers)" after every tenth of the planes.
+    private action Progress(text stage, integer p)
+        if not progress or planeTotal < 10
+            return now
+        end
+        integer step = planeTotal / 10
+        if (p + 1) mod step = 0 or p + 1 = planeTotal
+            output "  " + stage + ": " + ((p + 1) * 100 / planeTotal) + "% (" + (p + 1) + " of " + planeTotal + " layers)"
+        end
+    end
+
     // ------------------------------------------------------------ insets
     //
     // PolygonOffsetter moves each corner in by `depth` and lets PolygonOperations keep
@@ -694,24 +769,81 @@ class PathGenerator
     // sit closer than `depth` to the edge: spurs on walls, stray walls beside
     // thin ankles, spikes and spear shafts, skin past the outer wall. A real
     // inset loop lies inside the outline and `depth` from it everywhere, so a
-    // loop that doesn't is dropped, and its island rebuilt exactly.
+    // loop that doesn't first has its spurs cut off (TrimmedLoop); only if
+    // that fails, and the loop is big enough to matter, is its island
+    // rebuilt exactly. Specks smaller than a quarter of a line width squared
+    // are dropped: nothing that small prints, and on a jagged outline (a
+    // decimated mesh) the offsetter leaves dozens of them on every layer.
     private action Inset(Array<Contour> outline, number depth) returns Array<Contour>
-        return FitInset(outline, depth, true)
+        return CachedFitInset(outline, depth, true)
+    end
+
+    private action ClearCache
+        cacheDepth:Empty()
+        cacheStart:Empty()
+        cacheCount:Empty()
+        cacheLoops:Empty()
+    end
+
+    // FitInset, remembering each depth's result for the current plane
+    // (ClearCache starts a plane): the walls ask for the same depths more
+    // than once. Wall w + 1's inset is wall w's gap band, and the last
+    // wall's is the area left for fill.
+    private action CachedFitInset(Array<Contour> outline, number depth, boolean count) returns Array<Contour>
+        integer i = 0
+        repeat while i < cacheDepth:GetSize()
+            if cacheDepth:Get(i) = depth
+                Array<Contour> hit
+                integer k = cacheStart:Get(i)
+                repeat while k < cacheStart:Get(i) + cacheCount:Get(i)
+                    hit:Add(cacheLoops:Get(k))
+                    k = k + 1
+                end
+                return hit
+            end
+            i = i + 1
+        end
+        Array<Contour> fresh = FitInset(outline, depth, count)
+        cacheDepth:Add(depth)
+        cacheStart:Add(cacheLoops:GetSize())
+        cacheCount:Add(fresh:GetSize())
+        integer f = 0
+        repeat while f < fresh:GetSize()
+            cacheLoops:Add(fresh:Get(f))
+            f = f + 1
+        end
+        return fresh
     end
 
     private action FitInset(Array<Contour> outline, number depth, boolean count) returns Array<Contour>
         Array<Contour> raw = offsetter:Offset(outline, depth)
         Array<Contour> kept
         Array<Contour> dropped
+        number speck = lineWidth * lineWidth
         integer i = 0
         repeat while i < raw:GetSize()
             Contour loop = raw:Get(i)
-            if LoopFits(loop, outline, depth)
-                kept:Add(loop)
-            else
-                dropped:Add(loop)
+            number loopArea = loop:Area()
+            if loopArea < 0.25 * speck
+                // a fold-over speck: too small to print, whatever it is
                 if count
                     droppedLoops = droppedLoops + 1
+                end
+            elseif LoopFits(loop, outline, depth)
+                kept:Add(loop)
+            else
+                Contour trimmed = TrimmedLoop(loop, outline, depth)
+                if trimmed:GetSize() >= 3
+                    kept:Add(trimmed)
+                    trimmedLoops = trimmedLoops + 1
+                else
+                    if count
+                        droppedLoops = droppedLoops + 1
+                    end
+                    // only a real piece going missing is worth an exact rebuild
+                    if loopArea >= speck
+                        dropped:Add(loop)
+                    end
                 end
             end
             i = i + 1
@@ -812,12 +944,12 @@ class PathGenerator
         return island
     end
 
-    // Exact inset: the island minus a capsule (a band `depth` wide with round
-    // ends) around every edge of its outline. Whatever is left is everything
-    // at least `depth` from the edge, with no spikes or inside-out loops.
+    // Exact inset: the island minus everything within `depth` of its outline
+    // (AddEdgeBands, material side). Whatever is left is everything at least
+    // `depth` from the edge, with no spikes or inside-out loops.
     private action ExactInset(Array<Contour> island, number depth) returns Array<Contour>
         ops:Clear()
-        if AddEdgeCapsules(island, depth) = 0
+        if AddEdgeBands(island, depth, false) = 0
             Array<Contour> blank
             return blank
         end
@@ -829,78 +961,176 @@ class PathGenerator
         return ops:Difference(island, band, plane)
     end
 
-    // Adds a capsule of radius r around every edge of the loops to ops.
-    // Returns how many were added (edges shorter than 0.000001 mm are skipped).
-    private action AddEdgeCapsules(Array<Contour> loops, number r) returns integer
-        Array<number> qx
-        Array<number> qy
+    // Adds to ops everything within r of the loops' edges on one side of
+    // them: a band along each edge, plus a round wedge at each corner where
+    // the outline turns away from that side. Material is on the left of
+    // every loop (outer loops counter-clockwise, holes clockwise), so
+    // outward = false covers the material side (for insets) and
+    // outward = true the other side (for outsets). This is the same area the
+    // capsules (a band on both sides with round ends) used to cover, from
+    // about a third of the edges and much less overlap, which is what makes
+    // PolygonOperations slow. A corner whose turn can't be trusted (sharper
+    // than 90 degrees, or beside an edge shorter than r / 8, where a 0.002 mm
+    // zigzag reads as two sharp turns the wrong way) gets a whole disc, as
+    // the capsules gave every corner. Returns how many pieces were added
+    // (edges shorter than 0.000001 mm are skipped).
+    private action AddEdgeBands(Array<Contour> loops, number r, boolean outward) returns integer
+        number side = 1.0
+        if outward
+            side = -1.0
+        end
+        number shortEdge = 0.125 * r
         integer added = 0
         integer c = 0
         repeat while c < loops:GetSize()
             Contour con = loops:Get(c)
             integer n = con:GetSize()
-            integer j = n - 1
-            integer i = 0
-            repeat while i < n
-                number startX = con:xs:Get(j)
-                number startY = con:ys:Get(j)
-                number endX = con:xs:Get(i)
-                number endY = con:ys:Get(i)
-                number len = math:SquareRoot((endX - startX) * (endX - startX) + (endY - startY) * (endY - startY))
-                if len > 0.000001
-                    qx:Empty()
-                    qy:Empty()
-                    Capsule(startX, startY, endX, endY, len, r, qx, qy)
-                    ops:AddPoints(qx, qy, false)
-                    added = added + 1
+            if n >= 3
+                integer i = 0
+                repeat while i < n
+                    integer j = i + 1
+                    if j = n
+                        j = 0
+                    end
+                    number ax = con:xs:Get(i)
+                    number ay = con:ys:Get(i)
+                    number bx = con:xs:Get(j)
+                    number by = con:ys:Get(j)
+                    number len = math:SquareRoot((bx - ax) * (bx - ax) + (by - ay) * (by - ay))
+                    if len > 0.000001
+                        number ux = (bx - ax) / len
+                        number uy = (by - ay) / len
+                        // normal pointing to the covered side
+                        number nx = -uy * side
+                        number ny = ux * side
+                        bandX:Empty()
+                        bandY:Empty()
+                        bandX:Add(ax)
+                        bandY:Add(ay)
+                        bandX:Add(bx)
+                        bandY:Add(by)
+                        bandX:Add(bx + r * nx)
+                        bandY:Add(by + r * ny)
+                        bandX:Add(ax + r * nx)
+                        bandY:Add(ay + r * ny)
+                        AddCounterClockwise(bandX, bandY)
+                        added = added + 1
+
+                        // the corner at b, toward the next point that isn't b
+                        integer k = j
+                        integer steps = 0
+                        number cx = bx
+                        number cy = by
+                        number nextLen = 0.0
+                        repeat while nextLen <= 0.000001 and steps < n
+                            k = k + 1
+                            if k = n
+                                k = 0
+                            end
+                            cx = con:xs:Get(k)
+                            cy = con:ys:Get(k)
+                            nextLen = math:SquareRoot((cx - bx) * (cx - bx) + (cy - by) * (cy - by))
+                            steps = steps + 1
+                        end
+                        if nextLen > 0.000001
+                            number vx = (cx - bx) / nextLen
+                            number vy = (cy - by) / nextLen
+                            number turn = ux * vy - uy * vx
+                            number dot = ux * vx + uy * vy
+                            if dot < 0 or len < shortEdge or nextLen < shortEdge
+                                AddDisc(bx, by, r)
+                                added = added + 1
+                            elseif turn * side < -0.000000001
+                                // turning away from the covered side opens a gap
+                                // between the two bands: fill it with an arc
+                                AddWedge(bx, by, r, nx, ny, -vy * side, vx * side, side > 0)
+                                added = added + 1
+                            end
+                        end
+                    end
+                    i = i + 1
                 end
-                j = i
-                i = i + 1
             end
             c = c + 1
         end
         return added
     end
 
-    // Counter-clockwise outline of a capsule around a-b: along the right
-    // side, round b, back along the left side, round a (arcs in 30 degree steps).
-    private action Capsule(number startX, number startY, number endX, number endY, number len, number d,
-                           Array<number> qx, Array<number> qy)
-        number ux = (endX - startX) / len
-        number uy = (endY - startY) / len
-        number nx = -uy
-        number ny = ux
-        // cos / sin of -90, -60, -30, 0, 30, 60, 90 degrees
-        Array<number> cs
-        Array<number> sn
-        cs:Add(0.0)
-        cs:Add(0.5)
-        cs:Add(0.8660254037844386)
-        cs:Add(1.0)
-        cs:Add(0.8660254037844386)
-        cs:Add(0.5)
-        cs:Add(0.0)
-        sn:Add(-1.0)
-        sn:Add(-0.8660254037844386)
-        sn:Add(-0.5)
-        sn:Add(0.0)
-        sn:Add(0.5)
-        sn:Add(0.8660254037844386)
-        sn:Add(1.0)
-        // round b, from the right side to the left side
+    // A pie slice of radius r at (x, y), from normal 1 to normal 2, turning
+    // clockwise or counter-clockwise in 30 degree steps.
+    private action AddWedge(number x, number y, number r, number n1x, number n1y, number n2x, number n2y,
+                            boolean clockwise)
+        bandX:Empty()
+        bandY:Empty()
+        bandX:Add(x)
+        bandY:Add(y)
+        bandX:Add(x + r * n1x)
+        bandY:Add(y + r * n1y)
+        number px = n1x
+        number py = n1y
+        integer step = 0
+        boolean going = true
+        repeat while going and step < 12
+            number tx = px * cos30 - py * sin30
+            number ty = px * sin30 + py * cos30
+            if clockwise
+                tx = px * cos30 + py * sin30
+                ty = -px * sin30 + py * cos30
+            end
+            // reached or passed normal 2?
+            number cross = tx * n2y - ty * n2x
+            boolean passed = cross <= 0
+            if clockwise
+                passed = cross >= 0
+            end
+            if passed
+                going = false
+            else
+                bandX:Add(x + r * tx)
+                bandY:Add(y + r * ty)
+                px = tx
+                py = ty
+                step = step + 1
+            end
+        end
+        bandX:Add(x + r * n2x)
+        bandY:Add(y + r * n2y)
+        AddCounterClockwise(bandX, bandY)
+    end
+
+    // A 12-sided disc of radius r around (x, y).
+    private action AddDisc(number x, number y, number r)
+        bandX:Empty()
+        bandY:Empty()
+        number px = 1.0
+        number py = 0.0
         integer k = 0
-        repeat while k < 7
-            qx:Add(endX + d * (cs:Get(k) * ux + sn:Get(k) * nx))
-            qy:Add(endY + d * (cs:Get(k) * uy + sn:Get(k) * ny))
+        repeat while k < 12
+            bandX:Add(x + r * px)
+            bandY:Add(y + r * py)
+            number qx = px * cos30 - py * sin30
+            number qy = px * sin30 + py * cos30
+            px = qx
+            py = qy
             k = k + 1
         end
-        // round a, from the left side back to the right side (mirrored arc)
-        k = 0
-        repeat while k < 7
-            qx:Add(startX + d * (-cs:Get(k) * ux - sn:Get(k) * nx))
-            qy:Add(startY + d * (-cs:Get(k) * uy - sn:Get(k) * ny))
-            k = k + 1
+        ops:AddPoints(bandX, bandY, false)
+    end
+
+    // Adds the points to ops as a counter-clockwise loop, whichever way they run.
+    private action AddCounterClockwise(Array<number> xs, Array<number> ys)
+        number area2 = 0.0
+        integer n = xs:GetSize()
+        integer i = 0
+        repeat while i < n
+            integer j = i + 1
+            if j = n
+                j = 0
+            end
+            area2 = area2 + xs:Get(i) * ys:Get(j) - xs:Get(j) * ys:Get(i)
+            i = i + 1
         end
+        ops:AddPoints(xs, ys, area2 < 0)
     end
 
     // ------------------------------------------------------------ thin parts
@@ -1097,6 +1327,66 @@ class PathGenerator
         return true
     end
 
+    // The loop without the points LoopFits objects to: the tips of spurs the
+    // offsetter left where it folded over a notch in the outline. Returns an
+    // empty contour, so FitInset falls back on the exact inset, if that
+    // would remove more than a quarter of the points or half the area, or
+    // if a gap it closes cuts outside the part or too close to its edge.
+    private action TrimmedLoop(Contour loop, Array<Contour> outline, number depth) returns Contour
+        Contour rejected
+        integer n = loop:GetSize()
+        if n < 3
+            return rejected
+        end
+        number need = 0.9 * depth
+        Array<integer> keptIndex
+        integer v = 0
+        repeat while v < n
+            number x = loop:xs:Get(v)
+            number y = loop:ys:Get(v)
+            if InsideOutline(outline, x, y) and not CloserThan(outline, x, y, need)
+                keptIndex:Add(v)
+            end
+            v = v + 1
+        end
+        integer m = keptIndex:GetSize()
+        if m < 3 or (n - m) * 4 > n
+            return rejected
+        end
+
+        // each new edge, where points were left out, must stay inside and
+        // clear of the outline at its middle
+        integer k = 0
+        repeat while k < m
+            integer from = keptIndex:Get(k)
+            integer to = keptIndex:Get((k + 1) mod m)
+            if (to - from + n) mod n not= 1
+                number mx = (loop:xs:Get(from) + loop:xs:Get(to)) / 2.0
+                number my = (loop:ys:Get(from) + loop:ys:Get(to)) / 2.0
+                if not InsideOutline(outline, mx, my) or CloserThan(outline, mx, my, need)
+                    return rejected
+                end
+            end
+            k = k + 1
+        end
+
+        Contour trimmed
+        k = 0
+        repeat while k < m
+            integer kv = keptIndex:Get(k)
+            trimmed:AddPoint(loop:xs:Get(kv), loop:ys:Get(kv))
+            k = k + 1
+        end
+        trimmed:closed = true
+        trimmed:planeIndex = loop:planeIndex
+        trimmed:isHole = loop:isHole
+        trimmed:depth = loop:depth
+        if util:AbsNum(trimmed:SignedArea2()) < 0.5 * util:AbsNum(loop:SignedArea2())
+            return rejected
+        end
+        return trimmed
+    end
+
     // Inside the outline (even-odd over all its loops, so holes count).
     private action InsideOutline(Array<Contour> outline, number x, number y) returns boolean
         boolean inside = false
@@ -1284,19 +1574,19 @@ class PathGenerator
         return ops:Difference(innerArea, covered, p)
     end
 
-    // Grows `region` outward by r: the region plus a capsule of radius r
-    // around every edge. Exact, like ExactInset.
+    // Grows `region` outward by r: the region plus everything within r of
+    // its edges on the outside (AddEdgeBands). Exact, like ExactInset.
     private action ExactOutset(Array<Contour> region, number r) returns Array<Contour>
         ops:Clear()
         ops:AddContours(region, false)
-        AddEdgeCapsules(region, r)
+        AddEdgeBands(region, r, true)
         return ops:Resolve(1, plane)
     end
 
     // Wall w should cover the band w..w+1 widths in. Wherever it couldn't
     // (the part is too thin there), fill that band with solid lines.
     private action WallGaps(Array<Contour> layer, integer w, Array<Contour> deeper, integer p)
-        Array<Contour> band = FitInset(layer, lineWidth * cast(number, w), false)
+        Array<Contour> band = CachedFitInset(layer, lineWidth * cast(number, w), false)
         if band:GetSize() = 0
             return now
         end

@@ -78,6 +78,12 @@ class PolygonOperations
 
     integer brokenChain = 0
 
+    // FindCrossings: the loop each edge came from, and the crossings found
+    Array<integer> edgeLoop
+    boolean recordCrossings = false
+    Array<integer> crossA
+    Array<integer> crossB
+
     /*
     How many loops the last Resolve dropped because their pieces didn't chain into a loop (degenerate input).
 
@@ -502,6 +508,81 @@ class PolygonOperations
         return result
     end
 
+    /*
+    Finds the loops whose edges cross: where an edge of one passes through
+    an edge of another (or of the same loop, for a loop that crosses
+    itself). Loops that only touch, at a vertex or along a shared edge, do
+    not count. Each crossing adds one pair to pairA / pairB; a loop that
+    crosses itself appears as a pair (i, i). Forgets any loops added before.
+
+    Attribute: Parameter loops The closed loops to check.
+    Attribute: Parameter pairA Filled with the index of the first loop of each crossing.
+    Attribute: Parameter pairB Filled with the index of the second loop of each crossing.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Geometry.PolygonOperations
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        Contour moved
+        moved:AddPoint(10, 10)
+        moved:AddPoint(30, 10)
+        moved:AddPoint(30, 30)
+        moved:AddPoint(10, 30)
+        moved:closed = true
+        Array<Contour> loops
+        loops:Add(square)
+        loops:Add(moved)
+        Array<integer> first
+        Array<integer> second
+        PolygonOperations ops
+        ops:FindCrossings(loops, first, second)
+        output first:GetSize() + " crossings"       // 2: the squares' outlines cross twice
+    */
+    action FindCrossings(Array<Contour> loops, Array<integer> pairA, Array<integer> pairB)
+        pairA:Empty()
+        pairB:Empty()
+        Clear()
+        edgeLoop:Empty()
+        integer c = 0
+        repeat while c < loops:GetSize()
+            Contour con = loops:Get(c)
+            integer before = ex0:GetSize()
+            AddPoints(con:xs, con:ys, false)
+            integer k = before
+            repeat while k < ex0:GetSize()
+                edgeLoop:Add(c)
+                k = k + 1
+            end
+            c = c + 1
+        end
+        if ex0:GetSize() = 0
+            return now
+        end
+
+        crossA:Empty()
+        crossB:Empty()
+        recordCrossings = true
+        BuildBands()
+        FindSplits()
+        recordCrossings = false
+        integer i = 0
+        repeat while i < crossA:GetSize()
+            pairA:Add(crossA:Get(i))
+            pairB:Add(crossB:Get(i))
+            i = i + 1
+        end
+        Clear()
+        edgeLoop:Empty()
+    end
+
     private action BuildBands
         integer edgeCount = ex0:GetSize()
         number lo = ey0:Get(0)
@@ -668,6 +749,10 @@ class PolygonOperations
             number y = ey0:Get(a) + t * ry
             AddSplit(a, t, x, y)
             AddSplit(b, u, x, y)
+            if recordCrossings
+                crossA:Add(edgeLoop:Get(a))
+                crossB:Add(edgeLoop:Get(b))
+            end
         elseif insideA
             // b only touches a at one of b's own vertices: cut a exactly there
             if u < 0.5

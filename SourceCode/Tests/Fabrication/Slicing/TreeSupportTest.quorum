@@ -22,6 +22,8 @@ class TreeSupportTest is LampreyTest
 
     action Run
         SupportsTheLedge()
+        TrunkCapacity()
+        ThicknessFollowsLoad()
         NothingUnderACube()
         RejectsBadSettings()
     end
@@ -84,6 +86,70 @@ class TreeSupportTest is LampreyTest
         ExpectInteger(paths:GetSize(), 0, "no support paths")
     end
 
+    /*
+    Branches merge pairwise into trunks, but no trunk carries more tines
+    than SetBranching allows: a wide overhang gets several separate trees
+    instead of one fused clump.
+    */
+    action TrunkCapacity
+        Case("trunks carry a limited number of tines")
+        Array<Contour> outlines = models:Outlines(models:Ledge(), 0.2)
+        integer planes = models:GetLastPlaneCount()
+        TreeSupport merged = Grown(outlines, planes)
+        ExpectAtLeast(merged:GetMaxTrunkLoad(), 2, "branches under the ledge merge into trunks")
+        ExpectAtMost(merged:GetMaxTrunkLoad(), 8, "no trunk carries more than the default 8 tines")
+
+        TreeSupport capped
+        capped:SetLayerHeight(0.2)
+        capped:SetLineWidth(0.4)
+        capped:SetBranching(2, 1.0)
+        capped:Generate(outlines, planes)
+        ExpectAtMost(capped:GetMaxTrunkLoad(), 2, "with a limit of 2, no trunk carries more")
+        ExpectTrue(capped:GetReachedBed() > 0, "the lighter trunks still reach the bed")
+    end
+
+    /*
+    Branches thicken with height, but only a full trunk may reach the
+    maximum radius: tall supports carrying a few tines stay thin. With one
+    tine per trunk every trunk counts as full, so the branches thicken with
+    height alone, as they all used to (10 mm pillars under single tips).
+    */
+    action ThicknessFollowsLoad
+        Case("trunks are only as thick as their load")
+        Array<Contour> outlines = models:Outlines(models:HighLedge(), 0.2)
+        integer planes = models:GetLastPlaneCount()
+        TreeSupport sharedt = FastGrowing(outlines, planes, 8)
+        TreeSupport single = FastGrowing(outlines, planes, 1)
+        number sharedArea = AreaOnPlane(sharedt:GetAreas(), 20)
+        number singleArea = AreaOnPlane(single:GetAreas(), 20)
+        ExpectTrue(sharedArea > 0, "the high ledge is supported down to layer 20")
+        ExpectTrue(sharedArea < 0.5 * singleArea, "trunks sharing their tines take less than half the room of one thick trunk per tine")
+    end
+
+    action FastGrowing(Array<Contour> outlines, integer planes, integer maxTines) returns TreeSupport
+        TreeSupport trees
+        trees:SetLayerHeight(0.2)
+        trees:SetLineWidth(0.4)
+        trees:SetBranchGrowth(20, 4.0)      // fast: height alone reaches 4 mm within 10 mm
+        trees:SetBranching(maxTines, 1.0)
+        trees:Generate(outlines, planes)
+        return trees
+    end
+
+    /* The support's area on one plane (holes subtract). */
+    action AreaOnPlane(Array<Contour> loops, integer plane) returns number
+        number total = 0.0
+        integer i = 0
+        repeat while i < loops:GetSize()
+            Contour loop = loops:Get(i)
+            if loop:planeIndex = plane
+                total = total + loop:SignedArea2() / 2.0
+            end
+            i = i + 1
+        end
+        return total
+    end
+
     action RejectsBadSettings
         Case("bad settings are refused")
         boolean zeroHeight = false
@@ -102,5 +168,13 @@ class TreeSupportTest is LampreyTest
             steep = true
         end
         ExpectTrue(steep, "a branch angle of 90 degrees (horizontal)")
+        boolean negativeGap = false
+        check
+            TreeSupport trees3
+            trees3:SetBranching(8, -1)
+        detect e3 is InvalidArgumentError
+            negativeGap = true
+        end
+        ExpectTrue(negativeGap, "a negative gap between trunks")
     end
 end

@@ -23,7 +23,7 @@ use Tests.LampreyTests
 */
 class Main
     boolean runTests = false
-    text modelPath = "assets/printed_weird.stl"
+    text modelPath = "assets/dd_bat_dragon.stl"
     text profilesPath = "Profiles/profiles.json"
     text profileName = "bambu-a1" // or "bambu-a1", "bambu-p2s", "ender3-v2", "ender3-v2-fine", "bambu-p2s-petg"
     text outputFolder = "Outputs"
@@ -51,7 +51,7 @@ class Main
         PrintWarnings(profiles:GetWarnings())
         Profile profile = profiles:Require(profileName)
         profile:Set("supportsEnabled", "true")
-        profile:Set("adhesionType", "brim")
+        profile:Set("adhesionType", "none")
 
         text gcodePath = outputFolder + "/" + BaseName(modelPath) + ".gcode"
         SliceJob job

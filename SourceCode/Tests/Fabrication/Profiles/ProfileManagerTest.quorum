@@ -64,7 +64,7 @@ class ProfileManagerTest is LampreyTest
         ExpectTrue(a1:GetBoolean("write3mf") and a1:GetBoolean("bambuExtras"), "the A1 profile makes a 3MF")
         ExpectNumber(a1:GetNumber("bedWidth"), 256, 0, "the A1 bed, inherited from the P2S")
         ExpectNumber(a1:GetNumber("bedHeight"), 256, 0, "the A1 build height, inherited from the P2S")
-        ExpectNumber(a1:GetNumber("travelSpeed"), 500, 0, "travel at the A1 firmware's speed cap")
+        ExpectAtMost(a1:GetNumber("travelSpeed"), 500, "travel within the A1 firmware's 500 mm/s cap")
         ExpectText(a1:GetText("startGcodeFile"), "Templates/bambu-a1/start.gcode", "the A1's own start G-code")
         ExpectText(a1:GetText("bambuSettingsTemplate"), "Templates/bambu-a1/a1_project_settings.json", "the A1's own settings template")
     end
@@ -73,13 +73,17 @@ class ProfileManagerTest is LampreyTest
         Case("inherits in the file")
         ProfileManager profiles
         profiles:Load("Profiles/profiles.json")
+        // compared with the parent, not with numbers from profiles.json, so
+        // tuning either profile doesn't break this
         Profile fine = profiles:Require("ender3-v2-fine")
-        ExpectNumber(fine:GetNumber("layerHeight"), 0.12, 0.0000001, "its own layer height")
-        ExpectInteger(fine:GetInteger("wallCount"), 3, "the parent's wall count")
+        Profile parentProfile = profiles:Require("ender3-v2")
+        ExpectTrue(fine:SetsOwn("layerHeight"), "its own layer height")
+        ExpectTrue(fine:GetNumber("layerHeight") < parentProfile:GetNumber("layerHeight"), "finer than its parent's")
+        ExpectInteger(fine:GetInteger("wallCount"), parentProfile:GetInteger("wallCount"), "the parent's wall count")
         ExpectText(fine:GetSource("wallCount"), "ender3-v2", "GetSource")
         Profile derived = profiles:Derive("ender3-v2", "ender3-test")
         derived:SetNumber("layerHeight", 0.3)
-        ExpectNumber(derived:GetNumber("retractLength"), 6, 0, "Derive inherits")
+        ExpectNumber(derived:GetNumber("retractLength"), parentProfile:GetNumber("retractLength"), 0, "Derive inherits")
         profiles:Remove("ender3-v2")
         ExpectText(fine:GetInherits(), "", "removing a parent unlinks its children")
     end

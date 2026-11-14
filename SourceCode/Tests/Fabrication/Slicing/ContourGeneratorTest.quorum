@@ -29,6 +29,7 @@ class ContourGeneratorTest is LampreyTest
         HolesAndWinding()
         Gaps()
         Specks()
+        CrossingLoops()
         RejectsBadSettings()
     end
 
@@ -188,6 +189,62 @@ class ContourGeneratorTest is LampreyTest
         Array<Contour> contours = generator:Build(segments, 2, 0.2)
         ExpectInteger(contours:GetSize(), 1, "the 0.01 mm^2 speck and the loop on plane 5 are left out")
         ExpectInteger(generator:GetDroppedCount(), 1, "one speck dropped")
+    end
+
+    /*
+    A part sticking out of another, like eye lenses set into a head: the
+    loops cross, and the inside / outside count took the body for a hole
+    (the midpoint of its longest edge lies inside the lens), so it got no
+    walls or fill. Crossing loops are merged into one outline instead.
+    */
+    action CrossingLoops
+        Case("loops that cross are merged")
+        Array<Segment> lensSegments
+        AddLoop(lensSegments, "0 0 40 0 40 10 0 10", 0)
+        AddLoop(lensSegments, "15 -5 25 -5 25 5 15 5", 0)
+        ContourGenerator generator
+        generator:SetSimplifyTolerance(0)
+        Array<Contour> merged = generator:Build(lensSegments, 1, 0.2)
+        ExpectInteger(merged:GetSize(), 1, "the body and the lens become one loop")
+        if merged:GetSize() > 0
+            Contour outline = merged:Get(0)
+            ExpectFalse(outline:isHole, "the body is not taken for a hole")
+            ExpectTrue(outline:SignedArea2() > 0, "the outline runs counter-clockwise")
+            ExpectNumber(outline:Area(), 450, 0.0001, "area 400 + 100 - 50 where they overlap")
+        end
+        ExpectInteger(generator:GetMergedCount(), 2, "two loops merged")
+        ExpectInteger(generator:GetMergedPlaneCount(), 1, "on one layer")
+
+        Case("merging keeps holes")
+        Array<Segment> holeSegments
+        AddLoop(holeSegments, "0 0 40 0 40 40 0 40", 0)
+        AddLoop(holeSegments, "5 5 5 15 15 15 15 5", 0)
+        AddLoop(holeSegments, "30 10 50 10 50 20 30 20", 0)
+        ContourGenerator withHole
+        withHole:SetSimplifyTolerance(0)
+        Array<Contour> result = withHole:Build(holeSegments, 1, 0.2)
+        ExpectInteger(result:GetSize(), 2, "an outline and its hole")
+        integer holes = 0
+        number net = 0.0
+        integer i = 0
+        repeat while i < result:GetSize()
+            Contour loop = result:Get(i)
+            if loop:isHole
+                holes = holes + 1
+            end
+            net = net + loop:SignedArea2() / 2.0
+            i = i + 1
+        end
+        ExpectInteger(holes, 1, "the hole (clockwise, as a mesh gives it) survives the merge")
+        ExpectNumber(net, 1600, 0.0001, "1600 + 200 - 100 overlap - 100 hole")
+
+        Case("merging can be turned off")
+        ContourGenerator unmerged
+        unmerged:SetSimplifyTolerance(0)
+        unmerged:SetMergeCrossings(false)
+        Array<Contour> kept = unmerged:Build(lensSegments, 1, 0.2)
+        ExpectInteger(kept:GetSize(), 2, "both loops kept as sliced")
+        ExpectInteger(unmerged:GetMergedCount(), 0, "nothing merged")
     end
 
     action RejectsBadSettings

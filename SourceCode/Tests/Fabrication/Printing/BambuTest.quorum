@@ -3,6 +3,7 @@ package Tests.Fabrication.Printing
 use Libraries.Containers.Array
 use Libraries.Data.Compression.ZipReader
 use Libraries.Data.Formats.JavaScriptObjectNotationTemplate
+use Libraries.Data.Formats.NumberFormatter
 use Libraries.Fabrication.Geometry.Contour
 use Libraries.Fabrication.Slicing.PathGenerator
 use Libraries.Fabrication.Slicing.PathOrderer
@@ -19,6 +20,11 @@ use Tests.TestFiles
 /*
 Tests the Bambu Lab printing classes (BambuPackager, BambuProjectSettings,
 BambuSettingsMap) with the P2S settings template in Templates/bambu-p2s.
+
+Nothing here expects a value that profiles.json happens to hold, so tuning a
+profile doesn't break these tests: a case either sets the settings it checks
+itself, or takes the expected value from the profile it loaded. Only what the
+printer itself fixes (the A1 firmware's travel speed cap) is written here.
 */
 class BambuTest is LampreyTest
     TestModels models
@@ -159,6 +165,15 @@ class BambuTest is LampreyTest
         ProfileManager profiles
         profiles:Load("Profiles/profiles.json")
         Profile profile = profiles:Require("bambu-p2s")
+        // known inputs (in memory only), so the expected text below checks
+        // how settings are mapped and written, not what the shipped profile holds
+        profile:SetNumber("layerHeight", 0.2)
+        profile:SetInteger("wallCount", 3)
+        profile:SetNumber("infillDensity", 0.15)
+        profile:Set("bedType", "textured_plate")
+        profile:SetInteger("bedTemperature", 60)
+        profile:Set("filamentType", "PLA")
+        profile:Set("adhesionType", "none")
         BambuSettingsMap map
         JavaScriptObjectNotationTemplate filled
         filled:Load(map:FilledTemplate(profile, settingsTemplate))
@@ -206,15 +221,24 @@ class BambuTest is LampreyTest
 
         ProfileManager profiles
         profiles:Load("Profiles/profiles.json")
+        Profile a1 = profiles:Require("bambu-a1")
         BambuSettingsMap map
         JavaScriptObjectNotationTemplate filled
-        filled:Load(map:FilledTemplate(profiles:Require("bambu-a1"), a1Template))
+        filled:Load(map:FilledTemplate(a1, a1Template))
         Array<text> warnings = map:GetWarnings()
         ExpectInteger(warnings:GetSize(), 0, "the bambu-a1 profile matches its template (nozzle, filament, keys)")
-        ExpectText(filled:GetText("wall_loops", "?"), "2", "wall_loops from the A1 profile")
-        ExpectText(filled:GetText("textured_plate_temp", "?"), "65", "the A1's PLA bed temperature")
-        ExpectText(filled:GetText("nozzle_temperature", "?"), "220", "the A1's PLA nozzle temperature")
-        ExpectText(filled:GetText("travel_speed", "?"), "500", "travel at the A1 firmware's cap")
+
+        // whatever the profile is tuned to, each setting must reach the right
+        // key of the A1's template, written the way Bambu Studio writes it
+        NumberFormatter format
+        ExpectText(filled:GetText("wall_loops", "?"), "" + a1:GetInteger("wallCount"), "wall_loops from the A1 profile's wallCount")
+        text bedKey = a1:GetText("bedType") + "_temp"
+        ExpectText(filled:GetText(bedKey, "?"), "" + a1:GetInteger("bedTemperature"), "the A1's bed temperature, under " + bedKey)
+        ExpectText(filled:GetText("nozzle_temperature", "?"), "" + a1:GetInteger("nozzleTemperature"), "the A1's nozzle temperature")
+        ExpectText(filled:GetText("travel_speed", "?"), format:Short(a1:GetNumber("travelSpeed")), "the A1's travel speed")
+
+        // tuning can't go past what the printer allows
+        ExpectAtMost(a1:GetNumber("travelSpeed"), 500, "travel within the A1 firmware's 500 mm/s cap")
     end
 
     action Quoted(text value) returns text

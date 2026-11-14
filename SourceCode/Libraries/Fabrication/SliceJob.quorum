@@ -144,18 +144,24 @@ class SliceJob
             Report(conGen:GetOpenCount() + " outlines stayed open even after bridging gaps up to " + profile:GetText("contourMaxGap")
                 + " mm: the mesh has holes. Open outlines get no walls or fill; repairing the model usually fixes this.")
         end
+        if conGen:GetMergedCount() > 0
+            Report(conGen:GetMergedCount() + " outlines on " + conGen:GetMergedPlaneCount() + " layers crossed each other or themselves "
+                + "(parts of the model overlap, or the mesh intersects itself), so each of those layers was merged into one shape. "
+                + "Joining the parts into one solid, or repairing the mesh, avoids this.")
+        end
         Log("outlines: " + contours:GetSize() + " (" + conGen:GetFlippedCount() + " reoriented, " + conGen:GetDroppedCount()
             + " specks dropped, points " + conGen:GetPointsBefore() + " -> " + conGen:GetPointsAfter() + ")")
 
         PathGenerator paths
         ConfigurePaths(profile, paths)
+        paths:SetProgress(verbose)
         paths:Generate(contours, planeCount)
         Array<Contour> walls = paths:GetWalls()
         Array<Contour> skin = paths:GetSkin()
         Array<Contour> infill = paths:GetInfill()
         Log("paths: " + walls:GetSize() + " walls, " + skin:GetSize() + " solid lines, " + infill:GetSize()
-            + " infill lines (" + paths:GetDroppedLoopCount() + " bad inset loops dropped, "
-            + paths:GetRebuiltIslandCount() + " thin islands rebuilt)")
+            + " infill lines (" + paths:GetDroppedLoopCount() + " bad inset loops dropped, " + paths:GetTrimmedLoopCount()
+            + " trimmed, " + paths:GetRebuiltIslandCount() + " thin islands rebuilt)")
         Array<Contour> topSurface = paths:GetTopSurface()
         Array<Contour> ironing = paths:GetIroning()
         if topSurface:GetSize() > 0 or ironing:GetSize() > 0
@@ -174,7 +180,8 @@ class SliceJob
             TreeSupport trees
             ConfigureSupports(profile, trees)
             trees:Generate(contours, planeCount)
-            Log("support: " + trees:GetTipCount() + " tines (" + trees:GetDroppedTips() + " dropped for lack of room), "
+            Log("support: " + trees:GetTipCount() + " tines (" + trees:GetDroppedTips() + " dropped for lack of room, up to "
+                + trees:GetMaxTrunkLoad() + " per trunk), "
                 + trees:GetReachedBed() + " trunks reach the bed, " + trees:GetRestedOnModel() + " branches rest on the model; skipped "
                 + trees:GetSkippedBridgeCount() + " bridgeable, " + trees:GetSkippedSmallCount() + " tiny-overhang and "
                 + trees:GetSkippedLowCount() + " near-bed tine spots")
@@ -243,6 +250,7 @@ class SliceJob
     private action ConfigureContours(Profile profile, ContourGenerator conGen)
         conGen:SetSimplifyTolerance(profile:GetNumber("simplifyTolerance"))
         conGen:SetMinArea(profile:GetNumber("minContourArea"))
+        conGen:SetMergeCrossings(profile:GetBoolean("mergeCrossingLoops"))
     end
 
     private action ConfigurePaths(Profile profile, PathGenerator paths)
@@ -279,6 +287,7 @@ class SliceJob
         trees:SetBridging(profile:GetNumber("supportMaxBridge"))
         trees:SetMinOverhangArea(profile:GetNumber("supportMinOverhangArea"))
         trees:SetMinHeight(profile:GetNumber("supportMinHeight"))
+        trees:SetBranching(profile:GetInteger("supportMaxBranches"), profile:GetNumber("supportBranchGap"))
     end
 
     private action ConfigureAdhesion(Profile profile, SkirtGenerator skirtGen)
