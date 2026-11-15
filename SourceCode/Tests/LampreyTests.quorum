@@ -14,6 +14,7 @@ use Tests.Fabrication.Geometry.ContourLayersTest
 use Tests.Fabrication.Geometry.ContourSimplifierTest
 use Tests.Fabrication.Geometry.ConvexHullTest
 use Tests.Fabrication.Geometry.PolygonOperationsTest
+use Tests.Fabrication.Geometry.PointIndexTest
 use Tests.Fabrication.Geometry.PolygonOffsetterTest
 use Tests.Fabrication.Geometry.LineFillTest
 use Tests.Fabrication.Geometry.PathRoleTest
@@ -92,6 +93,8 @@ class LampreyTests
         RunTest(contourSimplifierTest)
         ConvexHullTest convexHullTest
         RunTest(convexHullTest)
+        PointIndexTest pointIndexTest
+        RunTest(pointIndexTest)
         PolygonOperationsTest polygonOperationsTest
         RunTest(polygonOperationsTest)
         PolygonOffsetterTest polygonOffsetterTest

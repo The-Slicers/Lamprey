@@ -1,7 +1,6 @@
 package Libraries.Fabrication.Geometry
 
 use Libraries.Containers.Array
-use Libraries.Containers.HashTable
 use Libraries.Compute.Math
 use Libraries.Data.Containers.NumberBuffer
 use Libraries.Data.Containers.IntegerBuffer
@@ -14,6 +13,12 @@ winding numbers on its two sides straddle the requested level, and the kept
 pieces are chained back into loops. Results are oriented like
 ContourGenerator's: outer loops counter-clockwise, holes clockwise with
 isHole set.
+
+The winding numbers come from the faces the pieces cut the plane into:
+every point of a face has the same winding, and crossing a piece from its
+right to its left adds one, so a walk across the pieces gives every face's
+winding from one starting value per connected group of pieces (found by
+counting edge crossings beside one piece of the group).
 
 Lower level use (PolygonOffsetter and TreeSupport do this): Clear, then
 AddPoints / AddContours for any number of loops, then Resolve(1, plane) for
@@ -70,8 +75,14 @@ class PolygonOperations
     IntegerBuffer pieceTo
     IntegerBuffer pieceEdge 
 
-    HashTable<text, integer> nodeIds
+    // BuildPieces: each distinct end point gets a node number
+    PointIndex nodes
     integer nodeCount = 0
+
+    // Resolve: pieces joining the same two nodes form a group
+    PointIndex nodePairs
+    IntegerBuffer groupFirst    // per group: its first piece
+    IntegerBuffer groupOf       // per piece: its group
 
     number span = 1.0
     number delta = 0.0
@@ -79,6 +90,52 @@ class PolygonOperations
     integer windRight = 0
 
     integer brokenChain = 0
+
+    // ClipToBox: the loop being clipped, passed back and forth between sides
+    NumberBuffer clipX
+    NumberBuffer clipY
+    NumberBuffer keepX
+    NumberBuffer keepY
+
+    // FindSplits: each edge's x range, and per band the edges sorted by
+    // their left end and the pairs whose x ranges overlap
+    NumberBuffer edgeMinX
+    NumberBuffer edgeMaxX
+    IntegerBuffer bandOrder
+    IntegerBuffer sortTemp
+    IntegerBuffer pairStart         // per band position: where its partners start in pairHigh
+    IntegerBuffer pairLow
+    IntegerBuffer pairHigh
+    IntegerBuffer pairCursor
+
+    // Face windings. Nodes closer than delta on both axes are merged first:
+    // the same corner computed from two neighbouring edges can differ in its
+    // last binary digit, and faces need one node there.
+    IntegerBuffer nodeRep           // per node: the lowest node within delta of it (itself if none)
+    PointIndex cells                // grid cells 1024 * delta wide holding nodes
+    IntegerBuffer cellFirst         // per cell: its first node, -1 if none
+    IntegerBuffer nodeNextInCell    // per node: the next node in its cell, -1 at the end
+    IntegerBuffer nodeCell          // per node: its cell
+    IntegerBuffer nodeCellX
+    IntegerBuffer nodeCellY
+    IntegerBuffer nodeSegment       // per merged node: the newest segment it is the low end of, -1 if none
+    IntegerBuffer segmentNext       // per segment: the one before it with the same low node, -1 at the end
+    IntegerBuffer pieceSegment      // per piece: its segment, -1 if it shrank to a point
+    IntegerBuffer segmentLow        // per segment: its lower merged node
+    IntegerBuffer segmentHigh
+    IntegerBuffer segmentWeight     // per segment: pieces running low to high, minus those running back
+    // half-edges: 2g runs segment g low to high, 2g + 1 back
+    IntegerBuffer edgeStart         // per merged node: where its outgoing half-edges start in edgeList
+    IntegerBuffer edgeList          // outgoing half-edges, counter-clockwise around each node
+    NumberBuffer edgeTurn           // per half-edge: its direction (Direction)
+    IntegerBuffer edgeSlot          // per half-edge: its place in edgeList
+    IntegerBuffer edgeFace          // per half-edge: the face on its left
+    IntegerBuffer faceStart         // per face: where its half-edges start in faceEdges
+    IntegerBuffer faceEdges
+    IntegerBuffer faceWind          // per face: its winding number
+    IntegerBuffer faceKnown         // per face: 1 once its winding is known
+    IntegerBuffer segmentSeed       // per segment: a group-head piece on it, -1 if none
+    IntegerBuffer walk              // faces still to visit
 
     // FindCrossings: the loop each edge came from, and the crossings found
     IntegerBuffer edgeLoop
@@ -463,7 +520,9 @@ class PolygonOperations
 
         // group pieces that share both end nodes (exact overlaps)
         integer pieceTotal = px0:GetSize()
-        HashTable<text, integer> groupHead
+        nodePairs:Empty()
+        groupFirst:Empty()
+        groupOf:Empty()
         IntegerBuffer groupNext
         integer p = 0
         repeat while p < pieceTotal
@@ -472,35 +531,40 @@ class PolygonOperations
         end
         p = 0
         repeat while p < pieceTotal
-            text key = GroupKey(p)
-            if groupHead:HasKey(key)
-                integer head = groupHead:GetValue(key)
+            integer groupId = GroupOf(p)
+            groupOf:Add(groupId)
+            if groupId = groupFirst:GetSize()
+                groupFirst:Add(p)       // a new pair of nodes: p starts its group
+            else
+                integer head = groupFirst:Get(groupId)
                 groupNext:Set(p, groupNext:Get(head))
                 groupNext:Set(head, p)
-            else
-                groupHead:Add(key, p)
             end
             p = p + 1
         end
+
+        FaceWindings()
 
         // judge each group once; keep one copy facing the right way
         IntegerBuffer live
         p = 0
         repeat while p < pieceTotal
-            if groupHead:GetValue(GroupKey(p)) = p
-                Sides(p)
-                if windRight < minWinding and minWinding <= windLeft
-                    live:Add(p) // region is on p's left
-                elseif windLeft < minWinding and minWinding <= windRight
-                    // region is on p's right: keep a copy running the other way
-                    integer q = groupNext:Get(p)
-                    boolean found = false
-                    repeat while q not= -1 and not found
-                        if pieceFrom:Get(q) = pieceTo:Get(p)
-                            live:Add(q)
-                            found = true
+            if groupFirst:Get(groupOf:Get(p)) = p
+                // false for a piece that shrank to a point when nodes were merged
+                if PieceWindings(p)
+                    if windRight < minWinding and minWinding <= windLeft
+                        live:Add(p) // region is on p's left
+                    elseif windLeft < minWinding and minWinding <= windRight
+                        // region is on p's right: keep a copy running the other way
+                        integer q = groupNext:Get(p)
+                        boolean found = false
+                        repeat while q not= -1 and not found
+                            if pieceFrom:Get(q) = pieceTo:Get(p)
+                                live:Add(q)
+                                found = true
+                            end
+                            q = groupNext:Get(q)
                         end
-                        q = groupNext:Get(q)
                     end
                 end
             end
@@ -509,6 +573,146 @@ class PolygonOperations
 
         Chain(live, planeIndex, result)
         return result
+    end
+
+    /*
+    The part of each closed loop inside an axis-aligned box: every loop is
+    cut off at the box's four sides (Sutherland-Hodgman clipping), so inside
+    the box the loops cover exactly what they did. Loops whose bounding box
+    misses the box are left out. A loop that wanders out of the box and back
+    comes back with edges along the box's sides, which is harmless for
+    anything used only inside the box: subtracting the loops from a shape
+    that fits in the box gives the same result as subtracting all of them,
+    from far fewer edges (TreeSupport cuts every branch circle out of the
+    model's clearance this way).
+
+    Attribute: Parameter loops The loops to clip; open paths are left out.
+    Attribute: Parameter minX The box's left side (mm).
+    Attribute: Parameter minY The box's bottom side (mm).
+    Attribute: Parameter maxX The box's right side (mm).
+    Attribute: Parameter maxY The box's top side (mm).
+    Attribute: Returns The clipped loops, each running the same way as before, with the original's plane, isHole and depth.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Geometry.PolygonOperations
+
+        Contour square
+        square:AddPoint(0, 0)
+        square:AddPoint(20, 0)
+        square:AddPoint(20, 20)
+        square:AddPoint(0, 20)
+        square:closed = true
+        Array<Contour> loops
+        loops:Add(square)
+        PolygonOperations ops
+        Array<Contour> corner = ops:ClipToBox(loops, 15, 15, 30, 30)
+        Contour piece = corner:Get(0)
+        output piece:Area()        // 25: the square's 5 x 5 corner inside the box
+    */
+    action ClipToBox(Array<Contour> loops, number minX, number minY, number maxX, number maxY) returns Array<Contour>
+        Array<Contour> result
+        integer c = 0
+        repeat while c < loops:GetSize()
+            Contour con = loops:Get(c)
+            integer n = con:GetSize()
+            if con:closed and n >= 3
+                number loX = con:xs:Get(0)
+                number hiX = loX
+                number loY = con:ys:Get(0)
+                number hiY = loY
+                integer i = 1
+                repeat while i < n
+                    loX = util:Min2(loX, con:xs:Get(i))
+                    hiX = util:Max2(hiX, con:xs:Get(i))
+                    loY = util:Min2(loY, con:ys:Get(i))
+                    hiY = util:Max2(hiY, con:ys:Get(i))
+                    i = i + 1
+                end
+                if hiX >= minX and loX <= maxX and hiY >= minY and loY <= maxY
+                    clipX:Empty()
+                    clipY:Empty()
+                    i = 0
+                    repeat while i < n
+                        clipX:Add(con:xs:Get(i))
+                        clipY:Add(con:ys:Get(i))
+                        i = i + 1
+                    end
+                    ClipSide(clipX, clipY, keepX, keepY, 0, minX)
+                    ClipSide(keepX, keepY, clipX, clipY, 1, maxX)
+                    ClipSide(clipX, clipY, keepX, keepY, 2, minY)
+                    ClipSide(keepX, keepY, clipX, clipY, 3, maxY)
+                    if clipX:GetSize() >= 3
+                        Contour piece
+                        i = 0
+                        repeat while i < clipX:GetSize()
+                            piece:AddPoint(clipX:Get(i), clipY:Get(i))
+                            i = i + 1
+                        end
+                        piece:closed = true
+                        piece:planeIndex = con:planeIndex
+                        piece:isHole = con:isHole
+                        piece:depth = con:depth
+                        result:Add(piece)
+                    end
+                end
+            end
+            c = c + 1
+        end
+        return result
+    end
+
+    // One Sutherland-Hodgman step: the part of the loop (inX, inY) on the
+    // kept side of one box side, into (outX, outY). side 0 keeps x >= limit,
+    // 1 keeps x <= limit, 2 keeps y >= limit, 3 keeps y <= limit. Where an
+    // edge crosses the side, the crossing point is put exactly on it.
+    private action ClipSide(NumberBuffer inX, NumberBuffer inY, NumberBuffer outX, NumberBuffer outY, integer side, number limit)
+        outX:Empty()
+        outY:Empty()
+        integer n = inX:GetSize()
+        if n = 0
+            return now
+        end
+        number ax = inX:Get(n - 1)
+        number ay = inY:Get(n - 1)
+        boolean aIn = KeptSide(ax, ay, side, limit)
+        integer i = 0
+        repeat while i < n
+            number bx = inX:Get(i)
+            number by = inY:Get(i)
+            boolean bIn = KeptSide(bx, by, side, limit)
+            if aIn not= bIn
+                // the edge crosses the side (so its two ends differ along that axis)
+                if side < 2
+                    outX:Add(limit)
+                    outY:Add(ay + (limit - ax) / (bx - ax) * (by - ay))
+                else
+                    outX:Add(ax + (limit - ay) / (by - ay) * (bx - ax))
+                    outY:Add(limit)
+                end
+            end
+            if bIn
+                outX:Add(bx)
+                outY:Add(by)
+            end
+            ax = bx
+            ay = by
+            aIn = bIn
+            i = i + 1
+        end
+    end
+
+    private action KeptSide(number x, number y, integer side, number limit) returns boolean
+        if side = 0
+            return x >= limit
+        elseif side = 1
+            return x <= limit
+        elseif side = 2
+            return y >= limit
+        end
+        return y <= limit
     end
 
     /*
@@ -674,45 +878,238 @@ class PolygonOperations
         return b
     end
 
+    // Cuts edges where they cross. Pairs are tested band by band, each pair
+    // once, in the band where both edges first appear.
     private action FindSplits
         splitEdge:Empty()
         splitT:Empty()
         splitX:Empty()
         splitY:Empty()
+        edgeMinX:Empty()
+        edgeMaxX:Empty()
+        integer e = 0
+        repeat while e < ex0:GetSize()
+            edgeMinX:Add(util:Min2(ex0:Get(e), ex1:Get(e)))
+            edgeMaxX:Add(util:Max2(ex0:Get(e), ex1:Get(e)))
+            e = e + 1
+        end
 
+        // Up to 22 edges, testing every pair takes fewer array reads than
+        // sorting and sweeping (measured on the bands of 42 dd_bat_dragon
+        // layers; the best cutoff saves only about 1% over 16 or 28).
         integer b = 0
         repeat while b < bandCount
-            integer s0 = bandStart:Get(b)
-            integer s1 = bandStart:Get(b + 1)
-            integer i = s0
-            repeat while i < s1
-                integer ea = bandEdges:Get(i)
-                integer j = i + 1
-                repeat while j < s1
-                    integer eb = bandEdges:Get(j)
-                    integer firstShared = edgeFirstBand:Get(ea)
-                    if edgeFirstBand:Get(eb) > firstShared
-                        firstShared = edgeFirstBand:Get(eb)
-                    end
-                    if firstShared = b
-                        TestPair(ea, eb)
-                    end
-                    j = j + 1
-                end
-                i = i + 1
+            if bandStart:Get(b + 1) - bandStart:Get(b) <= 22
+                TestEveryPair(b)
+            else
+                TestOverlappingPairs(b)
             end
             b = b + 1
         end
     end
 
-    private action TestPair(integer a, integer b)
-        if util:Max2(ex0:Get(a), ex1:Get(a)) < util:Min2(ex0:Get(b), ex1:Get(b))
-            return now
+    // Band b's pairs, every one: quickest for a small band. Pairs whose x
+    // ranges don't overlap can't touch (TestPair counts on them being
+    // dropped here), and two thirds of a band's pairs go that way, so that
+    // test comes first.
+    private action TestEveryPair(integer b)
+        integer s0 = bandStart:Get(b)
+        integer s1 = bandStart:Get(b + 1)
+        integer i = s0
+        repeat while i < s1
+            integer ea = bandEdges:Get(i)
+            number left = edgeMinX:Get(ea)
+            number right = edgeMaxX:Get(ea)
+            integer j = i + 1
+            repeat while j < s1
+                integer eb = bandEdges:Get(j)
+                if not (right < edgeMinX:Get(eb) or edgeMaxX:Get(eb) < left)
+                    if FirstSharedBand(ea, eb) = b
+                        TestPair(ea, eb)
+                    end
+                end
+                j = j + 1
+            end
+            i = i + 1
         end
-        if util:Max2(ex0:Get(b), ex1:Get(b)) < util:Min2(ex0:Get(a), ex1:Get(a))
-            return now
+    end
+
+    // Band b's pairs whose x ranges overlap (TestPair is only given those). The band's edges are sorted by their left end, so
+    // an edge's partners are the ones after it that start before it ends.
+    // The pairs are then tested in the same order, and each the same way
+    // round, as TestEveryPair would, so the splits come out exactly the same.
+    private action TestOverlappingPairs(integer b)
+        integer s0 = bandStart:Get(b)
+        integer count = bandStart:Get(b + 1) - s0
+        bandOrder:Empty()
+        integer k = 0
+        repeat while k < count
+            bandOrder:Add(k)
+            k = k + 1
+        end
+        SortBandByLeftEnd(s0, count)
+
+        // overlapping pairs as (earlier position, later position)
+        pairLow:Empty()
+        pairHigh:Empty()
+        pairStart:Empty()
+        k = 0
+        repeat while k <= count
+            pairStart:Add(0)
+            k = k + 1
+        end
+        k = 0
+        repeat while k < count
+            integer pa = bandOrder:Get(k)
+            integer ea = bandEdges:Get(s0 + pa)
+            number right = edgeMaxX:Get(ea)
+            integer k2 = k + 1
+            boolean scanning = true
+            repeat while scanning
+                if k2 >= count
+                    scanning = false
+                else
+                    integer pb = bandOrder:Get(k2)
+                    integer eb = bandEdges:Get(s0 + pb)
+                    if edgeMinX:Get(eb) > right
+                        scanning = false
+                    else
+                        if FirstSharedBand(ea, eb) = b
+                            integer low = pa
+                            integer high = pb
+                            if pb < pa
+                                low = pb
+                                high = pa
+                            end
+                            pairLow:Add(low)
+                            pairHigh:Add(high)
+                            pairStart:Set(low + 1, pairStart:Get(low + 1) + 1)
+                        end
+                        k2 = k2 + 1
+                    end
+                end
+            end
+            k = k + 1
         end
 
+        // bucket the pairs by their earlier position (counting sort)
+        k = 1
+        repeat while k <= count
+            pairStart:Set(k, pairStart:Get(k) + pairStart:Get(k - 1))
+            k = k + 1
+        end
+        integer pairTotal = pairLow:GetSize()
+        sortTemp:Empty()
+        sortTemp:SetSize(pairTotal)
+        pairCursor:Empty()
+        k = 0
+        repeat while k < count
+            pairCursor:Add(pairStart:Get(k))
+            k = k + 1
+        end
+        integer q = 0
+        repeat while q < pairTotal
+            integer owner = pairLow:Get(q)
+            sortTemp:Set(pairCursor:Get(owner), pairHigh:Get(q))
+            pairCursor:Set(owner, pairCursor:Get(owner) + 1)
+            q = q + 1
+        end
+
+        // each position's partners in order, then test
+        integer lowPos = 0
+        repeat while lowPos < count
+            integer first = pairStart:Get(lowPos)
+            integer last = pairStart:Get(lowPos + 1)
+            integer i = first + 1
+            repeat while i < last
+                integer v = sortTemp:Get(i)
+                integer j = i - 1
+                boolean moving = true
+                repeat while moving
+                    if j < first
+                        moving = false
+                    elseif sortTemp:Get(j) > v
+                        sortTemp:Set(j + 1, sortTemp:Get(j))
+                        j = j - 1
+                    else
+                        moving = false
+                    end
+                end
+                sortTemp:Set(j + 1, v)
+                i = i + 1
+            end
+            integer a = bandEdges:Get(s0 + lowPos)
+            i = first
+            repeat while i < last
+                TestPair(a, bandEdges:Get(s0 + sortTemp:Get(i)))
+                i = i + 1
+            end
+            lowPos = lowPos + 1
+        end
+    end
+
+    // The band two edges are first both listed in: where their pair is tested.
+    private action FirstSharedBand(integer a, integer b) returns integer
+        integer first = edgeFirstBand:Get(a)
+        if edgeFirstBand:Get(b) > first
+            first = edgeFirstBand:Get(b)
+        end
+        return first
+    end
+
+    // Sorts bandOrder (positions in the band) by the left end of their edge:
+    // bottom-up merge sort through pairCursor.
+    private action SortBandByLeftEnd(integer s0, integer count)
+        pairCursor:Empty()
+        pairCursor:SetSize(count)
+        integer width = 1
+        repeat while width < count
+            integer left = 0
+            repeat while left < count
+                integer middle = left + width
+                if middle > count
+                    middle = count
+                end
+                integer right = left + 2 * width
+                if right > count
+                    right = count
+                end
+                integer i = left
+                integer j = middle
+                integer filled = left
+                repeat while filled < right
+                    boolean takeLeft = false
+                    if i < middle
+                        if j >= right
+                            takeLeft = true
+                        elseif edgeMinX:Get(bandEdges:Get(s0 + bandOrder:Get(i))) <= edgeMinX:Get(bandEdges:Get(s0 + bandOrder:Get(j)))
+                            takeLeft = true
+                        end
+                    end
+                    if takeLeft
+                        pairCursor:Set(filled, bandOrder:Get(i))
+                        i = i + 1
+                    else
+                        pairCursor:Set(filled, bandOrder:Get(j))
+                        j = j + 1
+                    end
+                    filled = filled + 1
+                end
+                left = right
+            end
+            integer k = 0
+            repeat while k < count
+                bandOrder:Set(k, pairCursor:Get(k))
+                k = k + 1
+            end
+            width = width * 2
+        end
+    end
+
+    // Splits edges a and b where they cross or touch. Only called for edges
+    // whose x ranges overlap (edgeMinX/edgeMaxX): a pair that doesn't can't
+    // produce a split, and both callers drop such pairs before getting here.
+    private action TestPair(integer a, integer b)
         number rx = ex1:Get(a) - ex0:Get(a)
         number ry = ey1:Get(a) - ey0:Get(a)
         number sx = ex1:Get(b) - ex0:Get(b)
@@ -870,7 +1267,7 @@ class PolygonOperations
         pieceFrom:Empty()
         pieceTo:Empty()
         pieceEdge:Empty()
-        nodeIds:Empty()
+        nodes:Empty()
         nodeCount = 0
 
         integer e = 0
@@ -906,30 +1303,29 @@ class PolygonOperations
         pieceEdge:Add(edge)
     end
 
+    // The node at (x, y): the same number for the same exact point
     private action NodeId(number x, number y) returns integer
-        text key = "" + x + "_" + y
-        if nodeIds:HasKey(key)
-            return nodeIds:GetValue(key)
-        end
-        nodeIds:Add(key, nodeCount)
-        nodeCount = nodeCount + 1
-        return nodeCount - 1
+        integer id = nodes:IdOf(x, y)
+        nodeCount = nodes:GetSize()
+        return id
     end
 
-    private action GroupKey(integer piece) returns text
+    // The group of pieces joining the same two nodes, in either direction
+    private action GroupOf(integer piece) returns integer
         integer a = pieceFrom:Get(piece)
         integer b = pieceTo:Get(piece)
         if a < b
-            return "" + a + "_" + b
+            return nodePairs:IdOf(a, b)
         end
-        return "" + b + "_" + a
+        return nodePairs:IdOf(b, a)
     end
 
-    // Winding number just left and just right of a piece's midpoint. The
-    // test points sit closer to the piece than any other edge does, so they
-    // can't land on the far side of a nearby edge. Results go in
-    // windLeft / windRight.
-    private action Sides(integer piece)
+    // The starting winding for one connected group of pieces (SpreadWindings
+    // works out every other face from it): the winding just left and just
+    // right of a piece's midpoint, by counting edge crossings. The test points
+    // sit closer to the piece than any other edge does, so they can't land on
+    // the far side of a nearby edge. Results go in windLeft / windRight.
+    private action SeedWindings(integer piece)
         number x0 = px0:Get(piece)
         number y0 = py0:Get(piece)
         number x1 = px1:Get(piece)
@@ -1032,6 +1428,457 @@ class PolygonOperations
             end
         end
         return 0
+    end
+
+    // ------------------------------------------------------------ face windings
+
+    // Gives every face the pieces cut the plane into its winding number, for
+    // PieceWindings. The pieces don't cross (FindSplits cut them where they
+    // did), so they form a planar graph; a face is a cycle of half-edges, each
+    // followed by the next one clockwise around the node it runs into.
+    private action FaceWindings
+        integer nodeTotal = nodes:GetSize()
+        MergeNodes(nodeTotal)
+        BuildSegments(nodeTotal)
+        BuildHalfEdges(nodeTotal)
+        LabelFaces()
+        SpreadWindings()
+    end
+
+    // The windings left and right of a group-head piece, into windLeft /
+    // windRight. False if the piece shrank to a point when nodes were merged
+    // (a sliver nothing can be kept from) or its faces have no winding.
+    private action PieceWindings(integer piece) returns boolean
+        integer g = pieceSegment:Get(piece)
+        if g < 0
+            return false
+        end
+        integer h = 2 * g
+        if nodeRep:Get(pieceFrom:Get(piece)) > nodeRep:Get(pieceTo:Get(piece))
+            h = h + 1
+        end
+        integer leftFace = edgeFace:Get(h)
+        integer rightFace = edgeFace:Get(Twin(h))
+        if faceKnown:Get(leftFace) = 0 or faceKnown:Get(rightFace) = 0
+            return false
+        end
+        windLeft = faceWind:Get(leftFace)
+        windRight = faceWind:Get(rightFace)
+        return true
+    end
+
+    // nodeRep: every node within delta of another (on both axes) joins it;
+    // the lowest node of each such cluster stands for all of them. Nodes are
+    // put in grid cells 1024 * delta wide; two nodes within delta of each
+    // other are in the same cell, or both within delta of the border between
+    // theirs, so a node only looks in a neighbouring cell when it is that
+    // close to the border (a tiny fraction of nodes).
+    private action MergeNodes(integer nodeTotal)
+        nodeRep:Empty()
+        integer n = 0
+        repeat while n < nodeTotal
+            nodeRep:Add(n)
+            n = n + 1
+        end
+        if nodeTotal = 0 or delta <= 0
+            return now
+        end
+        number lowX = nodes:GetX(0)
+        number lowY = nodes:GetY(0)
+        n = 1
+        repeat while n < nodeTotal
+            lowX = util:Min2(lowX, nodes:GetX(n))
+            lowY = util:Min2(lowY, nodes:GetY(n))
+            n = n + 1
+        end
+        number cellSize = 1024.0 * delta
+        number margin = 2.0 * delta     // twice delta, so rounding can't hide a neighbour
+
+        cells:Empty()
+        cellFirst:Empty()
+        nodeNextInCell:Empty()
+        nodeCell:Empty()
+        nodeCellX:Empty()
+        nodeCellY:Empty()
+        n = 0
+        repeat while n < nodeTotal
+            // at most span / cellSize, about a million cells across
+            integer cx = util:FloorToInt((nodes:GetX(n) - lowX) / cellSize)
+            integer cy = util:FloorToInt((nodes:GetY(n) - lowY) / cellSize)
+            nodeCellX:Add(cx)
+            nodeCellY:Add(cy)
+            integer cell = cells:IdOf(CellKey(cx), CellKey(cy))
+            if cell = cellFirst:GetSize()
+                cellFirst:Add(-1)
+            end
+            nodeNextInCell:Add(cellFirst:Get(cell))
+            cellFirst:Set(cell, n)
+            nodeCell:Add(cell)
+            n = n + 1
+        end
+
+        n = 0
+        repeat while n < nodeTotal
+            // where the node sits inside its cell decides which neighbours to check
+            number insideX = nodes:GetX(n) - lowX - cast(number, nodeCellX:Get(n)) * cellSize
+            number insideY = nodes:GetY(n) - lowY - cast(number, nodeCellY:Get(n)) * cellSize
+            integer fromX = 0
+            integer toX = 0
+            integer fromY = 0
+            integer toY = 0
+            if insideX <= margin
+                fromX = -1
+            end
+            if cellSize - insideX <= margin
+                toX = 1
+            end
+            if insideY <= margin
+                fromY = -1
+            end
+            if cellSize - insideY <= margin
+                toY = 1
+            end
+            integer dx = fromX
+            repeat while dx <= toX
+                integer dy = fromY
+                repeat while dy <= toY
+                    integer near = nodeCell:Get(n)
+                    if dx not= 0 or dy not= 0
+                        near = cells:Find(CellKey(nodeCellX:Get(n) + dx), CellKey(nodeCellY:Get(n) + dy))
+                    end
+                    if near >= 0
+                        integer m = cellFirst:Get(near)
+                        repeat while m >= 0
+                            if n < m and util:AbsNum(nodes:GetX(n) - nodes:GetX(m)) <= delta and util:AbsNum(nodes:GetY(n) - nodes:GetY(m)) <= delta
+                                integer ra = RepOf(n)
+                                integer rb = RepOf(m)
+                                if ra < rb
+                                    nodeRep:Set(rb, ra)
+                                elseif rb < ra
+                                    nodeRep:Set(ra, rb)
+                                end
+                            end
+                            m = nodeNextInCell:Get(m)
+                        end
+                    end
+                    dy = dy + 1
+                end
+                dx = dx + 1
+            end
+            n = n + 1
+        end
+        n = 0
+        repeat while n < nodeTotal
+            nodeRep:Set(n, RepOf(n))
+            n = n + 1
+        end
+    end
+
+    // A grid cell number as a PointIndex key: divided by 1024 so that
+    // PointIndex's own factor of 1024 gives the cell number back exactly.
+    private action CellKey(integer cell) returns number
+        return cast(number, cell) / 1024.0
+    end
+
+    private action RepOf(integer node) returns integer
+        integer a = node
+        repeat while nodeRep:Get(a) not= a
+            nodeRep:Set(a, nodeRep:Get(nodeRep:Get(a)))
+            a = nodeRep:Get(a)
+        end
+        return a
+    end
+
+    // Segments: the pieces joining the same two merged nodes, with their
+    // crossing weight (how much the winding rises from right to left across
+    // them, measured going low node to high node). Numbered in the order
+    // their first piece comes. A piece's segment is found among those
+    // already starting at its low node (a node has only a few).
+    private action BuildSegments(integer nodeTotal)
+        segmentLow:Empty()
+        segmentHigh:Empty()
+        segmentWeight:Empty()
+        segmentSeed:Empty()
+        segmentNext:Empty()
+        pieceSegment:Empty()
+        nodeSegment:Empty()
+        integer n = 0
+        repeat while n < nodeTotal
+            nodeSegment:Add(-1)
+            n = n + 1
+        end
+        integer pieceTotal = px0:GetSize()
+        integer p = 0
+        repeat while p < pieceTotal
+            integer a = nodeRep:Get(pieceFrom:Get(p))
+            integer b = nodeRep:Get(pieceTo:Get(p))
+            if a = b
+                pieceSegment:Add(-1)
+            else
+                integer low = a
+                integer high = b
+                if b < a
+                    low = b
+                    high = a
+                end
+                integer g = nodeSegment:Get(low)
+                repeat while g >= 0 and segmentHigh:Get(g) not= high
+                    g = segmentNext:Get(g)
+                end
+                if g < 0
+                    g = segmentLow:GetSize()
+                    segmentNext:Add(nodeSegment:Get(low))
+                    nodeSegment:Set(low, g)
+                    segmentLow:Add(low)
+                    segmentHigh:Add(high)
+                    segmentWeight:Add(0)
+                    segmentSeed:Add(-1)
+                end
+                if a < b
+                    segmentWeight:Set(g, segmentWeight:Get(g) + 1)
+                else
+                    segmentWeight:Set(g, segmentWeight:Get(g) - 1)
+                end
+                if segmentSeed:Get(g) = -1 and groupFirst:Get(groupOf:Get(p)) = p
+                    segmentSeed:Set(g, p)
+                end
+                pieceSegment:Add(g)
+            end
+            p = p + 1
+        end
+    end
+
+    // The outgoing half-edges of each merged node, counter-clockwise.
+    private action BuildHalfEdges(integer nodeTotal)
+        integer halfTotal = 2 * segmentLow:GetSize()
+        edgeStart:Empty()
+        integer n = 0
+        repeat while n <= nodeTotal
+            edgeStart:Add(0)
+            n = n + 1
+        end
+        integer h = 0
+        repeat while h < halfTotal
+            integer from = EdgeOrigin(h)
+            edgeStart:Set(from + 1, edgeStart:Get(from + 1) + 1)
+            h = h + 1
+        end
+        n = 1
+        repeat while n <= nodeTotal
+            edgeStart:Set(n, edgeStart:Get(n) + edgeStart:Get(n - 1))
+            n = n + 1
+        end
+
+        edgeList:Empty()
+        edgeList:SetSize(halfTotal)
+        edgeSlot:Empty()
+        edgeSlot:SetSize(halfTotal)
+        edgeTurn:Empty()
+        IntegerBuffer cursor
+        n = 0
+        repeat while n < nodeTotal
+            cursor:Add(edgeStart:Get(n))
+            n = n + 1
+        end
+        h = 0
+        repeat while h < halfTotal
+            integer origin = EdgeOrigin(h)
+            integer dest = EdgeOrigin(Twin(h))
+            edgeTurn:Add(Direction(nodes:GetX(dest) - nodes:GetX(origin), nodes:GetY(dest) - nodes:GetY(origin)))
+            edgeList:Set(cursor:Get(origin), h)
+            cursor:Set(origin, cursor:Get(origin) + 1)
+            h = h + 1
+        end
+
+        // a node has few edges: insertion sort by direction (stable, so ties keep half-edge order)
+        n = 0
+        repeat while n < nodeTotal
+            integer lo = edgeStart:Get(n)
+            integer hi = edgeStart:Get(n + 1)
+            integer i = lo + 1
+            repeat while i < hi
+                integer v = edgeList:Get(i)
+                number turn = edgeTurn:Get(v)
+                integer j = i - 1
+                boolean moving = true
+                repeat while moving
+                    if j < lo
+                        moving = false
+                    elseif edgeTurn:Get(edgeList:Get(j)) > turn
+                        edgeList:Set(j + 1, edgeList:Get(j))
+                        j = j - 1
+                    else
+                        moving = false
+                    end
+                end
+                edgeList:Set(j + 1, v)
+                i = i + 1
+            end
+            i = lo
+            repeat while i < hi
+                edgeSlot:Set(edgeList:Get(i), i)
+                i = i + 1
+            end
+            n = n + 1
+        end
+    end
+
+    // edgeFace: the face on the left of every half-edge, and each face's half-edges.
+    private action LabelFaces
+        integer halfTotal = 2 * segmentLow:GetSize()
+        edgeFace:Empty()
+        integer h = 0
+        repeat while h < halfTotal
+            edgeFace:Add(-1)
+            h = h + 1
+        end
+        integer faces = 0
+        h = 0
+        repeat while h < halfTotal
+            if edgeFace:Get(h) = -1
+                integer k = h
+                repeat while edgeFace:Get(k) = -1
+                    edgeFace:Set(k, faces)
+                    k = NextEdge(k)
+                end
+                faces = faces + 1
+            end
+            h = h + 1
+        end
+
+        faceStart:Empty()
+        integer f = 0
+        repeat while f <= faces
+            faceStart:Add(0)
+            f = f + 1
+        end
+        h = 0
+        repeat while h < halfTotal
+            integer slot = edgeFace:Get(h) + 1
+            faceStart:Set(slot, faceStart:Get(slot) + 1)
+            h = h + 1
+        end
+        f = 1
+        repeat while f <= faces
+            faceStart:Set(f, faceStart:Get(f) + faceStart:Get(f - 1))
+            f = f + 1
+        end
+        faceEdges:Empty()
+        faceEdges:SetSize(halfTotal)
+        IntegerBuffer cursor
+        f = 0
+        repeat while f < faces
+            cursor:Add(faceStart:Get(f))
+            f = f + 1
+        end
+        h = 0
+        repeat while h < halfTotal
+            integer face = edgeFace:Get(h)
+            faceEdges:Set(cursor:Get(face), h)
+            cursor:Set(face, cursor:Get(face) + 1)
+            h = h + 1
+        end
+        faceWind:Empty()
+        faceWind:SetSize(faces)
+        faceKnown:Empty()
+        faceKnown:SetSize(faces)        // all 0: no winding known yet
+    end
+
+    // One winding per connected group of pieces from SeedWindings (test
+    // points beside one piece), then across every half-edge: the face on its right
+    // has the winding on its left minus its crossing weight. A group is
+    // seeded at its first segment with a seed piece: every face belongs to
+    // one group, and the walk reaches all of a group's faces (around a node
+    // each face borders the next), so a face still unknown there means a
+    // group not seeded yet.
+    private action SpreadWindings
+        integer segmentTotal = segmentLow:GetSize()
+        integer g = 0
+        repeat while g < segmentTotal
+            integer p = segmentSeed:Get(g)
+            integer start = -1
+            if p >= 0
+                integer h = 2 * g
+                if nodeRep:Get(pieceFrom:Get(p)) > nodeRep:Get(pieceTo:Get(p))
+                    h = h + 1
+                end
+                start = edgeFace:Get(h)
+            end
+            if start >= 0
+                if faceKnown:Get(start) = 0
+                    SeedWindings(p)
+                    faceWind:Set(start, windLeft)
+                    faceKnown:Set(start, 1)
+                    walk:Empty()
+                    walk:Add(start)
+                    repeat while walk:GetSize() > 0
+                        integer f = walk:RemoveAt(walk:GetSize() - 1)
+                        integer k = faceStart:Get(f)
+                        repeat while k < faceStart:Get(f + 1)
+                            integer e = faceEdges:Get(k)
+                            integer across = edgeFace:Get(Twin(e))
+                            if faceKnown:Get(across) = 0
+                                faceWind:Set(across, faceWind:Get(f) - Crossing(e))
+                                faceKnown:Set(across, 1)
+                                walk:Add(across)
+                            end
+                            k = k + 1
+                        end
+                    end
+                end
+            end
+            g = g + 1
+        end
+    end
+
+    private action Twin(integer h) returns integer
+        if h mod 2 = 0
+            return h + 1
+        end
+        return h - 1
+    end
+
+    private action EdgeOrigin(integer h) returns integer
+        if h mod 2 = 0
+            return segmentLow:Get(h / 2)
+        end
+        return segmentHigh:Get(h / 2)
+    end
+
+    // How much the winding rises from the right of half-edge h to its left.
+    private action Crossing(integer h) returns integer
+        integer w = segmentWeight:Get(h / 2)
+        if h mod 2 = 0
+            return w
+        end
+        return -w
+    end
+
+    // The half-edge after h around the face on h's left: the one just
+    // clockwise of h's twin at the node h runs into.
+    private action NextEdge(integer h) returns integer
+        integer t = Twin(h)
+        integer v = EdgeOrigin(t)
+        integer slot = edgeSlot:Get(t) - 1
+        if slot < edgeStart:Get(v)
+            slot = edgeStart:Get(v + 1) - 1
+        end
+        return edgeList:Get(slot)
+    end
+
+    // A number from 0 up to 4 that orders directions the way their angles
+    // do (counter-clockwise from +x), without trigonometry.
+    private action Direction(number dx, number dy) returns number
+        if dy >= 0
+            if dx >= 0
+                return dy / (dx + dy)
+            end
+            return 1 - dx / (-dx + dy)
+        end
+        if dx < 0
+            return 2 - dy / (-dx - dy)
+        end
+        return 3 + dx / (dx - dy)
     end
 
     private action Chain(IntegerBuffer live, integer planeIndex, Array<Contour> result)

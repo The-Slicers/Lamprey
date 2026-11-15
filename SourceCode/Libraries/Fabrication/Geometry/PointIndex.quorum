@@ -1,0 +1,259 @@
+package Libraries.Fabrication.Geometry
+
+use Libraries.Data.Containers.NumberBuffer
+use Libraries.Data.Containers.IntegerBuffer
+
+/*
+The PointIndex class gives each distinct (x, y) pair a number: 0 for the
+first pair it is asked about, 1 for the next new one, and so on. Asking
+again about a pair it has seen returns the same number. PolygonOperations
+uses it to find where pieces of outline share an end (exact coordinates) and
+which pieces join the same two ends (pairs of end numbers).
+
+It replaces HashTable<text, integer> keyed on "" + x + "_" + y: turning
+every coordinate into text was the slowest step left in PolygonOperations.
+Here the pairs are kept as numbers in a hash table built on NumberBuffer and
+IntegerBuffer, so nothing is boxed or formatted.
+
+Pairs match exactly as the text keys did: the same two numbers, with 0 and
+-0 kept apart (they print differently) and NaN matching NaN.
+
+Attribute: Example
+
+    use Libraries.Fabrication.Geometry.PointIndex
+
+    class Main
+        action Main
+            PointIndex points
+            output points:IdOf(1.5, 2.0)        // 0
+            output points:IdOf(3.0, 4.0)        // 1
+            output points:IdOf(1.5, 2.0)        // 0 again
+            output points:GetSize()             // 2
+            points:Empty()
+            output points:IdOf(3.0, 4.0)        // 0: numbering starts over
+        end
+    end
+*/
+class PointIndex
+    NumberBuffer xs
+    NumberBuffer ys
+    IntegerBuffer nextInBucket      // per point: the next point in its bucket, -1 at the end
+    IntegerBuffer bucketOf          // per point: its bucket
+    IntegerBuffer heads             // per bucket: its first point + 1 (0 = empty bucket)
+    integer bucketCount = 61        // always a prime: see BucketOf
+
+    on create
+        heads:SetSize(61)
+        bucketCount = 61
+    end
+
+    /*
+    The number of a pair, adding it if it is new.
+
+    Attribute: Parameter x The first number of the pair.
+    Attribute: Parameter y The second number of the pair.
+    Attribute: Returns The pair's number: from 0, in the order pairs were first seen.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.PointIndex
+
+        PointIndex points
+        integer a = points:IdOf(0.25, 7)
+        integer b = points:IdOf(0.25, 7)       // a = b
+    */
+    action IdOf(number x, number y) returns integer
+        integer bucket = BucketOf(x, y)
+        integer id = heads:Get(bucket) - 1
+        repeat while id >= 0
+            if Same(xs:Get(id), x) and Same(ys:Get(id), y)
+                return id
+            end
+            id = nextInBucket:Get(id)
+        end
+
+        id = xs:GetSize()
+        xs:Add(x)
+        ys:Add(y)
+        bucketOf:Add(bucket)
+        nextInBucket:Add(heads:Get(bucket) - 1)
+        heads:Set(bucket, id + 1)
+        if xs:GetSize() > bucketCount and bucketCount < 2097143
+            Rehash(NextBucketCount())
+        end
+        return id
+    end
+
+    /*
+    The number of a pair seen before, without adding it.
+
+    Attribute: Parameter x The first number of the pair.
+    Attribute: Parameter y The second number of the pair.
+    Attribute: Returns The pair's number, or -1 if IdOf was never asked about it.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.PointIndex
+
+        PointIndex points
+        integer a = points:IdOf(1, 2)
+        output points:Find(1, 2)       // 0
+        output points:Find(2, 1)       // -1
+    */
+    action Find(number x, number y) returns integer
+        integer id = heads:Get(BucketOf(x, y)) - 1
+        repeat while id >= 0
+            if Same(xs:Get(id), x) and Same(ys:Get(id), y)
+                return id
+            end
+            id = nextInBucket:Get(id)
+        end
+        return -1
+    end
+
+    /*
+    How many distinct pairs there are.
+
+    Attribute: Returns The number of pairs (one more than the highest number given out).
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.PointIndex
+
+        PointIndex points
+        integer id = points:IdOf(1, 1)
+        output points:GetSize()     // 1
+    */
+    action GetSize returns integer
+        return xs:GetSize()
+    end
+
+    /*
+    The first number of a pair.
+
+    Attribute: Parameter id A number from IdOf.
+    Attribute: Returns The pair's x.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.PointIndex
+
+        PointIndex points
+        integer id = points:IdOf(1.5, 2.0)
+        output points:GetX(id)      // 1.5
+    */
+    action GetX(integer id) returns number
+        return xs:Get(id)
+    end
+
+    /*
+    The second number of a pair.
+
+    Attribute: Parameter id A number from IdOf.
+    Attribute: Returns The pair's y.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.PointIndex
+
+        PointIndex points
+        integer id = points:IdOf(1.5, 2.0)
+        output points:GetY(id)      // 2.0
+    */
+    action GetY(integer id) returns number
+        return ys:Get(id)
+    end
+
+    /*
+    Forgets every pair, so numbering starts from 0 again. The memory is kept,
+    and only the buckets that were used are cleared, so emptying a small
+    index is quick however large it once grew.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.PointIndex
+
+        PointIndex points
+        integer id = points:IdOf(1, 2)
+        points:Empty()
+        output points:GetSize()     // 0
+    */
+    action Empty
+        integer i = 0
+        repeat while i < bucketOf:GetSize()
+            heads:Set(bucketOf:Get(i), 0)
+            i = i + 1
+        end
+        xs:Empty()
+        ys:Empty()
+        bucketOf:Empty()
+        nextInBucket:Empty()
+    end
+
+    // Equal numbers always land in the same bucket: the bucket depends only
+    // on the values (cast truncates the same way every time). Collisions
+    // are fine; IdOf compares exactly.
+    //
+    // bucketCount is prime, so the factor 1024 doesn't line whole numbers
+    // (node pairs) up on a few buckets. With a power of two, every whole
+    // number times 1024 fell on a multiple of 1024: about 500 comparisons
+    // per lookup instead of under 1.
+    private action BucketOf(number x, number y) returns integer
+        integer ix = cast(integer, x * 1024.0) mod bucketCount
+        integer iy = cast(integer, y * 1024.0) mod bucketCount
+        // |ix| and |iy| are below bucketCount (at most 2097143), so
+        // ix * 1009 + iy stays inside 32-bit integers
+        integer h = (ix * 1009 + iy) mod bucketCount
+        if h < 0
+            h = h + bucketCount
+        end
+        return h
+    end
+
+    // Primes near successive powers of 4. Past the last one the table stops
+    // growing (lookups get slower, never wrong).
+    private action NextBucketCount returns integer
+        if bucketCount < 251
+            return 251
+        elseif bucketCount < 1021
+            return 1021
+        elseif bucketCount < 4093
+            return 4093
+        elseif bucketCount < 16381
+            return 16381
+        elseif bucketCount < 65521
+            return 65521
+        elseif bucketCount < 262139
+            return 262139
+        elseif bucketCount < 1048573
+            return 1048573
+        end
+        return 2097143
+    end
+
+    // Exactly what equal text keys meant: the same number, except that 0
+    // and -0 print differently ("0.0" and "-0.0"), and NaN prints as NaN.
+    private action Same(number a, number b) returns boolean
+        if a = b
+            if a = 0
+                return ("" + a) = ("" + b)
+            end
+            return true
+        end
+        return a not= a and b not= b
+    end
+
+    private action Rehash(integer newCount)
+        bucketCount = newCount
+        heads:Empty()
+        heads:SetSize(newCount)
+        integer id = 0
+        repeat while id < xs:GetSize()
+            integer bucket = BucketOf(xs:Get(id), ys:Get(id))
+            bucketOf:Set(id, bucket)
+            nextInBucket:Set(id, heads:Get(bucket) - 1)
+            heads:Set(bucket, id + 1)
+            id = id + 1
+        end
+    end
+end

@@ -5,16 +5,20 @@ use Libraries.Fabrication.Geometry.Contour
 use Libraries.Fabrication.Geometry.PolygonOffsetter
 use Tests.LampreyTest
 use Tests.TestModels
+use Libraries.Fabrication.Geometry.GeometryUtilities
 
 /*
 Tests Libraries.Fabrication.Geometry.PolygonOffsetter. Convex corners are
 mitred (stay sharp); corners turning away from the material are rounded in
 16 degree steps, which is why the hole below grows by a little less than a
 quarter circle at each corner (0.776 mm^2 instead of 0.785 for d = 1).
+OffsetRounded rounds the convex corners of an outset too. Where moved edges
+fold over a small step in the outline, the fold must not survive as a spur.
 */
 class PolygonOffsetterTest is LampreyTest
     PolygonOffsetter offsetter
     TestModels models
+    GeometryUtilities util
 
     on create
         SetName("PolygonOffsetter")
@@ -25,6 +29,59 @@ class PolygonOffsetterTest is LampreyTest
         OutsetSquare()
         InsetRing()
         TooFarAndZero()
+        RoundedOutset()
+        NoSpurAtAStep()
+    end
+
+    action RoundedOutset
+        Case("rounded outset of a square")
+        Array<Contour> grown = offsetter:OffsetRounded(models:ListOf(models:Square(0, 0, 20, 0)), -2)
+        ExpectInteger(grown:GetSize(), 1, "one loop")
+        // 400 + 4 sides of 20 x 2, + four quarter circles of radius 2 drawn in 16 degree steps
+        ExpectNumber(models:NetArea(grown), 572.4147, 0.001, "24 x 24 mm with 2 mm round corners")
+        Array<Contour> shrunk = offsetter:OffsetRounded(models:ListOf(models:Square(0, 0, 20, 0)), 2)
+        ExpectNumber(models:NetArea(shrunk), 256, 0.0001, "an inset's convex corners stay sharp either way")
+    end
+
+    action NoSpurAtAStep
+        Case("an inset across a small step has no spur")
+        // a 20 mm square whose top steps down by 0.3 mm halfway along: moved by 2 mm,
+        // the edges beside the step fold over it
+        Contour stepped
+        stepped:AddPoint(0, 0)
+        stepped:AddPoint(20, 0)
+        stepped:AddPoint(20, 20)
+        stepped:AddPoint(10.3, 20)
+        stepped:AddPoint(10.3, 19.7)
+        stepped:AddPoint(0, 19.7)
+        stepped:closed = true
+        Array<Contour> inset = offsetter:Offset(models:ListOf(stepped), 2)
+        ExpectInteger(inset:GetSize(), 1, "one loop")
+        // the exact inset is 253.34 mm^2 (the step's corner rounded); with a spur it was 253.81
+        ExpectNumber(models:NetArea(inset), 253.3068, 0.01, "the area of an inset without the fold")
+        if inset:GetSize() = 1
+            Contour loop = inset:Get(0)
+            number nearest = 100.0
+            integer i = 0
+            repeat while i < loop:GetSize()
+                integer j = 0
+                repeat while j < stepped:GetSize()
+                    integer k = j + 1
+                    if k = stepped:GetSize()
+                        k = 0
+                    end
+                    number gap = util:SegmentDistance2(loop:xs:Get(i), loop:ys:Get(i), stepped:xs:Get(j), stepped:ys:Get(j), stepped:xs:Get(k), stepped:ys:Get(k))
+                    if gap < nearest
+                        nearest = gap
+                    end
+                    j = j + 1
+                end
+                i = i + 1
+            end
+            // 2 mm, less up to 0.02 where a 16 degree arc step cuts inside the true circle;
+            // the spur came within 1.8 mm
+            ExpectTrue(nearest >= 1.95 * 1.95, "every point of the inset is about 2 mm from the outline")
+        end
     end
 
     action InsetSquare

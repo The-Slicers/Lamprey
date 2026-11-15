@@ -41,9 +41,10 @@ class PathGeneratorTest is LampreyTest
 
     /*
     A 20 mm square whose sides are 0.1 mm sawteeth, like a layer of a
-    decimated mesh. The offsetter leaves spurs at the notches; they are cut
-    off, instead of every island being rebuilt with the exact inset on every
-    layer (which made such models take hours).
+    decimated mesh. The offsetter's moved edges fold over at the notches;
+    the folds wind the other way and PolygonOperations drops them, so no
+    loop needs its spurs cut off and no island needs the exact inset (which
+    made such models take hours).
     */
     action JaggedOutline
         Case("a jagged outline")
@@ -83,7 +84,7 @@ class PathGeneratorTest is LampreyTest
         Array<Contour> walls = paths:GetWalls()
         ExpectInteger(walls:GetSize(), 3, "three walls")
         ExpectInteger(paths:GetRebuiltIslandCount(), 0, "no island needed the exact inset")
-        ExpectAtLeast(paths:GetTrimmedLoopCount(), 1, "spurs were cut off instead")
+        ExpectInteger(paths:GetTrimmedLoopCount(), 0, "no spurs to cut off: the folds were dropped")
         integer w = 0
         repeat while w < walls:GetSize()
             Contour wall = walls:Get(w)

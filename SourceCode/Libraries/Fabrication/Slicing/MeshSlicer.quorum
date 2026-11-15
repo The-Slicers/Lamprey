@@ -3,10 +3,10 @@ package Libraries.Fabrication.Slicing
 use Libraries.Containers.Array
 use Libraries.Containers.Number64BitArray
 use Libraries.Containers.Integer32BitArray
-use Libraries.Containers.HashTable
 use Libraries.Compute.Math
 use Libraries.Fabrication.ArgumentChecker
 use Libraries.Fabrication.Geometry.GeometryUtilities
+use Libraries.Fabrication.Geometry.PointIndex
 use Libraries.Fabrication.Geometry.TriangleMesh
 use Libraries.Data.Containers.NumberBuffer
 use Libraries.Data.Containers.IntegerBuffer
@@ -207,21 +207,25 @@ class MeshSlicer
             i = i + 1
         end
 
-        // merge vertices that sit at exactly the same position
-        HashTable<text, integer> seen
+        // merge vertices that sit at exactly the same position: (x, y) gets
+        // a number, then (that number, z) does, so each distinct (x, y, z)
+        // gets one. PointIndex matches numbers the way the text keys
+        // "" + x + "_" + y + "_" + z used to, without formatting each one.
+        PointIndex flat
+        PointIndex points
+        IntegerBuffer firstVertex       // per distinct point: the first vertex there
         mergedIds:Empty()
         integer v = 0
         repeat while v < count
-            text key = "" + vertX:Get(v) + "_" + vertY:Get(v) + "_" + vertZ:Get(v)
-            if seen:HasKey(key)
-                mergedIds:Add(seen:GetValue(key))
-            else
-                seen:Add(key, v)
-                mergedIds:Add(v)
+            integer xy = flat:IdOf(vertX:Get(v), vertY:Get(v))
+            integer point = points:IdOf(cast(number, xy), vertZ:Get(v))
+            if point = firstVertex:GetSize()
+                firstVertex:Add(v)
             end
+            mergedIds:Add(firstVertex:Get(point))
             v = v + 1
         end
-        uniqueVertices = seen:GetSize()
+        uniqueVertices = points:GetSize()
         loaded = true
     end
 

@@ -1,0 +1,83 @@
+package Tests.Fabrication.Geometry
+
+use Libraries.Fabrication.Geometry.PointIndex
+use Tests.LampreyTest
+
+/* Tests Libraries.Fabrication.Geometry.PointIndex, which numbers the end points and end pairs in PolygonOperations. */
+class PointIndexTest is LampreyTest
+    on create
+        SetName("PointIndex")
+    end
+
+    action Run
+        NumbersInOrder()
+        ExactMatching()
+        ManyPoints()
+        EmptyStartsOver()
+    end
+
+    action NumbersInOrder
+        Case("pairs are numbered in the order first seen")
+        PointIndex points
+        ExpectInteger(points:IdOf(1.5, 2.0), 0, "the first pair is 0")
+        ExpectInteger(points:IdOf(3.0, 4.0), 1, "a new pair is 1")
+        ExpectInteger(points:IdOf(1.5, 2.0), 0, "a pair seen before keeps its number")
+        ExpectInteger(points:IdOf(2.0, 1.5), 2, "the order inside a pair matters")
+        ExpectInteger(points:GetSize(), 3, "three distinct pairs")
+        ExpectNumber(points:GetX(2), 2.0, 0, "GetX gives the pair's first number")
+        ExpectNumber(points:GetY(2), 1.5, 0, "GetY gives the pair's second number")
+        ExpectInteger(points:IdOf(4, 7), 3, "integers work as pairs too (node pairs)")
+        ExpectInteger(points:IdOf(4, 7), 3, "and match again")
+    end
+
+    action ExactMatching
+        Case("pairs match exactly, as the old text keys did")
+        PointIndex points
+        integer a = points:IdOf(0.1 + 0.2, 1)
+        ExpectInteger(points:IdOf(0.1 + 0.2, 1), a, "the same computed number matches")
+        ExpectTrue(points:IdOf(0.3, 1) not= a, "0.1 + 0.2 is not 0.3 exactly, so it is a different point")
+        integer zero = points:IdOf(0.0, 5)
+        number negativeZero = 0.0 * -1.0
+        boolean textsDiffer = ("" + negativeZero) not= ("" + 0.0)
+        ExpectTrue((points:IdOf(negativeZero, 5) not= zero) = textsDiffer, "0 and -0 match exactly when their old text keys did")
+        ExpectInteger(points:IdOf(0.0, 5), zero, "0 still matches 0")
+        integer near = points:IdOf(10.0, 10.0)
+        ExpectTrue(points:IdOf(10.000000000001, 10.0) not= near, "points a hair apart are different points")
+    end
+
+    action ManyPoints
+        Case("growing keeps every pair findable")
+        PointIndex points
+        integer i = 0
+        repeat while i < 5000
+            integer id = points:IdOf(i * 0.37, (i mod 71) * 1.5)
+            i = i + 1
+        end
+        ExpectInteger(points:GetSize(), 5000, "5000 distinct pairs")
+        boolean allFound = true
+        i = 0
+        repeat while i < 5000
+            if points:IdOf(i * 0.37, (i mod 71) * 1.5) not= i
+                allFound = false
+            end
+            i = i + 1
+        end
+        ExpectTrue(allFound, "every pair still has its first number after the table grew")
+        ExpectInteger(points:GetSize(), 5000, "asking again adds nothing")
+    end
+
+    action EmptyStartsOver
+        Case("Empty")
+        PointIndex points
+        integer i = 0
+        repeat while i < 300
+            integer id = points:IdOf(i, i)
+            i = i + 1
+        end
+        points:Empty()
+        ExpectInteger(points:GetSize(), 0, "no pairs after Empty")
+        ExpectInteger(points:IdOf(299, 299), 0, "numbering starts over at 0")
+        ExpectInteger(points:IdOf(5, 5), 1, "an old pair is new again")
+        ExpectInteger(points:IdOf(299, 299), 0, "and pairs added after Empty match")
+    end
+end

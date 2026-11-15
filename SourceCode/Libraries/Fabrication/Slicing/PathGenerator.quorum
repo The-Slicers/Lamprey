@@ -9,6 +9,7 @@ use Libraries.Fabrication.Geometry.GeometryUtilities
 use Libraries.Fabrication.Geometry.LineFill
 use Libraries.Fabrication.Geometry.PolygonOffsetter
 use Libraries.Fabrication.Geometry.PolygonOperations
+use Libraries.Fabrication.Geometry.PointIndex
 use Libraries.Data.Containers.NumberBuffer
 use Libraries.Data.Containers.IntegerBuffer
 
@@ -115,6 +116,39 @@ class PathGenerator
 
     Math math
     PolygonOffsetter offsetter
+
+    // The outline FitInset is insetting, indexed once per call for LoopFits
+    // and TrimmedLoop (BuildFitIndex): its edges, from the point before to the
+    // point (as CloserThan and ContainsPoint take them), in grid cells a
+    // little over the distance limit wide, and in horizontal bands.
+    number fitLimit = 0.0
+    NumberBuffer fitAX
+    NumberBuffer fitAY
+    NumberBuffer fitBX
+    NumberBuffer fitBY
+    number fitOriginX = 0.0
+    number fitOriginY = 0.0
+    number fitCell = 1.0
+    PointIndex fitCells
+    IntegerBuffer fitCellFirst      // per cell: its first entry, -1 if none
+    IntegerBuffer fitEntryEdge      // per entry: an edge passing through the cell
+    IntegerBuffer fitEntryNext      // per entry: the cell's next entry, -1 at the end
+    IntegerBuffer fitLongEdges      // edges spanning too many cells, checked for every point
+    integer fitBandCount = 0
+    number fitBandMin = 0.0
+    number fitBandHeight = 1.0
+    IntegerBuffer fitBandStart      // per band: where its edges start in fitBandEdges
+    IntegerBuffer fitBandEdges
+
+    // The same outline's islands (BuildIslandIndex): per loop, 1 if it is a
+    // hole (as IsHole says), its area (as SignedArea2, made positive) and its
+    // bounding box, for OwnerIsland and IslandWithHoles.
+    IntegerBuffer fitHole
+    NumberBuffer fitLoopArea
+    NumberBuffer fitBoxMinX
+    NumberBuffer fitBoxMinY
+    NumberBuffer fitBoxMaxX
+    NumberBuffer fitBoxMaxY
     PolygonOperations ops
     GeometryUtilities util
     LineFill lineFill
@@ -818,6 +852,8 @@ class PathGenerator
     end
 
     private action FitInset(Array<Contour> outline, number depth, boolean count) returns Array<Contour>
+        BuildFitIndex(outline, 0.9 * depth)
+        BuildIslandIndex(outline)
         Array<Contour> raw = offsetter:Offset(outline, depth)
         Array<Contour> kept
         Array<Contour> dropped
@@ -851,14 +887,17 @@ class PathGenerator
             i = i + 1
         end
 
-        // Islands that got no usable loop, or lost one, are rebuilt with an
-        // exact inset (slower, so only for those). If the island really is
-        // too thin, that comes back empty too.
+        // Islands that lost a loop (one LoopFits rejected and trimming
+        // couldn't save) are rebuilt with an exact inset. An island with no
+        // loop at all is simply too thin at this depth: the offsetter's
+        // folds wind the other way and drop out, so its inset is exact, and
+        // rebuilding it to confirm the island is empty (most of ExactInset's
+        // time on spiky models) found nothing in any of 595 tries.
         Array<Contour> result
         integer o = 0
         repeat while o < outline:GetSize()
-            if not IsHole(o, outline)
-                if OwnsAny(o, outline, kept) and not OwnsAny(o, outline, dropped)
+            if fitHole:Get(o) = 0
+                if not OwnsAny(o, outline, dropped)
                     integer k = 0
                     repeat while k < kept:GetSize()
                         Contour good = kept:Get(k)
@@ -889,18 +928,21 @@ class PathGenerator
         return result
     end
 
+    // The smallest island (non-hole loop) of the outline containing (x, y),
+    // or -1. Needs BuildIslandIndex(outline) first (FitInset does it). A loop
+    // whose bounding box can't hold the point is skipped: ContainsPoint
+    // counts no crossing for a point above or below every edge, and none
+    // that changes the answer for one left or right of them all (the 10^-6
+    // mm margin keeps rounding of the crossing point out of it).
     private action OwnerIsland(Array<Contour> outline, number x, number y) returns integer
         integer best = -1
         number bestArea = 0.0
         integer i = 0
         repeat while i < outline:GetSize()
-            if not IsHole(i, outline)
+            if fitHole:Get(i) = 0 and MayContain(i, x, y)
                 Contour shape = outline:Get(i)
                 if shape:ContainsPoint(x, y)
-                    number area = shape:SignedArea2()
-                    if area < 0
-                        area = -area
-                    end
+                    number area = fitLoopArea:Get(i)
                     if best = -1 or area < bestArea
                         best = i
                         bestArea = area
@@ -926,14 +968,15 @@ class PathGenerator
         return false
     end
 
-    // outline[index] plus the holes that start inside it.
+    // outline[index] plus the holes that start inside it. Needs
+    // BuildIslandIndex(outline) first.
     private action IslandWithHoles(integer index, Array<Contour> outline) returns Array<Contour>
         Array<Contour> island
         Contour shape = outline:Get(index)
         island:Add(shape)
         integer i = 0
         repeat while i < outline:GetSize()
-            if i not= index and IsHole(i, outline)
+            if i not= index and fitHole:Get(i) = 1
                 Contour hole = outline:Get(i)
                 if hole:GetSize() > 0
                     if OwnerIsland(outline, hole:xs:Get(0), hole:ys:Get(0)) = index
@@ -1140,10 +1183,12 @@ class PathGenerator
     // Outlines too thin for an outer wall (a spike tip, a fin edge, a
     // spear prong) get one line down their middle instead of nothing.
     private action ThinIslands(Array<Contour> layer, Array<Contour> outerRing, integer p)
+        IntegerBuffer holes
+        HoleFlags(layer, holes)
         integer i = 0
         repeat while i < layer:GetSize()
             Contour con = layer:Get(i)
-            if con:GetSize() >= 3 and not IsHole(i, layer)
+            if con:GetSize() >= 3 and holes:Get(i) = 0
                 // a usable outer wall inside it? (shorter loops get dropped
                 // when the paths are ordered)
                 boolean walled = false
@@ -1285,23 +1330,149 @@ class PathGenerator
 
     // loops[index] is a hole if it lies inside an odd number of the others
     // (Contour:IsInside, so islands that only touch are not holes).
-    private action IsHole(integer index, Array<Contour> loops) returns boolean
-        Contour loop = loops:Get(index)
-        if loop:GetSize() < 3
+    // Which of the outline's loops are holes, and each loop's area and
+    // bounding box, for OwnerIsland and IslandWithHoles (FitInset asks about
+    // the same outline many times).
+    private action BuildIslandIndex(Array<Contour> outline)
+        HoleFlags(outline, fitHole)
+        fitLoopArea:Empty()
+        fitBoxMinX:Empty()
+        fitBoxMinY:Empty()
+        fitBoxMaxX:Empty()
+        fitBoxMaxY:Empty()
+        integer c = 0
+        repeat while c < outline:GetSize()
+            Contour con = outline:Get(c)
+            number area = con:SignedArea2()
+            if area < 0
+                area = -area
+            end
+            fitLoopArea:Add(area)
+            AddBox(con, fitBoxMinX, fitBoxMinY, fitBoxMaxX, fitBoxMaxY)
+            c = c + 1
+        end
+    end
+
+    // Could loop c of the indexed outline contain (x, y)? False only where
+    // ContainsPoint is sure to say no (see OwnerIsland).
+    private action MayContain(integer c, number x, number y) returns boolean
+        if y < fitBoxMinY:Get(c) or y >= fitBoxMaxY:Get(c)
             return false
         end
-        boolean hole = false
-        integer i = 0
-        repeat while i < loops:GetSize()
-            if i not= index
-                Contour other = loops:Get(i)
-                if loop:IsInside(other)
-                    hole = not hole
-                end
-            end
+        return x >= fitBoxMinX:Get(c) - 0.000001 and x <= fitBoxMaxX:Get(c) + 0.000001
+    end
+
+    // Appends the loop's bounding box (an empty box, min above max, for a loop without points).
+    private action AddBox(Contour con, NumberBuffer minX, NumberBuffer minY, NumberBuffer maxX, NumberBuffer maxY)
+        integer n = con:GetSize()
+        if n = 0
+            minX:Add(1.0)
+            minY:Add(1.0)
+            maxX:Add(0.0)
+            maxY:Add(0.0)
+            return now
+        end
+        number loX = con:xs:Get(0)
+        number hiX = loX
+        number loY = con:ys:Get(0)
+        number hiY = loY
+        integer i = 1
+        repeat while i < n
+            loX = util:Min2(loX, con:xs:Get(i))
+            hiX = util:Max2(hiX, con:xs:Get(i))
+            loY = util:Min2(loY, con:ys:Get(i))
+            hiY = util:Max2(hiY, con:ys:Get(i))
             i = i + 1
         end
-        return hole
+        minX:Add(loX)
+        minY:Add(loY)
+        maxX:Add(hiX)
+        maxY:Add(hiY)
+    end
+
+    // flags[i] = 1 if loop i is a hole: an odd number of the other loops
+    // contain it, the same answer as counting loops[i]:IsInside(other) over
+    // the others. The test point Contour:IsInside picks (just inside the
+    // longest edge) is worked out once per loop instead of once per pair, and
+    // a loop whose bounding box can't hold it is skipped (see OwnerIsland).
+    private action HoleFlags(Array<Contour> loops, IntegerBuffer flags)
+        integer count = loops:GetSize()
+        NumberBuffer probeX
+        NumberBuffer probeY
+        NumberBuffer boxMinX
+        NumberBuffer boxMinY
+        NumberBuffer boxMaxX
+        NumberBuffer boxMaxY
+        integer c = 0
+        repeat while c < count
+            Contour con = loops:Get(c)
+            AddBox(con, boxMinX, boxMinY, boxMaxX, boxMaxY)
+            integer n = con:GetSize()
+            if n < 3
+                probeX:Add(0.0)
+                probeY:Add(0.0)
+            else
+                // as Contour:IsInside: the middle of the longest edge, stepped
+                // 1/100000 of its length to the loop's inside
+                integer longest = 0
+                number longestD2 = -1.0
+                integer i = 0
+                repeat while i < n
+                    integer k = (i + 1) mod n
+                    number dx = con:xs:Get(k) - con:xs:Get(i)
+                    number dy = con:ys:Get(k) - con:ys:Get(i)
+                    number d2 = dx * dx + dy * dy
+                    if d2 > longestD2
+                        longest = i
+                        longestD2 = d2
+                    end
+                    i = i + 1
+                end
+                integer after = (longest + 1) mod n
+                number ex = con:xs:Get(after) - con:xs:Get(longest)
+                number ey = con:ys:Get(after) - con:ys:Get(longest)
+                number px = con:xs:Get(longest) + ex / 2.0
+                number py = con:ys:Get(longest) + ey / 2.0
+                number side = 0.00001
+                if con:SignedArea2() < 0
+                    side = -side
+                end
+                px = px - ey * side
+                py = py + ex * side
+                probeX:Add(px)
+                probeY:Add(py)
+            end
+            c = c + 1
+        end
+
+        flags:Empty()
+        integer index = 0
+        repeat while index < count
+            Contour loop = loops:Get(index)
+            boolean hole = false
+            if loop:GetSize() >= 3
+                number x = probeX:Get(index)
+                number y = probeY:Get(index)
+                integer j = 0
+                repeat while j < count
+                    if j not= index
+                        Contour other = loops:Get(j)
+                        if other:GetSize() >= 3 and y >= boxMinY:Get(j) and y < boxMaxY:Get(j) and x >= boxMinX:Get(j) - 0.000001 and x <= boxMaxX:Get(j) + 0.000001
+                            if other:ContainsPoint(x, y)
+                                hole = not hole
+                            end
+                        end
+                    end
+                    j = j + 1
+                end
+            end
+            if hole
+                flags:Add(1)
+            else
+                flags:Add(0)
+            end
+            index = index + 1
+        end
     end
 
     private action LoopFits(Contour loop, Array<Contour> outline, number depth) returns boolean
@@ -1318,10 +1489,10 @@ class PathGenerator
         repeat while v < n
             number x = loop:xs:Get(v)
             number y = loop:ys:Get(v)
-            if not InsideOutline(outline, x, y)
+            if not InsideFitOutline(x, y)
                 return false
             end
-            if CloserThan(outline, x, y, need)
+            if CloserToFitOutline(x, y)
                 return false
             end
             v = v + 1
@@ -1346,7 +1517,7 @@ class PathGenerator
         repeat while v < n
             number x = loop:xs:Get(v)
             number y = loop:ys:Get(v)
-            if InsideOutline(outline, x, y) and not CloserThan(outline, x, y, need)
+            if InsideFitOutline(x, y) and not CloserToFitOutline(x, y)
                 keptIndex:Add(v)
             end
             v = v + 1
@@ -1365,7 +1536,7 @@ class PathGenerator
             if (to - from + n) mod n not= 1
                 number mx = (loop:xs:Get(from) + loop:xs:Get(to)) / 2.0
                 number my = (loop:ys:Get(from) + loop:ys:Get(to)) / 2.0
-                if not InsideOutline(outline, mx, my) or CloserThan(outline, mx, my, need)
+                if not InsideFitOutline(mx, my) or CloserToFitOutline(mx, my)
                     return rejected
                 end
             end
@@ -1390,6 +1561,243 @@ class PathGenerator
     end
 
     // Inside the outline (even-odd over all its loops, so holes count).
+    // Indexes the outline for InsideFitOutline and CloserToFitOutline, which
+    // then give exactly what InsideOutline(outline, x, y) and
+    // CloserThan(outline, x, y, limit) give, from the few edges that can
+    // matter instead of every edge of the layer: an edge closer than limit
+    // to a point passes through one of the 9 cells around it (the cells are
+    // a little wider than limit), and only an edge spanning a point's height
+    // can cross the ray InsideOutline casts from it.
+    private action BuildFitIndex(Array<Contour> outline, number limit)
+        fitLimit = limit
+        fitAX:Empty()
+        fitAY:Empty()
+        fitBX:Empty()
+        fitBY:Empty()
+        IntegerBuffer forInside     // edges of loops of at least 3 points (ContainsPoint skips smaller ones)
+        integer c = 0
+        repeat while c < outline:GetSize()
+            Contour con = outline:Get(c)
+            integer n = con:GetSize()
+            integer j = n - 1
+            integer i = 0
+            repeat while i < n
+                if n >= 3
+                    forInside:Add(fitAX:GetSize())
+                end
+                fitAX:Add(con:xs:Get(j))
+                fitAY:Add(con:ys:Get(j))
+                fitBX:Add(con:xs:Get(i))
+                fitBY:Add(con:ys:Get(i))
+                j = i
+                i = i + 1
+            end
+            c = c + 1
+        end
+
+        fitCells:Empty()
+        fitCellFirst:Empty()
+        fitEntryEdge:Empty()
+        fitEntryNext:Empty()
+        fitLongEdges:Empty()
+        fitBandStart:Empty()
+        fitBandEdges:Empty()
+        fitBandCount = 0
+        integer edgeCount = fitAX:GetSize()
+        if edgeCount = 0
+            return now
+        end
+        number lowX = fitAX:Get(0)
+        number lowY = fitAY:Get(0)
+        number highY = lowY
+        integer e = 1
+        repeat while e < edgeCount
+            lowX = util:Min2(lowX, fitAX:Get(e))
+            lowY = util:Min2(lowY, fitAY:Get(e))
+            highY = util:Max2(highY, fitAY:Get(e))
+            e = e + 1
+        end
+
+        // the grid, for CloserToFitOutline
+        fitOriginX = lowX
+        fitOriginY = lowY
+        fitCell = 1.001 * limit         // a little over limit, so rounding can't hide a neighbour
+        if fitCell <= 0
+            fitCell = 1.0
+        end
+        e = 0
+        repeat while e < edgeCount
+            integer x0 = FitCellOf(util:Min2(fitAX:Get(e), fitBX:Get(e)), fitOriginX)
+            integer x1 = FitCellOf(util:Max2(fitAX:Get(e), fitBX:Get(e)), fitOriginX)
+            integer y0 = FitCellOf(util:Min2(fitAY:Get(e), fitBY:Get(e)), fitOriginY)
+            integer y1 = FitCellOf(util:Max2(fitAY:Get(e), fitBY:Get(e)), fitOriginY)
+            if (x1 - x0 + 1) * (y1 - y0 + 1) > 64
+                fitLongEdges:Add(e)
+            else
+                integer gx = x0
+                repeat while gx <= x1
+                    integer gy = y0
+                    repeat while gy <= y1
+                        integer cell = fitCells:IdOf(FitCellKey(gx), FitCellKey(gy))
+                        if cell = fitCellFirst:GetSize()
+                            fitCellFirst:Add(-1)
+                        end
+                        fitEntryEdge:Add(e)
+                        fitEntryNext:Add(fitCellFirst:Get(cell))
+                        fitCellFirst:Set(cell, fitEntryEdge:GetSize() - 1)
+                        gy = gy + 1
+                    end
+                    gx = gx + 1
+                end
+            end
+            e = e + 1
+        end
+
+        // the bands, for InsideFitOutline (counting sort of the edges by band)
+        fitBandCount = edgeCount / 4
+        if fitBandCount < 1
+            fitBandCount = 1
+        end
+        if fitBandCount > 512
+            fitBandCount = 512
+        end
+        fitBandMin = lowY
+        fitBandHeight = (highY - lowY) / cast(number, fitBandCount)
+        if fitBandHeight <= 0
+            fitBandHeight = 1.0
+        end
+        integer b = 0
+        repeat while b <= fitBandCount
+            fitBandStart:Add(0)
+            b = b + 1
+        end
+        integer k = 0
+        repeat while k < forInside:GetSize()
+            integer edge = forInside:Get(k)
+            integer first = FitBandOf(util:Min2(fitAY:Get(edge), fitBY:Get(edge)))
+            integer last = FitBandOf(util:Max2(fitAY:Get(edge), fitBY:Get(edge)))
+            b = first
+            repeat while b <= last
+                fitBandStart:Set(b + 1, fitBandStart:Get(b + 1) + 1)
+                b = b + 1
+            end
+            k = k + 1
+        end
+        b = 1
+        repeat while b <= fitBandCount
+            fitBandStart:Set(b, fitBandStart:Get(b) + fitBandStart:Get(b - 1))
+            b = b + 1
+        end
+        fitBandEdges:SetSize(fitBandStart:Get(fitBandCount))
+        IntegerBuffer cursor
+        b = 0
+        repeat while b < fitBandCount
+            cursor:Add(fitBandStart:Get(b))
+            b = b + 1
+        end
+        k = 0
+        repeat while k < forInside:GetSize()
+            integer edge2 = forInside:Get(k)
+            integer from = FitBandOf(util:Min2(fitAY:Get(edge2), fitBY:Get(edge2)))
+            integer upTo = FitBandOf(util:Max2(fitAY:Get(edge2), fitBY:Get(edge2)))
+            b = from
+            repeat while b <= upTo
+                fitBandEdges:Set(cursor:Get(b), edge2)
+                cursor:Set(b, cursor:Get(b) + 1)
+                b = b + 1
+            end
+            k = k + 1
+        end
+    end
+
+    // InsideOutline for the outline BuildFitIndex indexed: the crossings of
+    // a ray from (x, y) toward +x, counted exactly as ContainsPoint counts
+    // them, over the edges of the point's band (no other edge can cross it).
+    private action InsideFitOutline(number x, number y) returns boolean
+        boolean inside = false
+        if fitBandCount = 0
+            return false
+        end
+        integer b = FitBandOf(y)
+        integer k = fitBandStart:Get(b)
+        repeat while k < fitBandStart:Get(b + 1)
+            integer e = fitBandEdges:Get(k)
+            number xi = fitBX:Get(e)
+            number yi = fitBY:Get(e)
+            number xj = fitAX:Get(e)
+            number yj = fitAY:Get(e)
+            boolean iAbove = yi > y
+            boolean jAbove = yj > y
+            if iAbove not= jAbove
+                number xCross = xi + (y - yi) * (xj - xi) / (yj - yi)
+                if x < xCross
+                    inside = not inside
+                end
+            end
+            k = k + 1
+        end
+        return inside
+    end
+
+    // CloserThan(outline, x, y, fitLimit) for the outline BuildFitIndex
+    // indexed: the long edges, then the edges in the 9 cells around (x, y).
+    private action CloserToFitOutline(number x, number y) returns boolean
+        number limit2 = fitLimit * fitLimit
+        integer k = 0
+        repeat while k < fitLongEdges:GetSize()
+            integer e = fitLongEdges:Get(k)
+            if util:SegmentDistance2(x, y, fitAX:Get(e), fitAY:Get(e), fitBX:Get(e), fitBY:Get(e)) < limit2
+                return true
+            end
+            k = k + 1
+        end
+        if fitCellFirst:GetSize() = 0
+            return false
+        end
+        integer cx = FitCellOf(x, fitOriginX)
+        integer cy = FitCellOf(y, fitOriginY)
+        integer dx = -1
+        repeat while dx <= 1
+            integer dy = -1
+            repeat while dy <= 1
+                integer cell = fitCells:Find(FitCellKey(cx + dx), FitCellKey(cy + dy))
+                if cell >= 0
+                    integer m = fitCellFirst:Get(cell)
+                    repeat while m >= 0
+                        integer e2 = fitEntryEdge:Get(m)
+                        if util:SegmentDistance2(x, y, fitAX:Get(e2), fitAY:Get(e2), fitBX:Get(e2), fitBY:Get(e2)) < limit2
+                            return true
+                        end
+                        m = fitEntryNext:Get(m)
+                    end
+                end
+                dy = dy + 1
+            end
+            dx = dx + 1
+        end
+        return false
+    end
+
+    private action FitCellOf(number v, number origin) returns integer
+        return util:FloorToInt((v - origin) / fitCell)
+    end
+
+    // A grid cell number as a PointIndex key (PointIndex multiplies by 1024).
+    private action FitCellKey(integer cell) returns number
+        return cast(number, cell) / 1024.0
+    end
+
+    private action FitBandOf(number y) returns integer
+        integer b = util:FloorToInt((y - fitBandMin) / fitBandHeight)
+        if b < 0
+            return 0
+        end
+        if b > fitBandCount - 1
+            return fitBandCount - 1
+        end
+        return b
+    end
+
     private action InsideOutline(Array<Contour> outline, number x, number y) returns boolean
         boolean inside = false
         integer c = 0
@@ -1576,13 +1984,13 @@ class PathGenerator
         return ops:Difference(innerArea, covered, p)
     end
 
-    // Grows `region` outward by r: the region plus everything within r of
-    // its edges on the outside (AddEdgeBands). Exact, like ExactInset.
+    // Grows `region` outward by r: everything within r of it, corners
+    // rounded (the offsetter's rounded outset). It used to be the region plus
+    // AddEdgeBands outward, one union of thousands of overlapping bands; the
+    // outset is about ten times cheaper and matches it to within the bands'
+    // own arc steps.
     private action ExactOutset(Array<Contour> region, number r) returns Array<Contour>
-        ops:Clear()
-        ops:AddContours(region, false)
-        AddEdgeBands(region, r, true)
-        return ops:Resolve(1, plane)
+        return offsetter:OffsetRounded(region, -r)
     end
 
     // Wall w should cover the band w..w+1 widths in. Wherever it couldn't

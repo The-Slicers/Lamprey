@@ -5,6 +5,7 @@ use Libraries.Containers.ByteArray
 use Libraries.System.File
 use Libraries.System.BinaryFileReader
 use Libraries.Language.Support.TextBuilder
+use Libraries.Data.Containers.IntegerBuffer
 
 /*
 The ZipReader class lists and reads the entries of a ZIP archive (a .3mf
@@ -40,10 +41,10 @@ class ZipReader
     ByteArray bytes = undefined
     text where = ""
     Array<text> names
-    Array<integer> flags
-    Array<integer> methods
-    Array<integer> compressedSizes
-    Array<integer> localOffsets
+    IntegerBuffer flags
+    IntegerBuffer methods
+    IntegerBuffer compressedSizes
+    IntegerBuffer localOffsets
 
     /*
     Checks whether an archive has an entry. A missing archive has no

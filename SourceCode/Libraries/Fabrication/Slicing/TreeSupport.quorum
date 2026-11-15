@@ -2218,9 +2218,18 @@ class TreeSupport
             ops:AddPoints(qx, qy, false)
             Array<Contour> piece = ops:Resolve(1, layer)
             if piece:GetSize() > 0 and nearClear:GetSize() > 0
-                Array<Contour> nearPiece = ops:Difference(piece, nearClear, layer)
+                // Only the clearance around the circle can cut it: clipped to a
+                // box just around the circle it gives the same result from a
+                // few dozen edges instead of the whole layer's outline.
+                number boxMinX = cx:Get(i) - r - 0.01
+                number boxMinY = cy:Get(i) - r - 0.01
+                number boxMaxX = cx:Get(i) + r + 0.01
+                number boxMaxY = cy:Get(i) + r + 0.01
+                Array<Contour> nearHere = ops:ClipToBox(nearClear, boxMinX, boxMinY, boxMaxX, boxMaxY)
+                Array<Contour> nearPiece = ops:Difference(piece, nearHere, layer)
                 if cr:Get(i) > tipRadius + 0.001 and farClear:GetSize() > 0
-                    Array<Contour> farPiece = ops:Difference(piece, farClear, layer)
+                    Array<Contour> farHere = ops:ClipToBox(farClear, boxMinX, boxMinY, boxMaxX, boxMaxY)
+                    Array<Contour> farPiece = ops:Difference(piece, farHere, layer)
                     if TotalArea(farPiece) >= 0.5 * TotalArea(nearPiece)
                         nearPiece = farPiece
                     end
@@ -2241,12 +2250,14 @@ class TreeSupport
         // Z gaps, whatever placed the circles: nothing under the model's
         // next topGapLayers layers (tine tops, branches leaning in under an
         // overhang), and nothing within bottomGapLayers above a model surface.
+        // The model layers are clipped to a box around the support first
+        // (the same result, from fewer edges).
         integer above = 1
         repeat while above <= topGapLayers and support:GetSize() > 0
             if layer + above < planeTotal
                 Array<Contour> over = modelLayers:GetLayer(layer + above)
                 if over:GetSize() > 0
-                    support = ops:Difference(support, over, layer)
+                    support = ops:Difference(support, ClipAround(over, support), layer)
                 end
             end
             above = above + 1
@@ -2256,7 +2267,7 @@ class TreeSupport
             if layer - below >= 0
                 Array<Contour> under = modelLayers:GetLayer(layer - below)
                 if under:GetSize() > 0
-                    support = ops:Difference(support, under, layer)
+                    support = ops:Difference(support, ClipAround(under, support), layer)
                 end
             end
             below = below + 1
@@ -2332,6 +2343,30 @@ class TreeSupport
 
         AppendInTravelOrder(layerWalls)
         AppendInTravelOrder(layerLines)
+    end
+
+    // The loops clipped to a box 0.01 mm around the area's loops: all that
+    // can cut the area when subtracted from it.
+    private action ClipAround(Array<Contour> loops, Array<Contour> area) returns Array<Contour>
+        Contour first = area:Get(0)
+        number minX = first:xs:Get(0)
+        number maxX = minX
+        number minY = first:ys:Get(0)
+        number maxY = minY
+        integer a = 0
+        repeat while a < area:GetSize()
+            Contour con = area:Get(a)
+            integer i = 0
+            repeat while i < con:GetSize()
+                minX = util:Min2(minX, con:xs:Get(i))
+                maxX = util:Max2(maxX, con:xs:Get(i))
+                minY = util:Min2(minY, con:ys:Get(i))
+                maxY = util:Max2(maxY, con:ys:Get(i))
+                i = i + 1
+            end
+            a = a + 1
+        end
+        return ops:ClipToBox(loops, minX - 0.01, minY - 0.01, maxX + 0.01, maxY + 0.01)
     end
 
     // unions a list of loop sets pairwise, level by level

@@ -25,6 +25,78 @@ class PolygonOperationsTest is LampreyTest
         Holes()
         Contained()
         Crossings()
+        FaceWindings()
+        ClipToBox()
+    end
+
+    /*
+    ClipToBox keeps what lies inside the box, the right way round, and
+    subtracting the clipped loops from a shape inside the box gives what
+    subtracting all of them does (how TreeSupport cuts branches out of the
+    model's clearance).
+    */
+    action ClipToBox
+        Case("clipping loops to a box")
+        Array<Contour> square = models:ListOf(models:Square(0, 0, 20, 0))
+        Array<Contour> corner = ops:ClipToBox(square, 15, 15, 30, 30)
+        ExpectInteger(corner:GetSize(), 1, "a corner of the square")
+        ExpectNumber(models:NetArea(corner), 25, 0.000001, "its 5 x 5 corner")
+        ExpectNumber(models:NetArea(ops:ClipToBox(square, 5, 5, 8, 9)), 12, 0.000001, "a box inside the square comes back whole")
+        ExpectInteger(ops:ClipToBox(square, 25, 25, 30, 30):GetSize(), 0, "a box beside the square: nothing")
+
+        Array<Contour> ring
+        ring:Add(models:Square(0, 0, 30, 0))
+        ring:Add(models:HoleSquare(10, 10, 10, 0))
+        Array<Contour> clipped = ops:ClipToBox(ring, 5, 5, 15, 15)
+        ExpectInteger(clipped:GetSize(), 2, "the ring's outline and its hole")
+        ExpectNumber(models:NetArea(clipped), 75, 0.000001, "the hole stays a hole: 100 - 25")
+
+        // a square over the hole's corner, minus the ring: the part over the hole
+        Array<Contour> patch = models:ListOf(models:Square(8, 8, 4, 0))
+        Array<Contour> byAll = ops:Difference(patch, ring, 0)
+        Array<Contour> byClipped = ops:Difference(patch, ops:ClipToBox(ring, 7.99, 7.99, 12.01, 12.01), 0)
+        ExpectNumber(models:NetArea(byAll), 4, 0.000001, "subtracting the whole ring")
+        ExpectNumber(models:NetArea(byClipped), 4, 0.000001, "subtracting the ring clipped to the square's box")
+    end
+
+    /*
+    Windings come from the faces the pieces cut the plane into, started once
+    per connected group of pieces. These shapes check the cases that needs
+    to get right: overlaps, a shared edge, a hole, an island inside a hole
+    (a separate group, with its own starting winding), a square across a
+    hole's edge, and a loop that crosses itself.
+    */
+    action FaceWindings
+        Case("face windings give the exact shapes")
+        Array<Contour> square = models:ListOf(models:Square(0, 0, 10, 0))
+        Array<Contour> moved = models:ListOf(models:Square(5, 5, 10, 0))
+        Array<Contour> beside = models:ListOf(models:Square(10, 0, 10, 0))
+        Expect("overlapping union", ops:Union(square, moved, 0), 1, 175)
+        Expect("overlapping intersection", ops:Intersect(square, moved, 0), 1, 25)
+        Expect("overlapping difference", ops:Difference(square, moved, 0), 1, 75)
+        Expect("union along a shared edge", ops:Union(square, beside, 0), 1, 200)
+
+        Array<Contour> ring
+        ring:Add(models:Square(0, 0, 30, 0))
+        ring:Add(models:HoleSquare(10, 10, 10, 0))
+        Array<Contour> island = models:ListOf(models:Square(13, 13, 4, 0))
+        Expect("an island inside a hole", ops:Union(ring, island, 0), 3, 900 - 100 + 16)
+        Expect("a square across the hole's edge", ops:Union(ring, models:ListOf(models:Square(15, 15, 10, 0)), 0), 2, 825)
+
+        // (0,0) (10,10) (10,0) (0,10): a left lobe wound +1 and a right lobe wound -1
+        Contour bowtie
+        bowtie:AddPoint(0, 0)
+        bowtie:AddPoint(10, 10)
+        bowtie:AddPoint(10, 0)
+        bowtie:AddPoint(0, 10)
+        bowtie:closed = true
+        Array<Contour> nothing
+        Expect("a loop that crosses itself keeps its positive lobe", ops:Union(models:ListOf(bowtie), nothing, 0), 1, 25)
+    end
+
+    action Expect(text what, Array<Contour> loops, integer count, number area)
+        ExpectInteger(loops:GetSize(), count, what + ": " + count + " loops")
+        ExpectNumber(models:NetArea(loops), area, 0.000001, what + ": " + area + " mm2")
     end
 
     action Crossings

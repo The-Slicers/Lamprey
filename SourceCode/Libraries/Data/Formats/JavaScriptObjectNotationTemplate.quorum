@@ -2,6 +2,7 @@ package Libraries.Data.Formats
 
 use Libraries.Containers.Array
 use Libraries.Language.Errors.ParseError
+use Libraries.Data.Containers.IntegerBuffer
 
 /*
 The JavaScriptObjectNotationTemplate class edits the top-level values of a
@@ -33,8 +34,8 @@ Attribute: Example
 class JavaScriptObjectNotationTemplate
     text source = ""
     Array<text> keys
-    Array<integer> starts
-    Array<integer> ends
+    IntegerBuffer starts
+    IntegerBuffer ends
     Array<text> replacements
     Array<boolean> replaced
     text additions = ""
