@@ -5,6 +5,7 @@ use Libraries.Fabrication.Geometry.Contour
 use Libraries.Fabrication.Geometry.PolygonOperations
 use Tests.LampreyTest
 use Tests.TestModels
+use Libraries.Data.Containers.IntegerBuffer
 
 /*
 Tests Libraries.Fabrication.Geometry.PolygonOperations with shapes whose
@@ -28,8 +29,8 @@ class PolygonOperationsTest is LampreyTest
 
     action Crossings
         Case("finding loops that cross")
-        Array<integer> first
-        Array<integer> second
+        IntegerBuffer first
+        IntegerBuffer second
         Array<Contour> overlapping
         overlapping:Add(models:Square(0, 0, 10, 0))
         overlapping:Add(models:Square(5, 5, 10, 0))

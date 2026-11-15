@@ -3,6 +3,8 @@ package Libraries.Fabrication.Geometry
 use Libraries.Containers.Array
 use Libraries.Containers.HashTable
 use Libraries.Compute.Math
+use Libraries.Data.Containers.NumberBuffer
+use Libraries.Data.Containers.IntegerBuffer
 
 /*
 The PolygonOperations class does boolean operations on closed loops (union,
@@ -40,33 +42,33 @@ class PolygonOperations
     number snap = 0.000001
     number edgeTol = 0.000000001
 
-    Array<number> ex0
-    Array<number> ey0
-    Array<number> ex1
-    Array<number> ey1
+    NumberBuffer ex0
+    NumberBuffer ey0
+    NumberBuffer ex1
+    NumberBuffer ey1
 
     integer bandCount = 1
     number bandMin = 0.0
     number bandHeight = 1.0
-    Array<integer> edgeFirstBand
-    Array<integer> edgeLastBand
-    Array<integer> bandStart
-    Array<integer> bandEdges
+    IntegerBuffer edgeFirstBand
+    IntegerBuffer edgeLastBand
+    IntegerBuffer bandStart
+    IntegerBuffer bandEdges
 
-    Array<integer> splitEdge
-    Array<number> splitT
-    Array<number> splitX
-    Array<number> splitY
-    Array<integer> splitStart
-    Array<integer> splitOrder
+    IntegerBuffer splitEdge
+    NumberBuffer splitT
+    NumberBuffer splitX
+    NumberBuffer splitY
+    IntegerBuffer splitStart
+    IntegerBuffer splitOrder
 
-    Array<number> px0
-    Array<number> py0
-    Array<number> px1
-    Array<number> py1
-    Array<integer> pieceFrom
-    Array<integer> pieceTo
-    Array<integer> pieceEdge 
+    NumberBuffer px0
+    NumberBuffer py0
+    NumberBuffer px1
+    NumberBuffer py1
+    IntegerBuffer pieceFrom
+    IntegerBuffer pieceTo
+    IntegerBuffer pieceEdge 
 
     HashTable<text, integer> nodeIds
     integer nodeCount = 0
@@ -79,10 +81,10 @@ class PolygonOperations
     integer brokenChain = 0
 
     // FindCrossings: the loop each edge came from, and the crossings found
-    Array<integer> edgeLoop
+    IntegerBuffer edgeLoop
     boolean recordCrossings = false
-    Array<integer> crossA
-    Array<integer> crossB
+    IntegerBuffer crossA
+    IntegerBuffer crossB
 
     /*
     How many loops the last Resolve dropped because their pieces didn't chain into a loop (degenerate input).
@@ -277,9 +279,10 @@ class PolygonOperations
         use Libraries.Containers.Array
         use Libraries.Fabrication.Geometry.Contour
         use Libraries.Fabrication.Geometry.PolygonOperations
+        use Libraries.Data.Containers.NumberBuffer
 
-        Array<number> xs
-        Array<number> ys
+        NumberBuffer xs
+        NumberBuffer ys
         xs:Add(0)
         ys:Add(0)
         xs:Add(10)
@@ -290,9 +293,9 @@ class PolygonOperations
         ops:AddPoints(xs, ys, false)
         Array<Contour> triangle = ops:Resolve(1, 0)
     */
-    action AddPoints(Array<number> xs, Array<number> ys, boolean reversed)
-        Array<number> lx
-        Array<number> ly
+    action AddPoints(NumberBuffer xs, NumberBuffer ys, boolean reversed)
+        NumberBuffer lx
+        NumberBuffer ly
         integer n = xs:GetSize()
         integer i = 0
         repeat while i < n
@@ -461,7 +464,7 @@ class PolygonOperations
         // group pieces that share both end nodes (exact overlaps)
         integer pieceTotal = px0:GetSize()
         HashTable<text, integer> groupHead
-        Array<integer> groupNext
+        IntegerBuffer groupNext
         integer p = 0
         repeat while p < pieceTotal
             groupNext:Add(-1)
@@ -481,7 +484,7 @@ class PolygonOperations
         end
 
         // judge each group once; keep one copy facing the right way
-        Array<integer> live
+        IntegerBuffer live
         p = 0
         repeat while p < pieceTotal
             if groupHead:GetValue(GroupKey(p)) = p
@@ -524,6 +527,7 @@ class PolygonOperations
         use Libraries.Containers.Array
         use Libraries.Fabrication.Geometry.Contour
         use Libraries.Fabrication.Geometry.PolygonOperations
+        use Libraries.Data.Containers.IntegerBuffer
 
         Contour square
         square:AddPoint(0, 0)
@@ -540,13 +544,13 @@ class PolygonOperations
         Array<Contour> loops
         loops:Add(square)
         loops:Add(moved)
-        Array<integer> first
-        Array<integer> second
+        IntegerBuffer first
+        IntegerBuffer second
         PolygonOperations ops
         ops:FindCrossings(loops, first, second)
         output first:GetSize() + " crossings"       // 2: the squares' outlines cross twice
     */
-    action FindCrossings(Array<Contour> loops, Array<integer> pairA, Array<integer> pairB)
+    action FindCrossings(Array<Contour> loops, IntegerBuffer pairA, IntegerBuffer pairB)
         pairA:Empty()
         pairB:Empty()
         Clear()
@@ -641,7 +645,7 @@ class PolygonOperations
             bandEdges:Add(0)
             slot = slot + 1
         end
-        Array<integer> cursor
+        IntegerBuffer cursor
         b = 0
         repeat while b < bandCount
             cursor:Add(bandStart:Get(b))
@@ -815,7 +819,7 @@ class PolygonOperations
             splitOrder:Add(0)
             s = s + 1
         end
-        Array<integer> cursor
+        IntegerBuffer cursor
         e = 0
         repeat while e < edgeCount
             cursor:Add(splitStart:Get(e))
@@ -1030,14 +1034,14 @@ class PolygonOperations
         return 0
     end
 
-    private action Chain(Array<integer> live, integer planeIndex, Array<Contour> result)
+    private action Chain(IntegerBuffer live, integer planeIndex, Array<Contour> result)
         integer liveCount = live:GetSize()
         if liveCount = 0
             return now
         end
 
         // outgoing live pieces per node (counting sort by start node)
-        Array<integer> outStart
+        IntegerBuffer outStart
         integer n = 0
         repeat while n <= nodeCount
             outStart:Add(0)
@@ -1054,13 +1058,13 @@ class PolygonOperations
             outStart:Set(n, outStart:Get(n) + outStart:Get(n - 1))
             n = n + 1
         end
-        Array<integer> outList
+        IntegerBuffer outList
         k = 0
         repeat while k < liveCount
             outList:Add(0)
             k = k + 1
         end
-        Array<integer> cursor
+        IntegerBuffer cursor
         n = 0
         repeat while n < nodeCount
             cursor:Add(outStart:Get(n))
@@ -1134,7 +1138,7 @@ class PolygonOperations
         end
     end
 
-    private action NearStart(Array<integer> live, Array<boolean> used,
+    private action NearStart(IntegerBuffer live, Array<boolean> used,
                              number x, number y) returns integer
         integer k = 0
         repeat while k < live:GetSize()

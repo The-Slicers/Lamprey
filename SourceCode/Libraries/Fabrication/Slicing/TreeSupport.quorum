@@ -10,6 +10,8 @@ use Libraries.Fabrication.Geometry.GeometryUtilities
 use Libraries.Fabrication.Geometry.LineFill
 use Libraries.Fabrication.Geometry.PolygonOffsetter
 use Libraries.Fabrication.Geometry.PolygonOperations
+use Libraries.Data.Containers.NumberBuffer
+use Libraries.Data.Containers.IntegerBuffer
 
 /*
 The TreeSupport class grows tree supports under a model's overhangs. Thin
@@ -131,39 +133,39 @@ class TreeSupport
     ContourLayers modelLayers
     integer planeTotal = 0
     Array<boolean> hasBox
-    Array<number> boxMinX
-    Array<number> boxMinY
-    Array<number> boxMaxX
-    Array<number> boxMaxY
+    NumberBuffer boxMinX
+    NumberBuffer boxMinY
+    NumberBuffer boxMaxX
+    NumberBuffer boxMaxY
 
     // Edge index. Slot p (0 <= p < planeTotal) is the model on layer p,
     // slot planeTotal + p is the bed avoidance region on layer p.
     // Each slot has a uniform cell grid (for Nearest) and horizontal bands
     // (for Inside / row crossings), both stored as offset tables.
-    Array<number> segAx
-    Array<number> segAy
-    Array<number> segBx
-    Array<number> segBy
+    NumberBuffer segAx
+    NumberBuffer segAy
+    NumberBuffer segBx
+    NumberBuffer segBy
     Array<boolean> slotHas
-    Array<number> slotMinX
-    Array<number> slotMinY
-    Array<number> slotMaxX
-    Array<number> slotMaxY
-    Array<number> slotCell
-    Array<integer> slotCols
-    Array<integer> slotRows
-    Array<integer> slotCellBase
-    Array<number> slotBandH
-    Array<integer> slotBands
-    Array<integer> slotBandBase
-    Array<integer> cellStart
-    Array<integer> cellSegs
-    Array<integer> bandStart
-    Array<integer> bandSegs
+    NumberBuffer slotMinX
+    NumberBuffer slotMinY
+    NumberBuffer slotMaxX
+    NumberBuffer slotMaxY
+    NumberBuffer slotCell
+    IntegerBuffer slotCols
+    IntegerBuffer slotRows
+    IntegerBuffer slotCellBase
+    NumberBuffer slotBandH
+    IntegerBuffer slotBands
+    IntegerBuffer slotBandBase
+    IntegerBuffer cellStart
+    IntegerBuffer cellSegs
+    IntegerBuffer bandStart
+    IntegerBuffer bandSegs
 
     // grid over the live branches of one layer
-    Array<integer> ngStart
-    Array<integer> ngItems
+    IntegerBuffer ngStart
+    IntegerBuffer ngItems
     number ngMinX = 0.0
     number ngMinY = 0.0
     number ngCell = 1.0
@@ -171,12 +173,12 @@ class TreeSupport
     integer ngRows = 0
 
     // tines, with a grid of linked lists for the spacing check
-    Array<number> tipX
-    Array<number> tipY
-    Array<integer> tipLayer
-    Array<integer> firstTipOfSurface
-    Array<integer> tgHead
-    Array<integer> tipNext
+    NumberBuffer tipX
+    NumberBuffer tipY
+    IntegerBuffer tipLayer
+    IntegerBuffer firstTipOfSurface
+    IntegerBuffer tgHead
+    IntegerBuffer tipNext
     number tgMinX = 0.0
     number tgMinY = 0.0
     number tgCell = 1.0
@@ -185,7 +187,7 @@ class TreeSupport
 
     // overhang islands of the layer being seeded
     Array<Contour> ovLoops
-    Array<number> ovArea
+    NumberBuffer ovArea
 
     Array<Contour> areas
     Array<Contour> paths
@@ -1008,7 +1010,7 @@ class TreeSupport
             cur:Add(false)
             i = i + 1
         end
-        Array<number> hits
+        NumberBuffer hits
 
         integer layer = 0
         repeat while layer < planeTotal
@@ -1084,7 +1086,7 @@ class TreeSupport
     end
 
     // x positions where the given layer's outlines cross the line y = gy
-    private action RowHits(integer layer, number gy, Array<number> hits)
+    private action RowHits(integer layer, number gy, NumberBuffer hits)
         if layer < 0 or layer >= planeTotal
             return now
         end
@@ -1378,11 +1380,11 @@ class TreeSupport
             return now
         end
 
-        Array<number> nodeX
-        Array<number> nodeY
-        Array<integer> nodeDist      // layers below its tine's top
-        Array<integer> nodeWeight    // how many tines it carries
-        Array<number> nodeR          // radius on its current layer
+        NumberBuffer nodeX
+        NumberBuffer nodeY
+        IntegerBuffer nodeDist      // layers below its tine's top
+        IntegerBuffer nodeWeight    // how many tines it carries
+        NumberBuffer nodeR          // radius on its current layer
         Array<boolean> nodeSq        // last placement still overlapped the model
 
         // tines were added bottom-up, so tipLayer never decreases
@@ -1417,9 +1419,9 @@ class TreeSupport
             end
 
             integer n = nodeX:GetSize()
-            Array<number> circleX
-            Array<number> circleY
-            Array<number> circleR
+            NumberBuffer circleX
+            NumberBuffer circleY
+            NumberBuffer circleR
 
             if layer = 0
                 // on the bed: done
@@ -1434,9 +1436,9 @@ class TreeSupport
                 BuildLayer(0, circleX, circleY, circleR)
             else
                 // 1. where each branch heads on the layer below (tines go straight down)
-                Array<number> newX
-                Array<number> newY
-                Array<integer> near
+                NumberBuffer newX
+                NumberBuffer newY
+                IntegerBuffer near
                 integer i = 0
                 repeat while i < n
                     newX:Add(nodeX:Get(i))
@@ -1504,8 +1506,8 @@ class TreeSupport
                 // the other (they'd only print as one fused blob otherwise),
                 // unless the trunk would carry more than maxBranches tines
                 Array<boolean> alive
-                Array<integer> into
-                Array<number> mergedR
+                IntegerBuffer into
+                NumberBuffer mergedR
                 i = 0
                 repeat while i < n
                     alive:Add(true)
@@ -1604,11 +1606,11 @@ class TreeSupport
                 end
 
                 // 3. keep clear of the model on the layer below
-                Array<number> outX
-                Array<number> outY
-                Array<integer> outDist
-                Array<integer> outWeight
-                Array<number> outR
+                NumberBuffer outX
+                NumberBuffer outY
+                IntegerBuffer outDist
+                IntegerBuffer outWeight
+                NumberBuffer outR
                 Array<boolean> outSq
                 Array<boolean> kept
                 i = 0
@@ -1734,8 +1736,8 @@ class TreeSupport
     // (Leaning toward the centroid of every branch within mergeSearch, as
     // before, pulled a whole overhang's tines into one fused clump.)
     // Returns false if the branch should go straight down.
-    private action LeanTarget(integer i, Array<number> xs, Array<number> ys, Array<integer> ws, Array<number> rs,
-                              Array<integer> found) returns boolean
+    private action LeanTarget(integer i, NumberBuffer xs, NumberBuffer ys, IntegerBuffer ws, NumberBuffer rs,
+                              IntegerBuffer found) returns boolean
         number x = xs:Get(i)
         number y = ys:Get(i)
         integer wi = ws:Get(i)
@@ -1985,10 +1987,10 @@ class TreeSupport
     end
 
     private action CatchEdge(integer layer, number x, number y, number branchR,
-                             Array<number> circleX, Array<number> circleY, Array<number> circleR,
-                             Array<number> outX, Array<number> outY,
-                             Array<integer> outDist, Array<integer> outWeight,
-                             Array<number> outR, Array<boolean> outSq)
+                             NumberBuffer circleX, NumberBuffer circleY, NumberBuffer circleR,
+                             NumberBuffer outX, NumberBuffer outY,
+                             IntegerBuffer outDist, IntegerBuffer outWeight,
+                             NumberBuffer outR, Array<boolean> outSq)
         number r = branchR
         if layer + 1 < baseLayers
             r = r + baseFlare * cast(number, baseLayers - layer - 1) / cast(number, baseLayers)
@@ -2084,7 +2086,7 @@ class TreeSupport
     end
 
     // grid over one layer's branches, for neighbour and merge searches
-    private action BuildNodeGrid(Array<number> xs, Array<number> ys, number cell)
+    private action BuildNodeGrid(NumberBuffer xs, NumberBuffer ys, number cell)
         ngStart:Empty()
         ngItems:Empty()
         ngCols = 0
@@ -2137,7 +2139,7 @@ class TreeSupport
             ngStart:Set(k, ngStart:Get(k) + ngStart:Get(k - 1))
             k = k + 1
         end
-        Array<integer> fill
+        IntegerBuffer fill
         k = 0
         repeat while k < total
             fill:Add(ngStart:Get(k))
@@ -2153,7 +2155,7 @@ class TreeSupport
     end
 
     // indices of branches in the grid cells within `reach` of (x, y)
-    private action NodeCandidates(number x, number y, number reach, Array<integer> result)
+    private action NodeCandidates(number x, number y, number reach, IntegerBuffer result)
         if ngCols = 0
             return now
         end
@@ -2182,7 +2184,7 @@ class TreeSupport
     // Building a layer's support
     // ------------------------------------------------------------------
 
-    private action BuildLayer(integer layer, Array<number> cx, Array<number> cy, Array<number> cr)
+    private action BuildLayer(integer layer, NumberBuffer cx, NumberBuffer cy, NumberBuffer cr)
         if cx:GetSize() = 0
             return now
         end
@@ -2201,8 +2203,8 @@ class TreeSupport
         end
 
         Array<Array<Contour>> pieces
-        Array<number> qx
-        Array<number> qy
+        NumberBuffer qx
+        NumberBuffer qy
         integer i = 0
         repeat while i < cx:GetSize()
             number r = cr:Get(i)
@@ -2421,7 +2423,7 @@ class TreeSupport
     end
 
     // makes a ccw polygon around (x, y): 8 sides when thin, 16 when thick
-    private action CirclePoints(number x, number y, number r, Array<number> qx, Array<number> qy)
+    private action CirclePoints(number x, number y, number r, NumberBuffer qx, NumberBuffer qy)
        integer sides = 8
        number cs = 0.7071067811865476 // cos 45
        number sn = 0.7071067811865476 // sin 45
@@ -2637,7 +2639,7 @@ class TreeSupport
             cellStart:Set(cellBase + k, running)
             k = k + 1
         end
-        Array<integer> fillAt
+        IntegerBuffer fillAt
         k = 0
         repeat while k < cellTotal
             fillAt:Add(cellStart:Get(cellBase + k))
@@ -2694,7 +2696,7 @@ class TreeSupport
             bandStart:Set(bandBase + k, runningBands)
             k = k + 1
         end
-        Array<integer> bandAt
+        IntegerBuffer bandAt
         k = 0
         repeat while k < bands
             bandAt:Add(bandStart:Get(bandBase + k))

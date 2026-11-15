@@ -7,6 +7,7 @@ use Libraries.Fabrication.Geometry.Contour
 use Libraries.Fabrication.Geometry.ContourSimplifier
 use Libraries.Fabrication.Geometry.GeometryUtilities
 use Libraries.Fabrication.Geometry.PolygonOperations
+use Libraries.Data.Containers.IntegerBuffer
 
 /*
 The ContourGenerator class joins MeshSlicer's segments into the outlines of
@@ -305,15 +306,15 @@ class ContourGenerator
         mergedCount = 0
         mergedPlanes = 0
 
-        Array<integer> planeOf
+        IntegerBuffer planeOf
         integer s = 0
         repeat while s < segments:GetSize()
             Segment seg = segments:Get(s)
             planeOf:Add(seg:planeIndex)
             s = s + 1
         end
-        Array<integer> starts
-        Array<integer> order
+        IntegerBuffer starts
+        IntegerBuffer order
         util:BucketByPlane(planeOf, planeCount, starts, order)
 
         integer p = 0
@@ -327,7 +328,7 @@ class ContourGenerator
     end
 
     // builds the contours of one layer from segment order[from ... to]
-    private action ChainPlane(Array<Segment> segments, Array<integer> order, integer from, integer to,
+    private action ChainPlane(Array<Segment> segments, IntegerBuffer order, integer from, integer to,
                               integer planeIndex, number maxGap, Array<Contour> result)
         integer n = to - from
         Array<boolean> used
@@ -430,8 +431,8 @@ class ContourGenerator
             i = i + 1
         end
 
-        Array<integer> pairA
-        Array<integer> pairB
+        IntegerBuffer pairA
+        IntegerBuffer pairB
         ops:FindCrossings(closedLoops, pairA, pairB)
         if pairA:GetSize() = 0
             return loops
@@ -518,7 +519,7 @@ class ContourGenerator
 
     // follows segments from the seed until chain closes, runs out,
     // or reaches a segment that is already in use
-    private action WalkChain(Array<Segment> segments, Array<integer> order, integer from, integer seedLocal,
+    private action WalkChain(Array<Segment> segments, IntegerBuffer order, integer from, integer seedLocal,
                              HashTable<text, integer> startMap, Array<boolean> used) returns Contour
         Contour c
         Segment first = segments:Get(order:Get(from + seedLocal))

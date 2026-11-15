@@ -1,0 +1,149 @@
+package Tests.Data
+
+use Libraries.Data.Containers.NumberBuffer
+use Libraries.Data.Containers.IntegerBuffer
+use Libraries.Language.Errors.InvalidLocationError
+use Tests.LampreyTest
+
+/* Tests Libraries.Data.Containers.NumberBuffer and IntegerBuffer, which hold every coordinate and index list in the slicer. */
+class BufferTest is LampreyTest
+    on create
+        SetName("NumberBuffer and IntegerBuffer")
+    end
+
+    action Run
+        AddAndGet()
+        GrowsPastFirstBlock()
+        InsertAndRemove()
+        EmptyReusesMemory()
+        SetSizeZeroFills()
+        BoundsAreChecked()
+    end
+
+    action AddAndGet
+        Case("Add, Get, Set and GetSize")
+        NumberBuffer xs
+        ExpectInteger(xs:GetSize(), 0, "a new buffer is empty")
+        xs:Add(1.5)
+        xs:Add(2)
+        xs:Set(0, 3.25)
+        ExpectInteger(xs:GetSize(), 2, "two numbers added")
+        ExpectNumber(xs:Get(0), 3.25, 0, "Set replaces the first number")
+        ExpectNumber(xs:Get(1), 2.0, 0, "an integer added to a NumberBuffer reads back as a number")
+
+        IntegerBuffer ids
+        ids:Add(-1)
+        ids:Add(7)
+        ExpectInteger(ids:Get(0) + ids:Get(1), 6, "integers read back exactly")
+    end
+
+    action GrowsPastFirstBlock
+        Case("growing keeps every item")
+        NumberBuffer xs
+        IntegerBuffer ids
+        integer i = 0
+        repeat while i < 1000
+            xs:Add(i * 0.5)
+            ids:Add(i)
+            i = i + 1
+        end
+        ExpectInteger(xs:GetSize(), 1000, "1000 numbers")
+        ExpectInteger(ids:GetSize(), 1000, "1000 integers")
+        ExpectNumber(xs:Get(0), 0.0, 0, "the first number survives growing")
+        ExpectNumber(xs:Get(15), 7.5, 0, "the last number of the first block survives")
+        ExpectNumber(xs:Get(999), 499.5, 0, "the last number")
+        ExpectInteger(ids:Get(16), 16, "the first integer of the second block")
+        ExpectInteger(ids:Get(999), 999, "the last integer")
+        // full precision: a Number64BitArray holds doubles, not floats
+        xs:Add(0.1 + 0.2)
+        ExpectTrue(xs:Get(1000) = 0.1 + 0.2, "numbers keep full 64-bit precision")
+    end
+
+    action InsertAndRemove
+        Case("Add at a location and RemoveAt")
+        NumberBuffer xs
+        xs:Add(1)
+        xs:Add(3)
+        xs:Add(1, 2)
+        xs:Add(0, 0)
+        xs:Add(xs:GetSize(), 4)
+        ExpectInteger(xs:GetSize(), 5, "five numbers after inserting")
+        integer i = 0
+        boolean ordered = true
+        repeat while i < 5
+            if xs:Get(i) not= i
+                ordered = false
+            end
+            i = i + 1
+        end
+        ExpectTrue(ordered, "inserts land in order: 0, 1, 2, 3, 4")
+        ExpectNumber(xs:RemoveAt(xs:GetSize() - 1), 4, 0, "RemoveAt returns the last number")
+        ExpectNumber(xs:RemoveAt(0), 0, 0, "RemoveAt returns the first number")
+        ExpectInteger(xs:GetSize(), 3, "three numbers left")
+        ExpectNumber(xs:Get(0), 1, 0, "the rest moved down")
+        ExpectNumber(xs:Get(2), 3, 0, "the rest kept their order")
+    end
+
+    action EmptyReusesMemory
+        Case("Empty")
+        IntegerBuffer ids
+        integer i = 0
+        repeat while i < 40
+            ids:Add(i)
+            i = i + 1
+        end
+        ids:Empty()
+        ExpectInteger(ids:GetSize(), 0, "Empty leaves no items")
+        ids:Add(5)
+        ExpectInteger(ids:GetSize(), 1, "adding after Empty starts from the front")
+        ExpectInteger(ids:Get(0), 5, "the new item is at 0")
+    end
+
+    action SetSizeZeroFills
+        Case("SetSize")
+        NumberBuffer xs
+        xs:Add(9)
+        xs:Add(9)
+        xs:Empty()
+        xs:SetSize(3)
+        ExpectInteger(xs:GetSize(), 3, "SetSize sets the count")
+        ExpectNumber(xs:Get(1), 0, 0, "slots reused after Empty are cleared to 0")
+        xs:SetSize(100)
+        ExpectNumber(xs:Get(99), 0, 0, "slots past the old capacity are 0")
+        xs:SetSize(1)
+        ExpectInteger(xs:GetSize(), 1, "SetSize can shrink")
+    end
+
+    action BoundsAreChecked
+        Case("reading past the end stops with InvalidLocationError")
+        NumberBuffer xs
+        xs:Add(1)
+        xs:Add(2)
+        xs:Empty()
+        xs:Add(1)
+        boolean stopped = false
+        check
+            number stale = xs:Get(1)
+        detect e is InvalidLocationError
+            stopped = true
+        end
+        ExpectTrue(stopped, "Get past the count fails even where old values are still in memory")
+
+        IntegerBuffer ids
+        boolean setStopped = false
+        check
+            ids:Set(0, 1)
+        detect setError is InvalidLocationError
+            setStopped = true
+        end
+        ExpectTrue(setStopped, "Set on an empty buffer fails")
+
+        boolean removeStopped = false
+        check
+            integer gone = ids:RemoveAt(0)
+        detect removeError is InvalidLocationError
+            removeStopped = true
+        end
+        ExpectTrue(removeStopped, "RemoveAt on an empty buffer fails")
+    end
+end

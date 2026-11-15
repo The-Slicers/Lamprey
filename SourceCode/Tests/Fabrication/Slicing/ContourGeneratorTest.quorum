@@ -9,6 +9,7 @@ use Libraries.Fabrication.Slicing.Segment
 use Libraries.Fabrication.Slicing.ContourGenerator
 use Tests.LampreyTest
 use Tests.TestModels
+use Libraries.Data.Containers.NumberBuffer
 
 /*
 Tests Libraries.Fabrication.Slicing.ContourGenerator: from a sliced cube,
@@ -39,7 +40,7 @@ class ContourGeneratorTest is LampreyTest
         mesh:Load(models:Cube())
         MeshSlicer slicer
         slicer:SetTriangles(mesh)
-        Array<number> planes = slicer:BuildPlanes(0, 20, 0.2)
+        NumberBuffer planes = slicer:BuildPlanes(0, 20, 0.2)
         ContourGenerator generator
         Array<Contour> contours = generator:Build(slicer:Slice(planes), planes:GetSize(), 0.2)
         ExpectInteger(contours:GetSize(), 100, "one loop per layer")

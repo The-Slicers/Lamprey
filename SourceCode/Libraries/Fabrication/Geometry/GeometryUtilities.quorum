@@ -2,6 +2,8 @@ package Libraries.Fabrication.Geometry
 
 use Libraries.Containers.Array
 use Libraries.Compute.Math
+use Libraries.Data.Containers.NumberBuffer
+use Libraries.Data.Containers.IntegerBuffer
 
 /*
 The GeometryUtilities class holds the small numeric helpers the geometry and
@@ -135,18 +137,18 @@ class GeometryUtilities
 
     Attribute: Example
 
-        use Libraries.Containers.Array
         use Libraries.Fabrication.Geometry.GeometryUtilities
+        use Libraries.Data.Containers.NumberBuffer
 
         GeometryUtilities util
-        Array<number> crossings
+        NumberBuffer crossings
         crossings:Add(12.5)
         crossings:Add(3.0)
         crossings:Add(7.25)
         util:SortNumbers(crossings)
         output crossings:Get(0)      // 3.0
     */
-    action SortNumbers(Array<number> a)
+    action SortNumbers(NumberBuffer a)
         integer i = 1
         repeat while i < a:GetSize()
             number val = a:Get(i)
@@ -294,16 +296,16 @@ class GeometryUtilities
 
     Attribute: Example
 
-        use Libraries.Containers.Array
         use Libraries.Fabrication.Geometry.GeometryUtilities
+        use Libraries.Data.Containers.IntegerBuffer
 
         GeometryUtilities util
-        Array<integer> planeOf
+        IntegerBuffer planeOf
         planeOf:Add(1)
         planeOf:Add(0)
         planeOf:Add(1)
-        Array<integer> starts
-        Array<integer> order
+        IntegerBuffer starts
+        IntegerBuffer order
         util:BucketByPlane(planeOf, 2, starts, order)
         // plane 1 owns order[starts[1]] up to order[starts[2]]: items 0 and 2
         integer i = starts:Get(1)
@@ -312,8 +314,8 @@ class GeometryUtilities
             i = i + 1
         end
     */
-    action BucketByPlane(Array<integer> planeOf, integer planeCount,
-                         Array<integer> starts, Array<integer> order)
+    action BucketByPlane(IntegerBuffer planeOf, integer planeCount,
+                         IntegerBuffer starts, IntegerBuffer order)
         starts:Empty()
         order:Empty()
         integer p = 0
@@ -343,7 +345,7 @@ class GeometryUtilities
             order:Add(0)
             i = i + 1
         end
-        Array<integer> cursor
+        IntegerBuffer cursor
         p = 0
         repeat while p < planeCount
             cursor:Add(starts:Get(p))

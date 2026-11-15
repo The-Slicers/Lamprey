@@ -8,6 +8,7 @@ use Libraries.Fabrication.Slicing.PathGenerator
 use Libraries.Fabrication.Slicing.PathOrderer
 use Tests.LampreyTest
 use Tests.TestModels
+use Libraries.Data.Containers.IntegerBuffer
 
 /* Tests Libraries.Fabrication.Slicing.PathOrderer: printing order, roles, seams and cleanup. */
 class PathOrdererTest is LampreyTest
@@ -144,7 +145,7 @@ class PathOrdererTest is LampreyTest
         Array<Contour> ordered = orderer:Order(outlines, paths:GetWalls(), paths:GetSkin(), paths:GetInfill(), planes)
 
         // layer 99: walls, then the top surface, then the ironing over it
-        Array<integer> layerRoles
+        IntegerBuffer layerRoles
         Array<Contour> surface
         integer i = 0
         repeat while i < ordered:GetSize()

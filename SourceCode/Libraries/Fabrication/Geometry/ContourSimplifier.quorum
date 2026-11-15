@@ -1,6 +1,8 @@
 package Libraries.Fabrication.Geometry
 
 use Libraries.Containers.Array
+use Libraries.Data.Containers.NumberBuffer
+use Libraries.Data.Containers.IntegerBuffer
 
 /*
 The ContourSimplifier class removes points that hardly change a path's shape,
@@ -71,8 +73,8 @@ class ContourSimplifier
             return now
         end
 
-        Array<number> newXs
-        Array<number> newYs
+        NumberBuffer newXs
+        NumberBuffer newYs
         i = 0
         repeat while i < n
             if keep:Get(i)
@@ -216,8 +218,8 @@ class ContourSimplifier
     /* Marks the points between first and last that must stay (index n means point 0). */
     private action MarkRange(Contour con, integer first, integer last, number tol2, Array<boolean> keep)
         integer n = con:GetSize()
-        Array<integer> stackA
-        Array<integer> stackB
+        IntegerBuffer stackA
+        IntegerBuffer stackB
         stackA:Add(first)
         stackB:Add(last)
 

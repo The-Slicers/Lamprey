@@ -1,0 +1,271 @@
+package Libraries.Data.Containers
+
+use Libraries.Containers.Number64BitArray
+use Libraries.Language.Errors.InvalidLocationError
+
+/*
+The NumberBuffer class is a growable list of numbers, stored in a
+Number64BitArray (a plain Java double[]) so that reading and writing an item
+does not box it into an object the way Array<number> does. It has the same
+action names as Array, so code written for Array<number> works unchanged as
+long as it only uses Add, Get, Set, GetSize, SetSize, Empty and RemoveAt.
+
+Number64BitArray on its own is awkward to use directly: it has no storage
+until SetSize is called (GetSize crashes before that), SetSize throws the old
+items away instead of copying them, and it has no Add. NumberBuffer keeps its
+own count and capacity and copies the items when it grows.
+
+Empty keeps the memory and only resets the count, so a buffer that is filled
+and emptied over and over (as PolygonOperations does on every call) allocates
+nothing after the first fill.
+
+Attribute: Example
+
+    use Libraries.Data.Containers.NumberBuffer
+
+    class Main
+        action Main
+            NumberBuffer xs
+            xs:Add(1.5)
+            xs:Add(2.5)
+            xs:Set(0, 3.0)
+            output xs:Get(0) + xs:Get(1)      // 5.5
+            output xs:GetSize()               // 2
+            xs:Empty()
+            output xs:GetSize()               // 0
+        end
+    end
+*/
+class NumberBuffer
+    Number64BitArray items
+    integer capacity = 0
+    integer count = 0
+
+    /* A new Number64BitArray has no storage until SetSize, so give it some. */
+    on create
+        items:SetSize(16)
+        capacity = 16
+    end
+
+    /*
+    Adds a number to the end.
+
+    Attribute: Parameter value The number to add.
+
+    Attribute: Example
+
+        use Libraries.Data.Containers.NumberBuffer
+
+        NumberBuffer xs
+        xs:Add(4.2)
+    */
+    action Add(number value)
+        if count = capacity
+            Reserve(count + 1)
+        end
+        items:Set(count, value)
+        count = count + 1
+    end
+
+    /*
+    Inserts a number at a location, moving the items from there on up by one.
+    The location can be GetSize(), which adds to the end.
+
+    Attribute: Parameter location Where the number goes, from 0 to GetSize().
+    Attribute: Parameter value The number to insert.
+
+    Attribute: Example
+
+        use Libraries.Data.Containers.NumberBuffer
+
+        NumberBuffer xs
+        xs:Add(1)
+        xs:Add(3)
+        xs:Add(1, 2)        // 1, 2, 3
+    */
+    action Add(integer location, number value)
+        if location < 0 or location > count
+            Fail(location)
+        end
+        if count = capacity
+            Reserve(count + 1)
+        end
+        integer i = count
+        repeat while i > location
+            items:Set(i, items:Get(i - 1))
+            i = i - 1
+        end
+        items:Set(location, value)
+        count = count + 1
+    end
+
+    /*
+    Returns the number at a location.
+
+    Attribute: Parameter location From 0 to GetSize() - 1.
+    Attribute: Returns The number stored there.
+
+    Attribute: Example
+
+        use Libraries.Data.Containers.NumberBuffer
+
+        NumberBuffer xs
+        xs:Add(7.5)
+        number first = xs:Get(0)
+    */
+    action Get(integer location) returns number
+        if location < 0 or location >= count
+            Fail(location)
+        end
+        return items:Get(location)
+    end
+
+    /*
+    Replaces the number at a location.
+
+    Attribute: Parameter location From 0 to GetSize() - 1.
+    Attribute: Parameter value The new number.
+
+    Attribute: Example
+
+        use Libraries.Data.Containers.NumberBuffer
+
+        NumberBuffer xs
+        xs:Add(7.5)
+        xs:Set(0, 8.0)
+    */
+    action Set(integer location, number value)
+        if location < 0 or location >= count
+            Fail(location)
+        end
+        items:Set(location, value)
+    end
+
+    /*
+    Removes the number at a location, moving the items after it down by one.
+
+    Attribute: Parameter location From 0 to GetSize() - 1.
+    Attribute: Returns The number that was removed.
+
+    Attribute: Example
+
+        use Libraries.Data.Containers.NumberBuffer
+
+        NumberBuffer xs
+        xs:Add(1)
+        xs:Add(2)
+        number last = xs:RemoveAt(xs:GetSize() - 1)     // 2
+    */
+    action RemoveAt(integer location) returns number
+        if location < 0 or location >= count
+            Fail(location)
+        end
+        number removed = items:Get(location)
+        integer i = location + 1
+        repeat while i < count
+            items:Set(i - 1, items:Get(i))
+            i = i + 1
+        end
+        count = count - 1
+        return removed
+    end
+
+    /*
+    The number of items.
+
+    Attribute: Returns How many numbers the buffer holds.
+
+    Attribute: Example
+
+        use Libraries.Data.Containers.NumberBuffer
+
+        NumberBuffer xs
+        output xs:GetSize()     // 0
+    */
+    action GetSize returns integer
+        return count
+    end
+
+    /*
+    Makes the buffer hold exactly size items. Items past the old end are 0.
+
+    Attribute: Parameter size The new number of items.
+
+    Attribute: Example
+
+        use Libraries.Data.Containers.NumberBuffer
+
+        NumberBuffer xs
+        xs:SetSize(3)
+        xs:Set(2, 9.0)      // 0, 0, 9
+    */
+    action SetSize(integer size)
+        if size < 0
+            Fail(size)
+        end
+        Reserve(size)
+        // Empty keeps old values in memory, so clear the slots being reused
+        integer i = count
+        repeat while i < size
+            items:Set(i, 0.0)
+            i = i + 1
+        end
+        count = size
+    end
+
+    /*
+    Removes every item. The memory is kept for the next items, so nothing is
+    allocated until the buffer grows past its largest size so far.
+
+    Attribute: Example
+
+        use Libraries.Data.Containers.NumberBuffer
+
+        NumberBuffer xs
+        xs:Add(1)
+        xs:Empty()
+        output xs:GetSize()     // 0
+    */
+    action Empty
+        count = 0
+    end
+
+    /*
+    Makes room for at least size items without growing again. Useful before
+    adding many items whose total is known.
+
+    Attribute: Parameter size How many items there must be room for.
+
+    Attribute: Example
+
+        use Libraries.Data.Containers.NumberBuffer
+
+        NumberBuffer xs
+        xs:Reserve(1000)
+    */
+    action Reserve(integer size)
+        if size <= capacity
+            return now
+        end
+        integer grown = capacity * 2
+        if grown < size
+            grown = size
+        end
+        // SetSize on a Number64BitArray throws the old items away: copy them
+        Number64BitArray bigger
+        bigger:SetSize(grown)
+        integer i = 0
+        repeat while i < count
+            bigger:Set(i, items:Get(i))
+            i = i + 1
+        end
+        items = bigger
+        capacity = grown
+    end
+
+    private action Fail(integer location)
+        InvalidLocationError error
+        error:RegenerateMessageWithIndexAndSize(location, count)
+        alert(error)
+    end
+end

@@ -2,6 +2,7 @@ package Libraries.Fabrication.Geometry
 
 use Libraries.Containers.Array
 use Libraries.Compute.Math
+use Libraries.Data.Containers.NumberBuffer
 
 /*
 The PolygonOffsetter class moves closed loops inward or outward by a fixed
@@ -83,8 +84,8 @@ class PolygonOffsetter
         end
 
         ops:Clear()
-        Array<number> qx
-        Array<number> qy
+        NumberBuffer qx
+        NumberBuffer qy
         integer i = 0
         repeat while i < loops:GetSize()
             Contour con = loops:Get(i)
@@ -101,7 +102,7 @@ class PolygonOffsetter
 
     // offsets every corner of the loop by d and writes
     // result into qx / qy
-    private action RawLoop(Contour con, number d, Array<number> qx, Array<number> qy)
+    private action RawLoop(Contour con, number d, NumberBuffer qx, NumberBuffer qy)
         integer n = con:GetSize()
         integer i = 0
         repeat while i < n

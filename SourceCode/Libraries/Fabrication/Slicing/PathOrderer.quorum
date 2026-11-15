@@ -7,6 +7,8 @@ use Libraries.Fabrication.Geometry.Contour
 use Libraries.Fabrication.Geometry.ContourLayers
 use Libraries.Fabrication.Geometry.GeometryUtilities
 use Libraries.Fabrication.Geometry.PathRole
+use Libraries.Data.Containers.NumberBuffer
+use Libraries.Data.Containers.IntegerBuffer
 
 /*
 The PathOrderer class puts each layer's paths into printing order and sets
@@ -316,25 +318,25 @@ class PathOrderer
             end
 
             Array<Contour> layerWalls
-            Array<integer> wallIsland
+            IntegerBuffer wallIsland
             CollectLayer(wallLayers:GetLayer(p), islands, layerWalls, wallIsland)
             Array<Contour> layerSkin
-            Array<integer> skinIsland
+            IntegerBuffer skinIsland
             CollectLayer(skinLayers:GetLayer(p), islands, layerSkin, skinIsland)
             Array<Contour> layerInfill
-            Array<integer> infillIsland
+            IntegerBuffer infillIsland
             CollectLayer(infillLayers:GetLayer(p), islands, layerInfill, infillIsland)
             Array<Contour> layerTop
-            Array<integer> topIsland
+            IntegerBuffer topIsland
             CollectLayer(topLayers:GetLayer(p), islands, layerTop, topIsland)
             Array<Contour> layerIron
-            Array<integer> ironIsland
+            IntegerBuffer ironIsland
             CollectLayer(ironLayers:GetLayer(p), islands, layerIron, ironIsland)
 
             // this layer's support: tine outlines, and the lines inside them
             Array<Contour> tines
             Array<Contour> tineLines
-            Array<integer> lineTine
+            IntegerBuffer lineTine
             CollectSupport(supportLayers:GetLayer(p), tines, tineLines, lineTine)
 
             // one tour over islands and tines together (stops 0 .. islandCount - 1
@@ -384,11 +386,11 @@ class PathOrderer
         return ordered
     end
 
-    private action PrintIsland(integer island, Array<Contour> layerWalls, Array<integer> wallIsland,
-                               Array<Contour> layerSkin, Array<integer> skinIsland,
-                               Array<Contour> layerInfill, Array<integer> infillIsland,
-                               Array<Contour> layerTop, Array<integer> topIsland,
-                               Array<Contour> layerIron, Array<integer> ironIsland)
+    private action PrintIsland(integer island, Array<Contour> layerWalls, IntegerBuffer wallIsland,
+                               Array<Contour> layerSkin, IntegerBuffer skinIsland,
+                               Array<Contour> layerInfill, IntegerBuffer infillIsland,
+                               Array<Contour> layerTop, IntegerBuffer topIsland,
+                               Array<Contour> layerIron, IntegerBuffer ironIsland)
         // a wall whose wallIndex was never set (-1) is printed as an outer wall
         integer maxWall = -1
         integer i = 0
@@ -431,7 +433,7 @@ class PathOrderer
         return wall:wallIndex
     end
 
-    private action OfIsland(Array<Contour> paths, Array<integer> islandOf, integer island) returns Array<Contour>
+    private action OfIsland(Array<Contour> paths, IntegerBuffer islandOf, integer island) returns Array<Contour>
         Array<Contour> picked
         integer i = 0
         repeat while i < paths:GetSize()
@@ -447,7 +449,7 @@ class PathOrderer
     // (model walls, so the seam lines up). false: each loop starts at the
     // vertex nearest the nozzle (support, where a seam doesn't show).
     private action OrderLoops(Array<Contour> loops, integer role, boolean useSeam)
-        Array<integer> seams
+        IntegerBuffer seams
         Array<boolean> used
         integer i = 0
         repeat while i < loops:GetSize()
@@ -526,7 +528,7 @@ class PathOrderer
             return nearest
         end
         // the cosine of each vertex's turn (smaller = sharper)
-        Array<number> turn
+        NumberBuffer turn
         integer t = 0
         repeat while t < n
             turn:Add(TurnCosine(loop, t))
@@ -556,7 +558,7 @@ class PathOrderer
 
     // Does vertex v turn at least as sharply as every vertex within
     // seamCornerReach of it along the loop, both ways?
-    private action SharpestNearby(Contour loop, Array<number> turn, integer v) returns boolean
+    private action SharpestNearby(Contour loop, NumberBuffer turn, integer v) returns boolean
         integer n = loop:GetSize()
         number here = turn:Get(v)
         integer direction = -1
@@ -766,7 +768,7 @@ class PathOrderer
 
     private action PrintSkirt(integer p)
         Array<Contour> loops
-        Array<number> areas
+        NumberBuffer areas
         integer i = 0
         repeat while i < skirt:GetSize()
             Contour loop = skirt:Get(i)
@@ -800,10 +802,10 @@ class PathOrderer
     // Splits a layer's support into tine outlines (closed loops) and the
     // lines inside them; lineTine says which tine each line belongs to.
     private action CollectSupport(Array<Contour> layerPaths, Array<Contour> tines,
-                                  Array<Contour> tineLines, Array<integer> lineTine)
+                                  Array<Contour> tineLines, IntegerBuffer lineTine)
         Array<Contour> noIslands
         Array<Contour> layerSupport
-        Array<integer> supportIsland
+        IntegerBuffer supportIsland
         CollectLayer(layerPaths, noIslands, layerSupport, supportIsland)
         integer i = 0
         repeat while i < layerSupport:GetSize()
@@ -825,7 +827,7 @@ class PathOrderer
     // One support tine, finished before moving on: its outline (started at
     // the point nearest the nozzle), then the lines inside it.
     private action PrintTine(integer tine, Array<Contour> tines, Array<Contour> tineLines,
-                             Array<integer> lineTine)
+                             IntegerBuffer lineTine)
         Array<Contour> outline
         outline:Add(tines:Get(tine))
         OrderLoops(outline, roles:SUPPORT_WALL, false)
@@ -861,7 +863,7 @@ class PathOrderer
     // Keeps the paths of one layer that are long enough to print (see
     // SetCleanup), and notes which island each belongs to.
     private action CollectLayer(Array<Contour> layerPaths, Array<Contour> islands,
-                                Array<Contour> kept, Array<integer> islandOf)
+                                Array<Contour> kept, IntegerBuffer islandOf)
         integer i = 0
         repeat while i < layerPaths:GetSize()
             Contour path = layerPaths:Get(i)

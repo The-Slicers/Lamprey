@@ -5,6 +5,8 @@ use Libraries.Fabrication.Geometry.Contour
 use Libraries.Fabrication.Geometry.GeometryUtilities
 use Tests.LampreyTest
 use Tests.TestModels
+use Libraries.Data.Containers.NumberBuffer
+use Libraries.Data.Containers.IntegerBuffer
 
 /* Tests Libraries.Fabrication.Geometry.GeometryUtilities. */
 class GeometryUtilitiesTest is LampreyTest
@@ -38,7 +40,7 @@ class GeometryUtilitiesTest is LampreyTest
 
     action Sorting
         Case("SortNumbers")
-        Array<number> values
+        NumberBuffer values
         values:Add(3)
         values:Add(-1)
         values:Add(2.5)
@@ -56,7 +58,7 @@ class GeometryUtilitiesTest is LampreyTest
         ExpectTrue(sorted, "ascending order")
         ExpectNumber(values:Get(0), -1, 0, "smallest first")
         ExpectNumber(values:Get(4), 3, 0, "largest last")
-        Array<number> empty
+        NumberBuffer empty
         util:SortNumbers(empty)
         ExpectInteger(empty:GetSize(), 0, "an empty list")
     end
@@ -80,15 +82,15 @@ class GeometryUtilitiesTest is LampreyTest
 
     action Buckets
         Case("BucketByPlane")
-        Array<integer> planeOf
+        IntegerBuffer planeOf
         planeOf:Add(2)
         planeOf:Add(0)
         planeOf:Add(2)
         planeOf:Add(-1)
         planeOf:Add(9)
         planeOf:Add(1)
-        Array<integer> starts
-        Array<integer> order
+        IntegerBuffer starts
+        IntegerBuffer order
         util:BucketByPlane(planeOf, 3, starts, order)
         ExpectInteger(starts:GetSize(), 4, "planeCount + 1 starts")
         ExpectInteger(order:GetSize(), 4, "out-of-range planes are left out")

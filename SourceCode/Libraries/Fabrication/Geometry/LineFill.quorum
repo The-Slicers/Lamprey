@@ -2,6 +2,8 @@ package Libraries.Fabrication.Geometry
 
 use Libraries.Containers.Array
 use Libraries.Compute.Math
+use Libraries.Data.Containers.NumberBuffer
+use Libraries.Data.Containers.IntegerBuffer
 
 /*
 The LineFill class fills a region with parallel straight lines (a scan-line
@@ -130,9 +132,9 @@ class LineFill
         end
 
         // rotate the region by -angle so the lines become horizontal
-        Array<number> rx
-        Array<number> ry
-        Array<integer> loopStart
+        NumberBuffer rx
+        NumberBuffer ry
+        IntegerBuffer loopStart
         integer c = 0
         repeat while c < region:GetSize()
             Contour con = region:Get(c)
@@ -162,11 +164,11 @@ class LineFill
         end
 
         // with join on, the lines are kept (in rotated space) and chained after
-        Array<integer> segLine
-        Array<number> segA
-        Array<number> segB
+        IntegerBuffer segLine
+        NumberBuffer segA
+        NumberBuffer segB
 
-        Array<number> hits
+        NumberBuffer hits
         integer lineCount = 0
         integer line = util:CeilingToInt(lowY / spacing)
         repeat while cast(number, line) * spacing <= highY
@@ -239,8 +241,8 @@ class LineFill
     // scan line, and so on, as long as that end is within linkMax sideways
     // and the link between them stays inside the region. Each chain is
     // rotated back and added to target as one open path.
-    private action JoinLines(Array<integer> segLine, Array<number> segA, Array<number> segB,
-                             Array<number> rx, Array<number> ry, Array<integer> loopStart, integer loopCount,
+    private action JoinLines(IntegerBuffer segLine, NumberBuffer segA, NumberBuffer segB,
+                             NumberBuffer rx, NumberBuffer ry, IntegerBuffer loopStart, integer loopCount,
                              number spacing, number cs, number sn, integer planeIndex, Array<Contour> target)
         integer count = segLine:GetSize()
         Array<boolean> used
@@ -258,8 +260,8 @@ class LineFill
         repeat while seed < count
             if not used:Get(seed)
                 used:Set(seed, true)
-                Array<number> px
-                Array<number> py
+                NumberBuffer px
+                NumberBuffer py
                 integer cur = seed
                 number firstY = cast(number, segLine:Get(cur)) * spacing
                 px:Add(segA:Get(cur))
@@ -344,7 +346,7 @@ class LineFill
     // linkEdgeTolerance of an edge counts as inside. (A real notch puts the
     // midpoint well outside, so this can't let a bad link through.)
     private action LinkInside(number x0, number y0, number x1, number y1,
-                              Array<number> rx, Array<number> ry, Array<integer> loopStart,
+                              NumberBuffer rx, NumberBuffer ry, IntegerBuffer loopStart,
                               integer loopCount) returns boolean
         number mx = (x0 + x1) / 2.0
         number my = (y0 + y1) / 2.0

@@ -9,6 +9,8 @@ use Libraries.Fabrication.Geometry.GeometryUtilities
 use Libraries.Fabrication.Geometry.LineFill
 use Libraries.Fabrication.Geometry.PolygonOffsetter
 use Libraries.Fabrication.Geometry.PolygonOperations
+use Libraries.Data.Containers.NumberBuffer
+use Libraries.Data.Containers.IntegerBuffer
 
 /*
 The PathGenerator class turns each layer's outlines into toolpaths: walls
@@ -77,14 +79,14 @@ class PathGenerator
     // gap-filled bands of each plane (gapAreas[gapStart[p] ... gapStart[p + 1]]),
     // kept out of that plane's fill
     Array<Contour> gapAreas
-    Array<integer> gapStart
+    IntegerBuffer gapStart
 
     // the outlines being processed, grouped by plane
     ContourLayers modelLayers
 
     // area left inside the walls on each plane (inner[innerStart[p] ... inner[innerStart[p + 1]]])
     Array<Contour> inner
-    Array<integer> innerStart
+    IntegerBuffer innerStart
 
     integer planeTotal = 0
 
@@ -98,14 +100,14 @@ class PathGenerator
     boolean progress = false
 
     // FitInset results for the plane being worked on, by depth (see CachedFitInset)
-    Array<number> cacheDepth
-    Array<integer> cacheStart
-    Array<integer> cacheCount
+    NumberBuffer cacheDepth
+    IntegerBuffer cacheStart
+    IntegerBuffer cacheCount
     Array<Contour> cacheLoops
 
     // scratch points for AddEdgeBands
-    Array<number> bandX
-    Array<number> bandY
+    NumberBuffer bandX
+    NumberBuffer bandY
     number cos30 = 0.8660254037844386
     number sin30 = 0.5
     // plane being worked on (PolygonOperations calls take it)
@@ -1118,7 +1120,7 @@ class PathGenerator
     end
 
     // Adds the points to ops as a counter-clockwise loop, whichever way they run.
-    private action AddCounterClockwise(Array<number> xs, Array<number> ys)
+    private action AddCounterClockwise(NumberBuffer xs, NumberBuffer ys)
         number area2 = 0.0
         integer n = xs:GetSize()
         integer i = 0
@@ -1339,7 +1341,7 @@ class PathGenerator
             return rejected
         end
         number need = 0.9 * depth
-        Array<integer> keptIndex
+        IntegerBuffer keptIndex
         integer v = 0
         repeat while v < n
             number x = loop:xs:Get(v)

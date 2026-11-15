@@ -1,6 +1,7 @@
 package Libraries.Fabrication.Geometry
 
 use Libraries.Containers.Array
+use Libraries.Data.Containers.IntegerBuffer
 
 /*
 The ContourLayers class groups a list of contours by slice plane once, so
@@ -24,8 +25,8 @@ Attribute: Example
 */
 class ContourLayers
     Array<Contour> source
-    Array<integer> starts
-    Array<integer> order
+    IntegerBuffer starts
+    IntegerBuffer order
     integer planeTotal = 0
     GeometryUtilities util
 
@@ -60,7 +61,7 @@ class ContourLayers
     action Index(Array<Contour> contours, integer planeCount, boolean usableLoopsOnly)
         source = contours
         planeTotal = planeCount
-        Array<integer> planeOf
+        IntegerBuffer planeOf
         integer c = 0
         repeat while c < contours:GetSize()
             Contour con = contours:Get(c)

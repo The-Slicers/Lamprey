@@ -9,6 +9,7 @@ use Libraries.Fabrication.Geometry.Contour
 use Libraries.Fabrication.Geometry.TriangleMesh
 use Libraries.Fabrication.Slicing.MeshSlicer
 use Libraries.Fabrication.Slicing.ContourGenerator
+use Libraries.Data.Containers.NumberBuffer
 
 /*
 The TestModels class builds the shapes the tests slice, in code, so the
@@ -35,8 +36,8 @@ class TestModels
         mesh:Load(model)
         MeshSlicer slicer
         slicer:SetTriangles(mesh)
-        Array<number> range = slicer:GetSliceRange()
-        Array<number> planes = slicer:BuildPlanes(range:Get(0), range:Get(1), layerHeight)
+        NumberBuffer range = slicer:GetSliceRange()
+        NumberBuffer planes = slicer:BuildPlanes(range:Get(0), range:Get(1), layerHeight)
         lastPlaneCount = planes:GetSize()
         ContourGenerator generator
         return generator:Build(slicer:Slice(planes), lastPlaneCount, 0.2)
@@ -71,13 +72,13 @@ class TestModels
 
     /*
     A 20 mm block with a 10 x 20 mm ledge 2 mm thick sticking out of its
-    side near the top (z 18 to 20): supports under it are 18 mm tall.
+    side near the top (z 16 to 18): supports under it are 16 mm tall.
     */
     action HighLedge returns ModelData
         ModelData model
         Array<MeshData> meshes
         meshes:Add(BoxMesh(0, 0, 0, 20, 20, 20))
-        meshes:Add(BoxMesh(20, 0, 18, 30, 20, 20))
+        meshes:Add(BoxMesh(20, 0, 16, 30, 20, 18))
         model:SetMeshes(meshes)
         return model
     end

@@ -10,6 +10,8 @@ use Libraries.Fabrication.Geometry.Contour
 use Libraries.Fabrication.Geometry.ContourLayers
 use Libraries.Fabrication.Geometry.GeometryUtilities
 use Libraries.Fabrication.Geometry.PathRole
+use Libraries.Data.Containers.NumberBuffer
+use Libraries.Data.Containers.IntegerBuffer
 
 /*
 The GcodeWriter class writes ordered toolpaths (from PathOrderer) as
@@ -122,15 +124,15 @@ class GcodeWriter
     // per-segment speed caps for the paths of the current Write:
     // segmentCap[capStart[i] + s] for segment s of path i; capStart[i] = -1
     // when path i has none
-    Array<number> segmentCap
-    Array<integer> capStart
+    NumberBuffer segmentCap
+    IntegerBuffer capStart
     // the outlines of the layer below the one being measured, with their boxes
     integer belowLayer = -2
     Array<Contour> belowLoops
-    Array<number> belowLowX
-    Array<number> belowHighX
-    Array<number> belowLowY
-    Array<number> belowHighY
+    NumberBuffer belowLowX
+    NumberBuffer belowHighX
+    NumberBuffer belowLowY
+    NumberBuffer belowHighY
 
     // Most plastic the hotend can melt, in mm^3/s (0 = no limit). Every
     // speed is capped at maxFlow / (lineWidth * layerHeight * flow).
@@ -170,7 +172,7 @@ class GcodeWriter
     number coolLift = 3.0
     number coolClear = 10.0
     number minDwell = 0.5         // shorter waits aren't worth the trip
-    Array<number> layerDwell      // seconds to wait after each layer
+    NumberBuffer layerDwell      // seconds to wait after each layer
     integer dwellLayers = 0
     number modelMinX = 0.0        // model footprint on the bed (set by CenterOnBed)
     number modelMaxX = 0.0
@@ -205,10 +207,10 @@ class GcodeWriter
     number totalSeconds = 0.0
     integer lastRole = -1
     integer lastSpeed = -1
-    Array<number> retractHistory
+    NumberBuffer retractHistory
     integer skippedRetracts = 0
-    Array<number> layerFactor
-    Array<number> layerTime       // estimated seconds per layer, after slow-down
+    NumberBuffer layerFactor
+    NumberBuffer layerTime       // estimated seconds per layer, after slow-down
     number estimatedSeconds = 0.0
 
     // Bambu Lab extras: header block, layer / progress reports (M73, M991)
@@ -2125,11 +2127,11 @@ class GcodeWriter
             i = i + 1
         end
         // seconds spent extruding, and seconds spent on everything else
-        Array<number> seconds
-        Array<number> overhead
+        NumberBuffer seconds
+        NumberBuffer overhead
         // extra seconds the overhang slowdown adds (it isn't stretched by
         // the cooling slowdown, so it is kept apart from `seconds`)
-        Array<number> overhangTime
+        NumberBuffer overhangTime
         i = 0
         repeat while i <= top
             seconds:Add(0.0)
@@ -2207,7 +2209,7 @@ class GcodeWriter
 
         // what the layer really takes once the minPrintSpeed floor is applied
         // (the same formula WritePath uses)
-        Array<number> actual
+        NumberBuffer actual
         i = 0
         repeat while i <= top
             actual:Add(overhead:Get(i))

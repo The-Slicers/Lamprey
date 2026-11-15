@@ -17,6 +17,7 @@ use Libraries.Fabrication.Printing.GcodeWriter
 use Libraries.Fabrication.Printing.Bambu.BambuPackager
 use Libraries.Fabrication.Printing.Bambu.BambuSettingsMap
 use Libraries.Fabrication.Profiles.Profile
+use Libraries.Data.Containers.NumberBuffer
 
 /*
 The SliceJob class runs the whole slicer from one Profile: every stage gets
@@ -123,10 +124,10 @@ class SliceJob
         slicer:SetTriangles(mesh)
         Log("base faced " + slicer:GetBaseDirection() + " in the file, unit scale " + format:Short(slicer:GetUnitScale())
             + ", " + slicer:GetUniqueVertexCount() + " distinct vertices")
-        Array<number> planeRange = slicer:GetSliceRange()
+        NumberBuffer planeRange = slicer:GetSliceRange()
         number layerHeight = profile:GetNumber("layerHeight")
         number cutAmount = profile:GetNumber("cutAmount")
-        Array<number> planes = slicer:BuildPlanes(planeRange:Get(0) + cutAmount, planeRange:Get(1), layerHeight)
+        NumberBuffer planes = slicer:BuildPlanes(planeRange:Get(0) + cutAmount, planeRange:Get(1), layerHeight)
         integer planeCount = planes:GetSize()
         Log("height " + format:Fixed(planeRange:Get(1) - planeRange:Get(0), 2) + " mm: " + planeCount + " layers")
 

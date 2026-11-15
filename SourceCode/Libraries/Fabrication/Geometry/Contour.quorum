@@ -1,6 +1,7 @@
 package Libraries.Fabrication.Geometry
 
 use Libraries.Containers.Array
+use Libraries.Data.Containers.NumberBuffer
 
 /*
 The Contour class is a 2D path on one slice plane: a closed loop (an outline,
@@ -34,8 +35,8 @@ class Contour
     public integer planeIndex = 0
     /* True for a loop whose last point connects back to its first. */
     public boolean closed = false
-    public Array<number> xs
-    public Array<number> ys
+    public NumberBuffer xs
+    public NumberBuffer ys
 
     /* How many loops of the same plane surround this one (ContourGenerator). */
     public integer depth = 0

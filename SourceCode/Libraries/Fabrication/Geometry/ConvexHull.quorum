@@ -4,6 +4,7 @@ use Libraries.Containers.Number64BitArray
 use Libraries.Containers.Integer32BitArray
 use Libraries.Containers.HashTable
 use Libraries.Containers.Array
+use Libraries.Data.Containers.IntegerBuffer
 
 /*
 The ConvexHull class finds the convex hull of a set of 2D points with
@@ -80,7 +81,7 @@ class ConvexHull
 
         // drop duplicate points
         HashTable<text, boolean> seen
-        Array<integer> unique
+        IntegerBuffer unique
         integer i = 0
         repeat while i < xs:GetSize()
             text key = xs:Get(i) + "," + ys:Get(i)
@@ -120,13 +121,13 @@ class ConvexHull
         end
 
         // lower hull left to right, upper hull right to left
-        Array<integer> lower
+        IntegerBuffer lower
         i = 0
         repeat while i < size
             PushHullPoint(lower, i)
             i = i + 1
         end
-        Array<integer> upper
+        IntegerBuffer upper
         i = size - 1
         repeat while i >= 0
             PushHullPoint(upper, i)
@@ -226,7 +227,7 @@ class ConvexHull
     end
 
     /* Adds point to a half hull, first dropping points that would make it turn clockwise. */
-    private action PushHullPoint(Array<integer> chain, integer point)
+    private action PushHullPoint(IntegerBuffer chain, integer point)
         boolean turning = true
         repeat while chain:GetSize() >= 2 and turning
             integer last = chain:Get(chain:GetSize() - 1)

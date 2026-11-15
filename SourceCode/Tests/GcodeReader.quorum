@@ -3,6 +3,7 @@ package Tests
 use Libraries.Containers.Array
 use Libraries.Compute.Math
 use Libraries.System.File
+use Libraries.Data.Containers.NumberBuffer
 
 /*
 The GcodeReader class reads back a G-code file the way a printer would
@@ -15,7 +16,7 @@ firmware can't parse.
 class GcodeReader
     text source = ""
     Array<text> lines
-    Array<number> layerZ          // the lowest Z between each ;LAYER: comment and the next (Z hops go up)
+    NumberBuffer layerZ          // the lowest Z between each ;LAYER: comment and the next (Z hops go up)
     integer layerCount = 0
     number minX = 0.0
     number maxX = 0.0

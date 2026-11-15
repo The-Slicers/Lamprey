@@ -1,0 +1,271 @@
+package Libraries.Data.Containers
+
+use Libraries.Containers.Integer32BitArray
+use Libraries.Language.Errors.InvalidLocationError
+
+/*
+The IntegerBuffer class is a growable list of integers, stored in an
+Integer32BitArray (a plain Java int[]) so that reading and writing an item
+does not box it into an object the way Array<integer> does. It has the same
+action names as Array, so code written for Array<integer> works unchanged as
+long as it only uses Add, Get, Set, GetSize, SetSize, Empty and RemoveAt.
+
+Integer32BitArray on its own is awkward to use directly: it has no storage
+until SetSize is called (GetSize crashes before that), SetSize throws the old
+items away instead of copying them, and it has no Add. IntegerBuffer keeps its
+own count and capacity and copies the items when it grows.
+
+Empty keeps the memory and only resets the count, so a buffer that is filled
+and emptied over and over (as PolygonOperations does on every call) allocates
+nothing after the first fill.
+
+Attribute: Example
+
+    use Libraries.Data.Containers.IntegerBuffer
+
+    class Main
+        action Main
+            IntegerBuffer ids
+            ids:Add(1)
+            ids:Add(2)
+            ids:Set(0, 3)
+            output ids:Get(0) + ids:Get(1)      // 5
+            output ids:GetSize()                // 2
+            ids:Empty()
+            output ids:GetSize()                // 0
+        end
+    end
+*/
+class IntegerBuffer
+    Integer32BitArray items
+    integer capacity = 0
+    integer count = 0
+
+    /* A new Integer32BitArray has no storage until SetSize, so give it some. */
+    on create
+        items:SetSize(16)
+        capacity = 16
+    end
+
+    /*
+    Adds an integer to the end.
+
+    Attribute: Parameter value The integer to add.
+
+    Attribute: Example
+
+        use Libraries.Data.Containers.IntegerBuffer
+
+        IntegerBuffer ids
+        ids:Add(4)
+    */
+    action Add(integer value)
+        if count = capacity
+            Reserve(count + 1)
+        end
+        items:Set(count, value)
+        count = count + 1
+    end
+
+    /*
+    Inserts an integer at a location, moving the items from there on up by one.
+    The location can be GetSize(), which adds to the end.
+
+    Attribute: Parameter location Where the integer goes, from 0 to GetSize().
+    Attribute: Parameter value The integer to insert.
+
+    Attribute: Example
+
+        use Libraries.Data.Containers.IntegerBuffer
+
+        IntegerBuffer ids
+        ids:Add(1)
+        ids:Add(3)
+        ids:Add(1, 2)        // 1, 2, 3
+    */
+    action Add(integer location, integer value)
+        if location < 0 or location > count
+            Fail(location)
+        end
+        if count = capacity
+            Reserve(count + 1)
+        end
+        integer i = count
+        repeat while i > location
+            items:Set(i, items:Get(i - 1))
+            i = i - 1
+        end
+        items:Set(location, value)
+        count = count + 1
+    end
+
+    /*
+    Returns the integer at a location.
+
+    Attribute: Parameter location From 0 to GetSize() - 1.
+    Attribute: Returns The integer stored there.
+
+    Attribute: Example
+
+        use Libraries.Data.Containers.IntegerBuffer
+
+        IntegerBuffer ids
+        ids:Add(7)
+        integer first = ids:Get(0)
+    */
+    action Get(integer location) returns integer
+        if location < 0 or location >= count
+            Fail(location)
+        end
+        return items:Get(location)
+    end
+
+    /*
+    Replaces the integer at a location.
+
+    Attribute: Parameter location From 0 to GetSize() - 1.
+    Attribute: Parameter value The new integer.
+
+    Attribute: Example
+
+        use Libraries.Data.Containers.IntegerBuffer
+
+        IntegerBuffer ids
+        ids:Add(7)
+        ids:Set(0, 8)
+    */
+    action Set(integer location, integer value)
+        if location < 0 or location >= count
+            Fail(location)
+        end
+        items:Set(location, value)
+    end
+
+    /*
+    Removes the integer at a location, moving the items after it down by one.
+
+    Attribute: Parameter location From 0 to GetSize() - 1.
+    Attribute: Returns The integer that was removed.
+
+    Attribute: Example
+
+        use Libraries.Data.Containers.IntegerBuffer
+
+        IntegerBuffer ids
+        ids:Add(1)
+        ids:Add(2)
+        integer last = ids:RemoveAt(ids:GetSize() - 1)     // 2
+    */
+    action RemoveAt(integer location) returns integer
+        if location < 0 or location >= count
+            Fail(location)
+        end
+        integer removed = items:Get(location)
+        integer i = location + 1
+        repeat while i < count
+            items:Set(i - 1, items:Get(i))
+            i = i + 1
+        end
+        count = count - 1
+        return removed
+    end
+
+    /*
+    The number of items.
+
+    Attribute: Returns How many integers the buffer holds.
+
+    Attribute: Example
+
+        use Libraries.Data.Containers.IntegerBuffer
+
+        IntegerBuffer ids
+        output ids:GetSize()     // 0
+    */
+    action GetSize returns integer
+        return count
+    end
+
+    /*
+    Makes the buffer hold exactly size items. Items past the old end are 0.
+
+    Attribute: Parameter size The new integer of items.
+
+    Attribute: Example
+
+        use Libraries.Data.Containers.IntegerBuffer
+
+        IntegerBuffer ids
+        ids:SetSize(3)
+        ids:Set(2, 9)      // 0, 0, 9
+    */
+    action SetSize(integer size)
+        if size < 0
+            Fail(size)
+        end
+        Reserve(size)
+        // Empty keeps old values in memory, so clear the slots being reused
+        integer i = count
+        repeat while i < size
+            items:Set(i, 0)
+            i = i + 1
+        end
+        count = size
+    end
+
+    /*
+    Removes every item. The memory is kept for the next items, so nothing is
+    allocated until the buffer grows past its largest size so far.
+
+    Attribute: Example
+
+        use Libraries.Data.Containers.IntegerBuffer
+
+        IntegerBuffer ids
+        ids:Add(1)
+        ids:Empty()
+        output ids:GetSize()     // 0
+    */
+    action Empty
+        count = 0
+    end
+
+    /*
+    Makes room for at least size items without growing again. Useful before
+    adding many items whose total is known.
+
+    Attribute: Parameter size How many items there must be room for.
+
+    Attribute: Example
+
+        use Libraries.Data.Containers.IntegerBuffer
+
+        IntegerBuffer ids
+        ids:Reserve(1000)
+    */
+    action Reserve(integer size)
+        if size <= capacity
+            return now
+        end
+        integer grown = capacity * 2
+        if grown < size
+            grown = size
+        end
+        // SetSize on a Integer32BitArray throws the old items away: copy them
+        Integer32BitArray bigger
+        bigger:SetSize(grown)
+        integer i = 0
+        repeat while i < count
+            bigger:Set(i, items:Get(i))
+            i = i + 1
+        end
+        items = bigger
+        capacity = grown
+    end
+
+    private action Fail(integer location)
+        InvalidLocationError error
+        error:RegenerateMessageWithIndexAndSize(location, count)
+        alert(error)
+    end
+end
