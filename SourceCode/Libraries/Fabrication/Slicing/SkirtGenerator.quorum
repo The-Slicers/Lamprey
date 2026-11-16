@@ -6,6 +6,7 @@ use Libraries.Fabrication.ArgumentChecker
 use Libraries.Fabrication.Geometry.Contour
 use Libraries.Fabrication.Geometry.ConvexHull
 use Libraries.Fabrication.Geometry.PolygonOffsetter
+use Libraries.Fabrication.Geometry.PolygonOperations
 
 /*
 The SkirtGenerator class makes the loops printed around the model on the
@@ -35,9 +36,14 @@ class SkirtGenerator
     integer loops = 2
     integer height = 1
     boolean brim = false
+    // brim kept this far (mm) from the support's first layer; 0 = the brim
+    // goes around the support feet too and joins them to the model
+    number supportGap = 0.0
+    Array<Contour> supportFeet
     Array<text> warnings
 
     PolygonOffsetter offsetter
+    PolygonOperations ops
     ArgumentChecker checker
 
     /*
@@ -117,6 +123,42 @@ class SkirtGenerator
     end
 
     /*
+    Keeps the brim off the supports: the brim goes around the model only, and
+    stops this far short of the support's first layer, so the supports come
+    away from the brim without tearing it (or the model's bottom edge). Call
+    after SetBrim, and pass the model's outlines alone to Generate.
+
+    Attribute: Parameter gap How far the brim stays from the supports (mm); 0 turns this off.
+    Attribute: Parameter supportAreas The support's outlines (from TreeSupport:GetAreas; only plane 0 is used).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.SkirtGenerator
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        Array<Contour> support      // from TreeSupport:GetAreas
+        SkirtGenerator skirt
+        skirt:SetBrim(12, 0)
+        skirt:SetSupportGap(1.0, support)
+        Array<Contour> loops = skirt:Generate(outlines)
+    */
+    action SetSupportGap(number gap, Array<Contour> supportAreas)
+        checker:RequireAtLeast("SkirtGenerator:SetSupportGap gap", gap, 0)
+        supportGap = gap
+        supportFeet:Empty()
+        integer i = 0
+        repeat while i < supportAreas:GetSize()
+            Contour area = supportAreas:Get(i)
+            if area:planeIndex = 0 and area:closed and area:GetSize() >= 3
+                supportFeet:Add(area)
+            end
+            i = i + 1
+        end
+    end
+
+    /*
     Makes the skirt or brim loops.
 
     Attribute: Parameter contours The model's outlines (only plane 0 is used).
@@ -154,14 +196,18 @@ class SkirtGenerator
 
         Array<Contour> rings
         integer i = 0
-        repeat while i < loops
-            Array<Contour> ring = offsetter:Offset(base, -(distance + lineWidth * (cast(number, i) + 0.5)))
-            integer r = 0
-            repeat while r < ring:GetSize()
-                rings:Add(ring:Get(r))
-                r = r + 1
+        if brim and supportGap > 0 and supportFeet:GetSize() > 0
+            rings = BrimClearOfSupports(base)
+        else
+            repeat while i < loops
+                Array<Contour> ring = offsetter:Offset(base, -(distance + lineWidth * (cast(number, i) + 0.5)))
+                integer r = 0
+                repeat while r < ring:GetSize()
+                    rings:Add(ring:Get(r))
+                    r = r + 1
+                end
+                i = i + 1
             end
-            i = i + 1
         end
 
         integer layer = 0
@@ -201,6 +247,47 @@ class SkirtGenerator
     */
     action GetWarnings returns Array<text>
         return warnings
+    end
+
+    // The brim as an area (the band `loops` lines wide around the model,
+    // starting `distance` out), minus the support feet grown by supportGap,
+    // filled with loops that follow its edges: around the model, and around
+    // each gap left for a support foot. No brim line comes closer to a
+    // support than supportGap.
+    private action BrimClearOfSupports(Array<Contour> base) returns Array<Contour>
+        Array<Contour> rings
+        number width = lineWidth * cast(number, loops)
+        Array<Contour> outer = offsetter:Offset(base, -(distance + width))
+        Array<Contour> inner = base
+        if distance > 0
+            inner = offsetter:Offset(base, -distance)
+        end
+        Array<Contour> band = ops:Difference(outer, inner, 0)
+        Array<Contour> blocked = offsetter:Offset(supportFeet, -supportGap)
+        if blocked:GetSize() > 0
+            band = ops:Difference(band, blocked, 0)
+        end
+        if band:GetSize() = 0
+            warnings:Add("The supports cover the whole brim area, so no brim was made. Check that supportBedRouting is on, or lower brimSupportGap or brimLoops.")
+            return rings
+        end
+
+        // loops inset from every edge of the band; a band `loops` lines wide
+        // is used up after about loops / 2 insets
+        integer i = 0
+        repeat while i < loops
+            Array<Contour> ring = offsetter:Offset(band, lineWidth * (cast(number, i) + 0.5))
+            if ring:GetSize() = 0
+                return rings
+            end
+            integer r = 0
+            repeat while r < ring:GetSize()
+                rings:Add(ring:Get(r))
+                r = r + 1
+            end
+            i = i + 1
+        end
+        return rings
     end
 
     // the outermost outlines of layer 0

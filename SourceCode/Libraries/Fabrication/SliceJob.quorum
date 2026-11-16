@@ -171,6 +171,8 @@ class SliceJob
 
         // everything on the first layer, for the skirt / brim to go around
         Array<Contour> base = contours:CopyToArray()
+        Array<Contour> supportAreas
+        boolean brimClearOfSupports = (profile:GetText("adhesionType") = "brim") and (profile:GetNumber("brimSupportGap") > 0)
 
         PathOrderer orderer
         ConfigureOrderer(profile, orderer)
@@ -186,11 +188,14 @@ class SliceJob
                 + trees:GetReachedBed() + " trunks reach the bed, " + trees:GetRestedOnModel() + " branches rest on the model; skipped "
                 + trees:GetSkippedBridgeCount() + " bridgeable, " + trees:GetSkippedSmallCount() + " tiny-overhang and "
                 + trees:GetSkippedLowCount() + " near-bed tine spots")
-            Array<Contour> supportAreas = trees:GetAreas()
-            integer i = 0
-            repeat while i < supportAreas:GetSize()
-                base:Add(supportAreas:Get(i))
-                i = i + 1
+            supportAreas = trees:GetAreas()
+            // a brim kept off the supports goes around the model alone
+            if not brimClearOfSupports
+                integer i = 0
+                repeat while i < supportAreas:GetSize()
+                    base:Add(supportAreas:Get(i))
+                    i = i + 1
+                end
             end
             orderer:SetSupport(trees:GetPaths())
         end
@@ -198,6 +203,9 @@ class SliceJob
         if profile:GetText("adhesionType") not= "none"
             SkirtGenerator skirtGen
             ConfigureAdhesion(profile, skirtGen)
+            if brimClearOfSupports and supportAreas:GetSize() > 0
+                skirtGen:SetSupportGap(profile:GetNumber("brimSupportGap"), supportAreas)
+            end
             orderer:SetSkirt(skirtGen:Generate(base))
             Warn(skirtGen:GetWarnings(), "")
         end
@@ -278,6 +286,7 @@ class SliceJob
         trees:SetBranchGrowth(profile:GetNumber("supportGrowthAngle"), profile:GetNumber("supportMaxRadius"))
         trees:SetGaps(profile:GetNumber("supportXYGap"), profile:GetNumber("supportTineXYGap"), profile:GetInteger("supportTopGapLayers"))
         trees:SetBottomGap(profile:GetInteger("supportBottomGapLayers"))
+        trees:SetWallCount(profile:GetInteger("supportWallCount"))
         trees:SetDensity(profile:GetNumber("supportDensity"))
         trees:SetFirstLayerDensity(profile:GetNumber("supportFirstLayerDensity"))
         trees:SetRoof(profile:GetInteger("supportRoofLayers"), profile:GetNumber("supportRoofDensity"))
@@ -289,6 +298,17 @@ class SliceJob
         trees:SetMinOverhangArea(profile:GetNumber("supportMinOverhangArea"))
         trees:SetMinHeight(profile:GetNumber("supportMinHeight"))
         trees:SetBranching(profile:GetInteger("supportMaxBranches"), profile:GetNumber("supportBranchGap"))
+        // a brim kept off the supports needs room: branches land outside the
+        // brim, brimSupportGap beyond it (their own xyGap counts towards that,
+        // their base flare doesn't)
+        if (profile:GetText("adhesionType") = "brim") and (profile:GetNumber("brimSupportGap") > 0)
+            number brimWidth = profile:GetNumber("lineWidth") * cast(number, profile:GetInteger("brimLoops"))
+            number spare = profile:GetNumber("brimSupportGap") + profile:GetNumber("supportBaseFlare") - profile:GetNumber("supportXYGap")
+            if spare < 0
+                spare = 0
+            end
+            trees:SetBedKeepOut(profile:GetNumber("brimGap") + brimWidth + spare)
+        end
     end
 
     private action ConfigureAdhesion(Profile profile, SkirtGenerator skirtGen)

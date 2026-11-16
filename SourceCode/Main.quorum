@@ -34,42 +34,46 @@ class Main
             integer failed = tests:Run()
             return now
         end
-        DateTime timer 
-        number start = timer:GetEpochTime()
-        ArgumentChecker checker
-        checker:RequireFile("Model", modelPath)
-        File file
-        file:SetPath(modelPath)
-        ModelLoader loader
-        ModelData data = loader:Load(file)
-        if data = undefined
-            alert("Could not load the model " + modelPath + ". Lamprey reads the formats ModelLoader does, such as .stl and .obj.")
+        check
+            DateTime timer 
+            number start = timer:GetEpochTime()
+            ArgumentChecker checker
+            checker:RequireFile("Model", modelPath)
+            File file
+            file:SetPath(modelPath)
+            ModelLoader loader
+            ModelData data = loader:Load(file)
+            if data = undefined
+                alert("Could not load the model " + modelPath + ". Lamprey reads the formats ModelLoader does, such as .stl and .obj.")
+            end
+    
+            ProfileManager profiles
+            profiles:Load(profilesPath)
+            PrintWarnings(profiles:GetWarnings())
+            Profile profile = profiles:Require(profileName)
+            profile:Set("supportsEnabled", "true")
+            profile:Set("adhesionType", "brim")
+    
+            text gcodePath = outputFolder + "/" + BaseName(modelPath) + ".gcode"
+            SliceJob job
+            job:Run(data, profile, gcodePath)
+    
+            // a standalone copy of the Bambu settings that went into the 3MF, to inspect or diff
+            if profile:GetBoolean("write3mf")
+                BambuSettingsMap map
+                map:SetReportMissing(false)
+                text settingsPath = map:WriteTemplate(profile, profile:GetText("bambuSettingsTemplate"), outputFolder + "/project_settings.json")
+                output "Wrote " + settingsPath + ": the " + map:GetFilledCount() + " Bambu settings the 3MF was made with"
+            end
+    
+            number finish = timer:GetEpochTime()
+    
+            number elapsed = finish - start
+            output "Slicing took " + elapsed + " milliseconds"
+            output "That is " + (elapsed / 1000) + " seconds"
+        detect e
+            output "Slicing stopped: " + e:GetErrorMessage()
         end
-
-        ProfileManager profiles
-        profiles:Load(profilesPath)
-        PrintWarnings(profiles:GetWarnings())
-        Profile profile = profiles:Require(profileName)
-        profile:Set("supportsEnabled", "false")
-        profile:Set("adhesionType", "none")
-
-        text gcodePath = outputFolder + "/" + BaseName(modelPath) + ".gcode"
-        SliceJob job
-        job:Run(data, profile, gcodePath)
-
-        // a standalone copy of the Bambu settings that went into the 3MF, to inspect or diff
-        if profile:GetBoolean("write3mf")
-            BambuSettingsMap map
-            map:SetReportMissing(false)
-            text settingsPath = map:WriteTemplate(profile, profile:GetText("bambuSettingsTemplate"), outputFolder + "/project_settings.json")
-            output "Wrote " + settingsPath + ": the " + map:GetFilledCount() + " Bambu settings the 3MF was made with"
-        end
-
-        number finish = timer:GetEpochTime()
-
-        number elapsed = finish - start
-        output "Slicing took " + elapsed + " milliseconds"
-        output "That is " + (elapsed / 1000) + " seconds"
     end
 
     private action PrintWarnings(Array<text> warnings)

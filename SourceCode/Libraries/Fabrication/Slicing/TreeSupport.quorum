@@ -94,6 +94,9 @@ class TreeSupport
     // it. Only branches with no way down rest on the model (and then use the
     // rest rules above). false = old behavior (every branch uses the rest rules).
     boolean bedRouting = true
+    // branches routed to the bed stay this far (mm) outside the model's
+    // first-layer outline, leaving a ring free for a brim; 0 = off
+    number bedKeepOut = 0.0
 
     // the avoidance outlines are simplified to this tolerance (mm) each layer,
     // and coarsened further while a layer has more than avoidMaxPoints points
@@ -107,6 +110,9 @@ class TreeSupport
 
     // empty layers between support and a model surface it rests on
     integer bottomGapLayers = 1
+    // walls around each branch; a 2nd or later wall is only added where it
+    // fits from both sides, so thin tips keep a single wall
+    integer wallCount = 1
 
     // flat overhangs anchored on two opposite sides within this span (mm)
     // are left to bridge. 0 = support everything
@@ -397,6 +403,28 @@ class TreeSupport
     end
 
     /*
+    Walls around each branch. Extra walls go only where they fit from both
+    sides, so tips too thin for them keep one wall.
+
+    Attribute: Parameter count The number of walls (1 or more).
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetWallCount(2)
+        trees:Generate(outlines, 100)
+    */
+    action SetWallCount(integer count)
+        checker:RequireAtLeast("TreeSupport:SetWallCount count", count, 1)
+        wallCount = count
+    end
+
+    /*
     The fill density inside branches (0 for walls only, up to 1).
 
     Attribute: Parameter value The density, 0 to 1.
@@ -538,6 +566,33 @@ class TreeSupport
         checker:RequireAtLeast("TreeSupport:SetRestRules lookAhead", lookAhead, 0)
         minRestWidth = width
         avoidDistance = lookAhead
+    end
+
+    /*
+    Keeps a ring around the model's footprint free of supports, so a brim can
+    go around the model without touching them. Branches routed to the bed
+    (SetBedRouting) lean away in time to land at least this far from the
+    model's first-layer outline, plus their usual xyGap. A branch that can't
+    get out in time rests on the model, as it would anywhere else; one that
+    still reaches the bed inside the ring keeps its foot, and the brim goes
+    around it.
+
+    Attribute: Parameter distance How wide the free ring is (mm); 0 turns this off.
+
+    Attribute: Example
+
+        use Libraries.Containers.Array
+        use Libraries.Fabrication.Geometry.Contour
+        use Libraries.Fabrication.Slicing.TreeSupport
+
+        Array<Contour> outlines     // from ContourGenerator:Build
+        TreeSupport trees
+        trees:SetBedKeepOut(5.8)    // a 4.8 mm brim and 1 mm to spare
+        trees:Generate(outlines, 100)
+    */
+    action SetBedKeepOut(number distance)
+        checker:RequireAtLeast("TreeSupport:SetBedKeepOut distance", distance, 0)
+        bedKeepOut = distance
     end
 
     /*
@@ -2281,21 +2336,36 @@ class TreeSupport
             i = i + 1
         end
 
-        // one wall, its outside edge on the support outline
+        // wallCount walls; the outer wall's outside edge is on the support
+        // outline. Wall w's centre line sits (w + 0.5) line widths inside it,
+        // and is only added where it fits from both sides (shrink past its far
+        // edge, then grow back to its centre), so thin tips keep one wall.
         Array<Contour> layerWalls
         Array<Contour> layerLines
-        Array<Contour> walls = offsetter:Offset(support, lineWidth * 0.5)
-        i = 0
-        repeat while i < walls:GetSize()
-            Contour wall = walls:Get(i)
-            wall:wallIndex = 0
-            layerWalls:Add(wall)
-            i = i + 1
+        integer w = 0
+        repeat while w < wallCount
+            Array<Contour> walls
+            if w = 0
+                walls = offsetter:Offset(support, lineWidth * 0.5)
+            else
+                Array<Contour> deeper = offsetter:Offset(support, lineWidth * cast(number, w + 1))
+                if deeper:GetSize() > 0
+                    walls = offsetter:Offset(deeper, -lineWidth * 0.5)
+                end
+            end
+            i = 0
+            repeat while i < walls:GetSize()
+                Contour wall = walls:Get(i)
+                wall:wallIndex = w
+                layerWalls:Add(wall)
+                i = i + 1
+            end
+            w = w + 1
         end
 
-        // lines inside thick parts, reaching a quarter line into the wall:
-        // dense (roof) right under the model, sparse elsewhere
-        Array<Contour> inner = offsetter:Offset(support, lineWidth * 1.25)
+        // lines inside thick parts, reaching a quarter line into the innermost
+        // wall: dense (roof) right under the model, sparse elsewhere
+        Array<Contour> inner = offsetter:Offset(support, lineWidth * (cast(number, wallCount) + 0.25))
         if inner:GetSize() > 0
             Array<Contour> roofCover
             if roofLayers > 0 and roofDensity > 0
@@ -2484,7 +2554,7 @@ class TreeSupport
     // Bed avoidance and the edge index
     // ------------------------------------------------------------------
 
-    // avoid(0) = model(0); avoid(p) = model(p) + avoid(p - 1) shrunk by maxMove.
+    // avoid(0) = model(0) (grown by bedKeepOut); avoid(p) = model(p) + avoid(p - 1) shrunk by maxMove.
     // A point deeper than maxMove inside avoid(p - 1) can't get out of it in
     // one layer's lean, so outside avoid(p) the bed is still reachable.
     // Clearance (gap + radius) is applied when it is queried.
@@ -2493,6 +2563,11 @@ class TreeSupport
         integer p = 0
         repeat while p < planeTotal
             Array<Contour> here = modelLayers:GetLayer(p)
+            // the ring kept free for a brim counts as model on the bed, so
+            // branches above it lean out before they get there
+            if p = 0 and bedKeepOut > 0 and here:GetSize() > 0
+                here = offsetter:Offset(here, -bedKeepOut)
+            end
             if previous:GetSize() > 0
                 Array<Contour> shrunk = offsetter:Offset(previous, maxMove)
                 if shrunk:GetSize() > 0

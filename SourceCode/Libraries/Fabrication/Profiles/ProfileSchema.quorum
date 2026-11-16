@@ -90,6 +90,7 @@ class ProfileSchema
         AddNumber("supports", "supportTineXYGap", "0.3", 0, 10, "Gap between tines and the model (mm)")
         AddInteger("supports", "supportTopGapLayers", "1", 0, 20, "Empty layers between a tip and the model above it")
         AddInteger("supports", "supportBottomGapLayers", "1", 0, 20, "Empty layers between a branch and the model it rests on")
+        AddInteger("supports", "supportWallCount", "1", 1, 10, "Walls around each branch; extra walls go only where they fit, so thin tips keep one")
         AddNumber("supports", "supportDensity", "0.15", 0.01, 1, "Fill density inside branches")
         AddNumber("supports", "supportFirstLayerDensity", "0", 0, 1, "Fill density of the support's first layer, on the bed; 1 = solid, so a wide support base and the brim around it stick; 0 = same as supportDensity")
         AddInteger("supports", "supportRoofLayers", "2", 0, 20, "Dense layers at the top of each tip")
@@ -112,6 +113,7 @@ class ProfileSchema
         AddInteger("adhesion", "skirtLayers", "1", 1, 1000, "Skirt height in layers")
         AddInteger("adhesion", "brimLoops", "8", 0, 100, "Brim loops")
         AddNumber("adhesion", "brimGap", "0", 0, 10, "Gap between the brim and the model (mm)")
+        AddNumber("adhesion", "brimSupportGap", "0", 0, 20, "Keep the brim this far from the supports, going around the model only, so supports come off without tearing the brim (mm); 0 = the brim goes around the supports too")
 
         // ---- path order ----
         AddNumber("order", "seamX", "0", -1000000, 1000000, "Seams are placed nearest this point (mm)")

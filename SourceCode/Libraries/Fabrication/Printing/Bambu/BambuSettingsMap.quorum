@@ -201,6 +201,7 @@ class BambuSettingsMap
         Int("support_interface_top_layers", profile:GetInteger("supportRoofLayers"))
         Num("support_interface_spacing", Spacing(lineWidth, profile:GetNumber("supportRoofDensity")))
         Num("support_base_pattern_spacing", Spacing(lineWidth, profile:GetNumber("supportDensity")))
+        Int("tree_support_wall_count", profile:GetInteger("supportWallCount"))
 
         // ---- skirt / brim ----
         text adhesion = profile:GetText("adhesionType")
