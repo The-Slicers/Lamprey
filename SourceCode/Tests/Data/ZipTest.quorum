@@ -2,6 +2,7 @@ package Tests.Data
 
 use Libraries.Containers.Array
 use Libraries.System.File
+use Libraries.System.FileWriter
 use Libraries.Language.Errors.Error
 use Libraries.Data.Compression.ZipWriter
 use Libraries.Data.Compression.ZipReader
@@ -25,6 +26,7 @@ class ZipTest is LampreyTest
 
     action Run
         RoundTrip()
+        FileEntries()
         Checksums()
         ReaderErrors()
         WriterErrors()
@@ -47,6 +49,41 @@ class ZipTest is LampreyTest
         zip:Close()
         zip:Close()
         return archive
+    end
+
+    action FileEntries
+        Case("AddFile and AddMd5OfFile read a file a piece at a time")
+        text source = folder + "/files/source.gcode"
+        File file
+        file:SetPath(source)
+        File parentPath = file:GetParentDirectory()
+        if not parentPath:Exists()
+            parentPath:CreateDirectories()
+        end
+        FileWriter writer
+        writer:OpenForWrite(file)
+        writer:Write("; HEADER_BLOCK_START" + lf + "; old" + lf + "; HEADER_BLOCK_END" + lf + "G1 X1 Y2 E0.5" + lf)
+        writer:Close()
+        text original = file:Read()
+        integer first = original:IndexOf("; old")
+        integer stop = original:IndexOf("; HEADER_BLOCK_END")
+        text spliced = original:GetSubtext(0, first) + "; new" + lf + original:GetSubtext(stop)
+
+        ZipWriter zip
+        ExpectText(zip:ReadStart(source, 5), "; HEA", "ReadStart reads the first characters")
+        ExpectText(zip:ReadStart(source, 100000), original, "ReadStart stops at the end of the file")
+        text archive = folder + "/files/files.zip"
+        zip:Open(archive)
+        zip:AddMd5OfFile("plate.gcode.md5", source, first, stop, "; new" + lf)
+        zip:AddFile("plate.gcode", source, first, stop, "; new" + lf)
+        zip:AddMd5("text.md5", spliced)
+        zip:AddFile("whole.gcode", source, 0, 0, "")
+        zip:Close()
+
+        ZipReader reader
+        ExpectText(reader:ReadText(archive, "plate.gcode"), spliced, "AddFile swaps in the replacement")
+        ExpectText(reader:ReadText(archive, "whole.gcode"), original, "AddFile with no replacement copies the file")
+        ExpectText(reader:ReadText(archive, "plate.gcode.md5"), reader:ReadText(archive, "text.md5"), "AddMd5OfFile matches AddMd5 of the same text")
     end
 
     action RoundTrip
@@ -155,6 +192,13 @@ class ZipTest is LampreyTest
             badCopy = true
         end
         ExpectTrue(badCopy, "copying an entry that was never added")
+        boolean textCopy = false
+        check
+            zip:AddCopy("c.txt", "a.txt")
+        detect fourth
+            textCopy = true
+        end
+        ExpectTrue(textCopy, "copying an entry that isn't an image")
         zip:Close()
     end
 end

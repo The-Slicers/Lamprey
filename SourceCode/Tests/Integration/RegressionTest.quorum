@@ -6,6 +6,8 @@ use Libraries.Data.Formats.NumberFormatter
 use Libraries.System.File
 use Libraries.Fabrication.SliceJob
 use Libraries.Fabrication.Profiles.ProfileManager
+use Libraries.Fabrication.Printing.Bambu.BambuPackager
+use Libraries.Data.Compression.ZipReader
 use Tests.LampreyTest
 use Tests.TestModels
 use Tests.TestFiles
@@ -17,6 +19,10 @@ Regression tests: slices fixed models with frozen profiles
 G-code file (statistics, feature counts and an MD5 of the whole file) with
 the one recorded in Tests/Baselines/. Any change to the slicer's output,
 however small, makes the MD5 differ; the other lines show what changed.
+The Bambu cases are also packaged as a .gcode.3mf, and every entry of the
+archive is compared by MD5 (Tests/Baselines/<name>-3mf.txt), leaving out
+only the two dates in 3D/3dmodel.model. The archive file itself is not
+compared: zip entries carry the time they were written.
 
 The first run (or a run after a baseline file was deleted) records the
 baseline and passes with a note. After a change that is meant to alter the
@@ -64,8 +70,19 @@ class RegressionTest is LampreyTest
         text written = job:Run(model, profiles:Require(profileName), gcodePath)
         GcodeReader reader
         reader:Read(gcodePath)
-        text actual = Fingerprint(reader)
+        CompareWithBaseline(name, Fingerprint(reader))
 
+        if profileName = "bambu"
+            Case(name + " (3MF)")
+            BambuPackager packer
+            packer:SetSettingsTemplate("Templates/bambu-p2s/p2s_project_settings.json")
+            text archive = packer:Pack(gcodePath)
+            CompareWithBaseline(name + "-3mf", ArchiveFingerprint(archive))
+        end
+    end
+
+    /* Compares a fingerprint with Tests/Baselines/<name>.txt, or records it if there is none yet. */
+    action CompareWithBaseline(text name, text actual)
         text baselinePath = baselines + name + ".txt"
         File file
         file:SetPath(baselinePath)
@@ -102,7 +119,43 @@ class RegressionTest is LampreyTest
             end
             i = i + 1
         end
-        Note(name + ": the new G-code and fingerprint are in Outputs/tests/regression/. If the change is intended, delete " + baselinePath + " and run the tests again.")
+        Note(name + ": the new output and fingerprint are in Outputs/tests/regression/. If the change is intended, delete " + baselinePath + " and run the tests again.")
+    end
+
+    /*
+    One line per archive entry, in archive order: its name and the MD5 of
+    its contents. 3D/3dmodel.model holds the day it was made, so its
+    CreationDate and ModificationDate lines are left out first.
+    */
+    action ArchiveFingerprint(text archive) returns text
+        ZipReader zip
+        Array<text> names = zip:GetEntries(archive)
+        text result = "entries: " + names:GetSize() + lf
+        integer i = 0
+        repeat while i < names:GetSize()
+            text entry = names:Get(i)
+            text content = zip:ReadText(archive, entry)
+            if entry = "3D/3dmodel.model"
+                content = WithoutDates(content)
+            end
+            result = result + entry + ": " + files:Md5(content) + lf
+            i = i + 1
+        end
+        return result
+    end
+
+    private action WithoutDates(text content) returns text
+        Array<text> lines = content:Split(lf)
+        text result = ""
+        integer i = 0
+        repeat while i < lines:GetSize()
+            text line = lines:Get(i)
+            if not line:Contains("CreationDate") and not line:Contains("ModificationDate")
+                result = result + line + lf
+            end
+            i = i + 1
+        end
+        return result
     end
 
     /* One line per fact; the MD5 covers every byte (line endings made the same on every system). */

@@ -233,6 +233,31 @@ class GcodeWriter
     integer lastAccel = -1
     integer slowedLayers = 0
 
+    // Digit texts for WriteFixed, made once: "0" to "999", "000" to "999"
+    // and "00" to "99". Moves are written from these a piece at a time, so
+    // writing a coordinate makes no new text.
+    Array<text> wholeTexts
+    Array<text> threeDigitTexts
+    Array<text> twoDigitTexts
+
+    on create
+        integer i = 0
+        repeat while i < 1000
+            text digits = "" + i
+            wholeTexts:Add(digits)
+            if i < 10
+                threeDigitTexts:Add("00" + digits)
+                twoDigitTexts:Add("0" + digits)
+            elseif i < 100
+                threeDigitTexts:Add("0" + digits)
+                twoDigitTexts:Add(digits)
+            else
+                threeDigitTexts:Add(digits)
+            end
+            i = i + 1
+        end
+    end
+
     /*
     The layer height (mm).
 
@@ -1672,7 +1697,8 @@ class GcodeWriter
         end
 
         number speed = utils:Max2(SpeedFor(path, layer) * LayerFactor(layer), minPrintSpeed)
-        Line(";TYPE:" + roles:GetFeatureName(path:role))
+        writer:Write(";TYPE:")
+        writer:WriteLine(roles:GetFeatureName(path:role))
         text feature = BambuFeature(path, layer)
         Feature(feature)
 
@@ -1722,10 +1748,6 @@ class GcodeWriter
             end
             if len > 0.0001
                 number amount = len * e
-                text move = "G1 X" + Fixed(x, 3) + " Y" + Fixed(y, 3)
-                if not dryRun
-                    move = move + " E" + Fixed(amount, 5)
-                end
                 // an overhanging stretch of wall goes slower
                 number segmentSpeed = speed
                 number cap = SegmentCap(index, i)
@@ -1738,12 +1760,22 @@ class GcodeWriter
                 else
                     Feature(feature)
                 end
+                // the move, written a piece at a time (after the feature
+                // line, as before): "G1 X.. Y.. E.. F.."
+                writer:Write("G1 X")
+                WriteFixed(x, 3)
+                writer:Write(" Y")
+                WriteFixed(y, 3)
+                if not dryRun
+                    writer:Write(" E")
+                    WriteFixed(amount, 5)
+                end
                 integer feed = Feed(segmentSpeed)
                 if feed not= lastSpeed
-                    move = move + " F" + feed
+                    writer:Write(" F" + feed)
                     lastSpeed = feed
                 end
-                Line(move)
+                writer:WriteLine("")
                 totalFilament = totalFilament + amount
                 totalSeconds = totalSeconds + len / segmentSpeed
                 posX = x
@@ -1787,21 +1819,25 @@ class GcodeWriter
                 number step = utils:Min2(dist, total - done)
                 number x = posX + dx * step / dist
                 number y = posY + dy * step / dist
-                text move = "G1 X" + Fixed(x, 3) + " Y" + Fixed(y, 3)
+                writer:Write("G1 X")
+                WriteFixed(x, 3)
+                writer:Write(" Y")
+                WriteFixed(y, 3)
                 if pull
                     number back = retractLength * step / total
                     if done + step >= total - 0.0001
                         back = retractLength - pulled
                     end
-                    move = move + " E-" + Fixed(back, 5)
+                    writer:Write(" E-")
+                    WriteFixed(back, 5)
                     pulled = pulled + back
                 end
                 integer feed = Feed(wipeSpeed)
                 if feed not= lastSpeed
-                    move = move + " F" + feed
+                    writer:Write(" F" + feed)
                     lastSpeed = feed
                 end
-                Line(move)
+                writer:WriteLine("")
                 totalSeconds = totalSeconds + step / wipeSpeed
                 posX = x
                 posY = y
@@ -2366,7 +2402,11 @@ class GcodeWriter
 
         SetAccel(accelTravel)
         integer feed = Feed(travelSpeed)
-        Line("G0 X" + Fixed(x, 3) + " Y" + Fixed(y, 3) + " F" + feed)
+        writer:Write("G0 X")
+        WriteFixed(x, 3)
+        writer:Write(" Y")
+        WriteFixed(y, 3)
+        writer:WriteLine(" F" + feed)
         lastSpeed = feed
         totalSeconds = totalSeconds + len / travelSpeed
         posX = x
@@ -2416,7 +2456,9 @@ class GcodeWriter
     end
 
     private action MoveZ(number z)
-        Line("G1 Z" + Fixed(z, 3) + " F600")
+        writer:Write("G1 Z")
+        WriteFixed(z, 3)
+        writer:WriteLine(" F600")
         lastSpeed = -1
         posZ = z
         zKnown = true
@@ -2430,7 +2472,9 @@ class GcodeWriter
             if not TakeRetract()
                 return now
             end
-            Line("G1 E-" + Fixed(retractLength, 3) + " F" + Feed(retractSpeed))
+            writer:Write("G1 E-")
+            WriteFixed(retractLength, 3)
+            writer:WriteLine(" F" + Feed(retractSpeed))
             retracted = true
             lastSpeed = -1
         end
@@ -2465,7 +2509,9 @@ class GcodeWriter
             return now
         end
         if retracted
-            Line("G1 E" + Fixed(retractLength, 3) + " F" + Feed(retractSpeed))
+            writer:Write("G1 E")
+            WriteFixed(retractLength, 3)
+            writer:WriteLine(" F" + Feed(retractSpeed))
             retracted = false
             lastSpeed = -1
         end
@@ -2526,5 +2572,55 @@ class GcodeWriter
     // Fixed-point text: no scientific notation, which firmware can't parse.
     private action Fixed(number value, integer decimals) returns text
         return format:Fixed(value, decimals)
+    end
+
+    /*
+    Writes Fixed(value, decimals) straight to the file, from the digit
+    tables, without making any text: the same rounding as
+    NumberFormatter:Fixed (value * 10^decimals + 0.5, cut to a whole
+    number), the same digits, and no minus sign on a value that rounds to
+    zero. Only 3 and 5 decimals (coordinates and extrusion) use the tables;
+    anything else, and values of 2,000,000,000 or more once scaled, are
+    written with Fixed itself.
+    */
+    private action WriteFixed(number value, integer decimals)
+        if decimals not= 3 and decimals not= 5
+            writer:Write(Fixed(value, decimals))
+            return now
+        end
+        boolean negative = value < 0
+        number magnitude = value
+        if negative
+            magnitude = -value
+        end
+        number scale = 1000.0
+        integer unit = 1000
+        if decimals = 5
+            scale = 100000.0
+            unit = 100000
+        end
+        number rounded = magnitude * scale + 0.5
+        if not (rounded < 2000000000.0)
+            writer:Write(Fixed(value, decimals))
+            return now
+        end
+        integer scaled = cast(integer, rounded)
+        if negative and scaled not= 0
+            writer:Write("-")
+        end
+        integer whole = scaled / unit
+        integer fraction = scaled mod unit
+        if whole < 1000
+            writer:Write(wholeTexts:Get(whole))
+        else
+            writer:Write("" + whole)
+        end
+        writer:Write(".")
+        if decimals = 3
+            writer:Write(threeDigitTexts:Get(fraction))
+        else
+            writer:Write(twoDigitTexts:Get(fraction / 1000))
+            writer:Write(threeDigitTexts:Get(fraction mod 1000))
+        end
     end
 end

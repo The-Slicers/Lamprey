@@ -12,7 +12,12 @@ plugins.quorum.Libraries.Data.Compression.ZipWriter (Plugins/src).
 
 Every action stops with an error that names the archive and the entry when
 something goes wrong: adding before Open, adding the same entry twice,
-copying an entry that was never added, or a file system error.
+copying an entry that was never added (or that isn't an image), or a file
+system error.
+
+Only image entries are kept in memory after they are written, so AddCopy
+can copy them. A large text file is best added with AddFile, which reads it
+a piece at a time instead of holding it all as text.
 
 Attribute: Example
 
@@ -133,10 +138,12 @@ class ZipWriter
     system action AddImage(text entryName)
 
     /*
-    Adds another entry with exactly the same bytes as an entry added earlier.
+    Adds another entry with exactly the same bytes as an image added earlier
+    (with AddImage, or a copy of one). Other entries are not kept in memory,
+    so they can't be copied.
 
     Attribute: Parameter entryName The name of the new entry.
-    Attribute: Parameter existingEntryName The entry to copy.
+    Attribute: Parameter existingEntryName The image entry to copy.
 
     Attribute: Example
 
@@ -171,6 +178,75 @@ class ZipWriter
         zip:Close()
     */
     system action AddMd5(text entryName, text content)
+
+    /*
+    Adds a text file as an entry, read a piece at a time so it is never held
+    in memory whole. The file is read as text the way File:Read reads it and
+    stored as UTF-8, like AddText. The characters from position firstCharacter up
+    to (not including) position endCharacter are replaced by the replacement
+    text, so the entry holds exactly what AddText would store for
+    text:GetSubtext(0, firstCharacter) + replacement + text:GetSubtext(endCharacter),
+    where text is the whole file. AddFile(name, path, 0, 0, "") adds the
+    file unchanged. Positions count characters, as GetSubtext does.
+
+    Attribute: Parameter entryName The name inside the archive, such as "Metadata/plate_1.gcode".
+    Attribute: Parameter path The text file to add.
+    Attribute: Parameter firstCharacter The first character to replace.
+    Attribute: Parameter endCharacter The character after the last one to replace (firstCharacter for none).
+    Attribute: Parameter replacement The text written in their place.
+
+    Attribute: Example
+
+        use Libraries.Data.Compression.ZipWriter
+
+        ZipWriter zip
+        zip:Open("Outputs/print.zip")
+        zip:AddFile("Metadata/plate_1.gcode", "Outputs/cube.gcode", 0, 0, "")
+        zip:Close()
+    */
+    system action AddFile(text entryName, text path, integer firstCharacter, integer endCharacter, text replacement)
+
+    /*
+    Adds a text entry holding the MD5 checksum of exactly the bytes
+    AddFile(entryName, path, firstCharacter, endCharacter, replacement) would write, in
+    the same form as AddMd5. The file is read a piece at a time.
+
+    Attribute: Parameter entryName The name of the checksum entry.
+    Attribute: Parameter path The text file to checksum.
+    Attribute: Parameter firstCharacter The first character to replace.
+    Attribute: Parameter endCharacter The character after the last one to replace (firstCharacter for none).
+    Attribute: Parameter replacement The text checksummed in their place.
+
+    Attribute: Example
+
+        use Libraries.Data.Compression.ZipWriter
+
+        ZipWriter zip
+        zip:Open("Outputs/print.zip")
+        zip:AddMd5OfFile("Metadata/plate_1.gcode.md5", "Outputs/cube.gcode", 0, 0, "")
+        zip:AddFile("Metadata/plate_1.gcode", "Outputs/cube.gcode", 0, 0, "")
+        zip:Close()
+    */
+    system action AddMd5OfFile(text entryName, text path, integer firstCharacter, integer endCharacter, text replacement)
+
+    /*
+    The first characters of a text file (all of it, if it is shorter), read
+    the way File:Read reads the whole file: the same as File:Read followed by
+    GetSubtext(0, count), without reading the rest. It does not need an open
+    archive.
+
+    Attribute: Parameter path The text file.
+    Attribute: Parameter count How many characters to read at most.
+    Attribute: Returns The start of the file.
+
+    Attribute: Example
+
+        use Libraries.Data.Compression.ZipWriter
+
+        ZipWriter zip
+        text top = zip:ReadStart("Outputs/cube.gcode", 3000)
+    */
+    system action ReadStart(text path, integer count) returns text
 
     /*
     Finishes the archive. Nothing in it can be read until this is called.

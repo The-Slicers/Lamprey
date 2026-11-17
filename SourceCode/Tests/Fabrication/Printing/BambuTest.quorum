@@ -55,10 +55,41 @@ class BambuTest is LampreyTest
         gcode:Write(ordered, gcodePath)
 
         PackagesACube()
+        ScanReadsAwkwardLines()
         PackagingProblems()
         ProjectSettings()
         SettingsFromAProfile()
         A1Settings()
+    end
+
+    /*
+    Scan reads moves in place rather than splitting lines into words; the
+    results must be what splitting gave: runs of spaces and tabs count as
+    one, a later X replaces an earlier one, a lone "X" is ignored, and
+    numbers like 1e-1, .25 and +0.75 are read. G01, g1 and G1X5 aren't moves.
+    The expected values were worked out with the old word-splitting code.
+    */
+    action ScanReadsAwkwardLines
+        Case("Scan reads moves however they are spaced")
+        text tab = ""
+        tab = tab:GetTab()
+        text g = "; total layer number: 3" + lf + ";========== END OF START G-CODE" + lf + ";LAYER:0" + lf
+        g = g + "G1 X10 Y0 E1 F600" + lf
+        g = g + "G1  X20" + tab + "Y0 E0.5 ;comment" + lf
+        g = g + "G1 X20 Y10 E1e-1" + lf
+        g = g + "G1 X-0.000 Y10" + lf
+        g = g + "G01 X99 E5" + lf
+        g = g + "g1 X99 E5" + lf
+        g = g + "G1X5 E5" + lf
+        g = g + "G1 X E5" + lf
+        g = g + "G1 X30 X40 Y10 E.25" + lf
+        g = g + "G1 X40 Y20 E+0.75 F1200" + lf
+        g = g + "G1 X40 Y20 E2 ;no move" + lf
+        g = g + "G0 X0 Y0 E-1" + lf
+        BambuPackager packer
+        packer:Scan(g)
+        ExpectInteger(packer:GetLayerCount(), 3, "layers from the header")
+        ExpectNumber(packer:GetFilamentLength(), 9.6, 0.000001, "filament from every E value a move gives")
     end
 
     action PackagesACube

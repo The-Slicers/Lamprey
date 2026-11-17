@@ -1,12 +1,15 @@
 package Tests.Integration
 
 use Libraries.Containers.Array
+use Libraries.Data.Containers.NumberBuffer
 use Libraries.Data.Compression.ZipReader
 use Libraries.Game.Graphics.Models.Data.ModelData
+use Libraries.Game.Graphics.Models.Data.ModelLoader
 use Libraries.Fabrication.SliceJob
 use Libraries.Fabrication.Profiles.Profile
 use Libraries.Fabrication.Profiles.ProfileManager
 use Libraries.System.File
+use Libraries.System.FileWriter
 use Tests.LampreyTest
 use Tests.TestModels
 use Tests.TestFiles
@@ -33,6 +36,7 @@ class SliceJobTest is LampreyTest
         TopSurfaceAndIroning()
         BambuArchive()
         BambuA1Archive()
+        RunFileMatchesRun()
         UnusableInput()
     end
 
@@ -185,6 +189,76 @@ class SliceJobTest is LampreyTest
         end
     end
 
+    action RunFileMatchesRun
+        Case("RunFile loads the model itself and slices the same as Run")
+        text stlPath = files:Path("slice/runfile-cube.stl")
+        WriteCubeStl(stlPath, 20)
+        File stlFile
+        stlFile:SetPath(stlPath)
+        ModelLoader loader
+        ModelData model = loader:Load(stlFile)
+        Profile profile = profiles:Require("ender3-v2")
+
+        SliceJob first
+        first:SetVerbose(false)
+        text runPath = files:Path("slice/runfile-run.gcode")
+        text written = first:Run(model, profile, runPath)
+
+        SliceJob second
+        second:SetVerbose(false)
+        text fileRunPath = files:Path("slice/runfile-runfile.gcode")
+        text fileWritten = second:RunFile(stlPath, profile, fileRunPath)
+        ExpectText(fileWritten, fileRunPath, "RunFile returns the G-code path")
+
+        File one
+        one:SetPath(runPath)
+        File two
+        two:SetPath(fileRunPath)
+        text runText = one:Read()
+        text fileText = two:Read()
+        ExpectTrue(runText:GetSize() > 1000, "Run wrote the cube")
+        ExpectTrue(runText = fileText, "RunFile writes exactly the G-code Run does")
+    end
+
+    /* An ASCII STL of a cube from (0, 0, 0) to (size, size, size), faces wound outward. */
+    action WriteCubeStl(text path, number size)
+        text corners = "0 0 0 0 1 0 1 1 0  0 0 0 1 1 0 1 0 0  0 0 1 1 0 1 1 1 1  0 0 1 1 1 1 0 1 1  "
+            + "0 0 0 1 0 0 1 0 1  0 0 0 1 0 1 0 0 1  0 1 0 0 1 1 1 1 1  0 1 0 1 1 1 1 1 0  "
+            + "0 0 0 0 0 1 0 1 1  0 0 0 0 1 1 0 1 0  1 0 0 1 1 0 1 1 1  1 0 0 1 1 1 1 0 1"
+        Array<text> parts = corners:Split(" ")
+        NumberBuffer values
+        integer i = 0
+        repeat while i < parts:GetSize()
+            text part = parts:Get(i)
+            if part not= ""
+                values:Add(part:ParseNumber() * size)
+            end
+            i = i + 1
+        end
+        text lf = ""
+        lf = lf:GetLineFeed()
+        text stl = "solid cube" + lf
+        integer v = 0
+        repeat while v + 8 < values:GetSize()
+            stl = stl + "facet normal 0 0 0" + lf + "outer loop" + lf
+            integer c = 0
+            repeat while c < 3
+                integer at = v + 3 * c
+                stl = stl + "vertex " + values:Get(at) + " " + values:Get(at + 1) + " " + values:Get(at + 2) + lf
+                c = c + 1
+            end
+            stl = stl + "endloop" + lf + "endfacet" + lf
+            v = v + 9
+        end
+        stl = stl + "endsolid cube" + lf
+        File file
+        file:SetPath(path)
+        FileWriter writer
+        writer:OpenForWrite(file)
+        writer:Write(stl)
+        writer:Close()
+    end
+
     action UnusableInput
         Case("unusable input stops with a message")
         boolean flat = false
@@ -205,5 +279,15 @@ class SliceJobTest is LampreyTest
             noPath = true
         end
         ExpectTrue(noPath, "no G-code path")
+
+        boolean noModel = false
+        check
+            SliceJob job3
+            job3:SetVerbose(false)
+            text result3 = job3:RunFile(files:Path("slice/no-such-model.stl"), profiles:Require("ender3-v2"), files:Path("slice/missing.gcode"))
+        detect e3
+            noModel = true
+        end
+        ExpectTrue(noModel, "a model file that isn't there")
     end
 end

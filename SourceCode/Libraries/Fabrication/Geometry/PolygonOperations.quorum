@@ -143,6 +143,22 @@ class PolygonOperations
     IntegerBuffer crossA
     IntegerBuffer crossB
 
+    // Working buffers that used to be made afresh on every call: kept here
+    // and emptied instead, so after the first few calls they stop growing
+    // and nothing new is allocated (Empty keeps their memory).
+    NumberBuffer addX
+    NumberBuffer addY
+    IntegerBuffer resolveGroupNext
+    IntegerBuffer resolveLive
+    IntegerBuffer bandsCursor
+    IntegerBuffer splitsCursor
+    IntegerBuffer halfEdgesCursor
+    IntegerBuffer facesCursor
+    IntegerBuffer chainOutStart
+    IntegerBuffer chainOutList
+    IntegerBuffer chainCursor
+    IntegerBuffer chainUsed
+
     /*
     How many loops the last Resolve dropped because their pieces didn't chain into a loop (degenerate input).
 
@@ -351,8 +367,10 @@ class PolygonOperations
         Array<Contour> triangle = ops:Resolve(1, 0)
     */
     action AddPoints(NumberBuffer xs, NumberBuffer ys, boolean reversed)
-        NumberBuffer lx
-        NumberBuffer ly
+        NumberBuffer lx = addX
+        lx:Empty()
+        NumberBuffer ly = addY
+        ly:Empty()
         integer n = xs:GetSize()
         integer i = 0
         repeat while i < n
@@ -523,7 +541,8 @@ class PolygonOperations
         nodePairs:Empty()
         groupFirst:Empty()
         groupOf:Empty()
-        IntegerBuffer groupNext
+        IntegerBuffer groupNext = resolveGroupNext
+        groupNext:Empty()
         integer p = 0
         repeat while p < pieceTotal
             groupNext:Add(-1)
@@ -546,7 +565,8 @@ class PolygonOperations
         FaceWindings()
 
         // judge each group once; keep one copy facing the right way
-        IntegerBuffer live
+        IntegerBuffer live = resolveLive
+        live:Empty()
         p = 0
         repeat while p < pieceTotal
             if groupFirst:Get(groupOf:Get(p)) = p
@@ -849,7 +869,8 @@ class PolygonOperations
             bandEdges:Add(0)
             slot = slot + 1
         end
-        IntegerBuffer cursor
+        IntegerBuffer cursor = bandsCursor
+        cursor:Empty()
         b = 0
         repeat while b < bandCount
             cursor:Add(bandStart:Get(b))
@@ -1216,7 +1237,8 @@ class PolygonOperations
             splitOrder:Add(0)
             s = s + 1
         end
-        IntegerBuffer cursor
+        IntegerBuffer cursor = splitsCursor
+        cursor:Empty()
         e = 0
         repeat while e < edgeCount
             cursor:Add(splitStart:Get(e))
@@ -1674,7 +1696,8 @@ class PolygonOperations
         edgeSlot:Empty()
         edgeSlot:SetSize(halfTotal)
         edgeTurn:Empty()
-        IntegerBuffer cursor
+        IntegerBuffer cursor = halfEdgesCursor
+        cursor:Empty()
         n = 0
         repeat while n < nodeTotal
             cursor:Add(edgeStart:Get(n))
@@ -1765,7 +1788,8 @@ class PolygonOperations
         end
         faceEdges:Empty()
         faceEdges:SetSize(halfTotal)
-        IntegerBuffer cursor
+        IntegerBuffer cursor = facesCursor
+        cursor:Empty()
         f = 0
         repeat while f < faces
             cursor:Add(faceStart:Get(f))
@@ -1888,7 +1912,8 @@ class PolygonOperations
         end
 
         // outgoing live pieces per node (counting sort by start node)
-        IntegerBuffer outStart
+        IntegerBuffer outStart = chainOutStart
+        outStart:Empty()
         integer n = 0
         repeat while n <= nodeCount
             outStart:Add(0)
@@ -1905,13 +1930,15 @@ class PolygonOperations
             outStart:Set(n, outStart:Get(n) + outStart:Get(n - 1))
             n = n + 1
         end
-        IntegerBuffer outList
+        IntegerBuffer outList = chainOutList
+        outList:Empty()
         k = 0
         repeat while k < liveCount
             outList:Add(0)
             k = k + 1
         end
-        IntegerBuffer cursor
+        IntegerBuffer cursor = chainCursor
+        cursor:Empty()
         n = 0
         repeat while n < nodeCount
             cursor:Add(outStart:Get(n))
@@ -1925,17 +1952,18 @@ class PolygonOperations
             k = k + 1
         end
 
-        Array<boolean> used
+        IntegerBuffer used = chainUsed
+        used:Empty()
         k = 0
         repeat while k < liveCount
-            used:Add(false)
+            used:Add(0)
             k = k + 1
         end
 
         k = 0
         repeat while k < liveCount
-            if not used:Get(k)
-                used:Set(k, true)
+            if used:Get(k) = 0
+                used:Set(k, 1)
                 integer piece = live:Get(k)
                 Contour loop
                 loop:AddPoint(px0:Get(piece), py0:Get(piece))
@@ -1951,7 +1979,7 @@ class PolygonOperations
                     integer found = -1
                     integer o = outStart:Get(current)
                     repeat while o < outStart:Get(current + 1) and found = -1
-                        if not used:Get(outList:Get(o))
+                        if used:Get(outList:Get(o)) = 0
                             found = outList:Get(o)
                         end
                         o = o + 1
@@ -1968,7 +1996,7 @@ class PolygonOperations
                         end
                     end
                     if found not= -1
-                        used:Set(found, true)
+                        used:Set(found, 1)
                         integer foundPiece = live:Get(found)
                         loop:AddPoint(px1:Get(foundPiece), py1:Get(foundPiece))
                         lastX = px1:Get(foundPiece)
@@ -1985,11 +2013,11 @@ class PolygonOperations
         end
     end
 
-    private action NearStart(IntegerBuffer live, Array<boolean> used,
+    private action NearStart(IntegerBuffer live, IntegerBuffer used,
                              number x, number y) returns integer
         integer k = 0
         repeat while k < live:GetSize()
-            if not used:Get(k) 
+            if used:Get(k) = 0 
                 integer piece = live:Get(k) 
                 if SamePoint(px0:Get(piece), py0:Get(piece), x, y)
                     return k

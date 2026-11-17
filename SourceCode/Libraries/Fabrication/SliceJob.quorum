@@ -1,7 +1,9 @@
 package Libraries.Fabrication
 
 use Libraries.Containers.Array
+use Libraries.System.File
 use Libraries.Game.Graphics.Models.Data.ModelData
+use Libraries.Game.Graphics.Models.Data.ModelLoader
 
 use Libraries.Data.Formats.NumberFormatter
 use Libraries.Fabrication.Geometry.Contour
@@ -33,29 +35,22 @@ used one at a time, to set up a single stage from a profile in a test.
 
 Attribute: Example
 
-    use Libraries.System.File
-    use Libraries.Game.Graphics.Models.Data.ModelLoader
-    use Libraries.Game.Graphics.Models.Data.ModelData
     use Libraries.Fabrication.SliceJob
     use Libraries.Fabrication.Profiles.ProfileManager
 
     class Main
         action Main
-            File file
-            file:SetPath("assets/benchy.stl")
-            ModelLoader loader
-            ModelData model = loader:Load(file)
-
             ProfileManager profiles
             profiles:Load("Profiles/profiles.json")
             SliceJob job
-            job:Run(model, profiles:Require("bambu-p2s"), "Outputs/benchy.gcode")
+            job:RunFile("assets/benchy.stl", profiles:Require("bambu-p2s"), "Outputs/benchy.gcode")
         end
     end
 */
 class SliceJob
     boolean verbose = true
     NumberFormatter format
+    TriangleMesh pendingMesh = undefined    // handed from Run / RunFile to SliceMesh
 
     /*
     Whether Run prints its progress and statistics (on by default). Warnings
@@ -77,7 +72,8 @@ class SliceJob
     /*
     Slices the model with the profile and writes the G-code to gcodePath. If
     the profile has write3mf on, also packages it as a Bambu .gcode.3mf next
-    to it.
+    to it. The caller keeps the model data alive throughout; RunFile, which
+    loads the model itself, can free it as soon as the triangles are copied.
 
     Attribute: Parameter data The loaded model.
     Attribute: Parameter profile The settings to slice with.
@@ -106,22 +102,82 @@ class SliceJob
         if data = undefined
             alert("SliceJob:Run was given no model (undefined).")
         end
+        Begin(profile, gcodePath, "Run")
+        TriangleMesh mesh
+        mesh:Load(data)
+        pendingMesh = mesh
+        mesh = undefined
+        return SliceMesh(profile, gcodePath)
+    end
+
+    /*
+    Loads the model file and slices it, like Run. The loaded model (with the
+    normals and tangents ModelLoader adds, which slicing never reads) is let
+    go as soon as its triangles are copied out, so for a large model this
+    needs much less memory than loading it yourself and calling Run.
+
+    Attribute: Parameter modelPath The model file, in any format ModelLoader reads (such as .stl or .obj).
+    Attribute: Parameter profile The settings to slice with.
+    Attribute: Parameter gcodePath Where to write the G-code.
+    Attribute: Returns The path of the last file written (the .gcode.3mf, or the .gcode).
+
+    Attribute: Example
+
+        use Libraries.Fabrication.SliceJob
+        use Libraries.Fabrication.Profiles.ProfileManager
+
+        ProfileManager profiles
+        profiles:Load("Profiles/profiles.json")
+        SliceJob job
+        text written = job:RunFile("assets/3dbenchy.stl", profiles:Require("ender3-v2"), "Outputs/benchy.gcode")
+        output "Wrote " + written
+    */
+    action RunFile(text modelPath, Profile profile, text gcodePath) returns text
+        Begin(profile, gcodePath, "RunFile")
+        pendingMesh = LoadModelFile(modelPath)
+        return SliceMesh(profile, gcodePath)
+    end
+
+    // checks the arguments both Run and RunFile take, then reports the profile
+    private action Begin(Profile profile, text gcodePath, text caller)
         if profile = undefined
-            alert("SliceJob:Run was given no profile (undefined).")
+            alert("SliceJob:" + caller + " was given no profile (undefined).")
         end
         if gcodePath = ""
-            alert("SliceJob:Run needs a path for the G-code file.")
+            alert("SliceJob:" + caller + " needs a path for the G-code file.")
         end
         Warn(profile:Validate(), "profile '" + profile:GetName() + "': ")
         Log("Slicing with " + profile:Describe())
+    end
 
+    // The model data only lives inside this action, so it can be collected
+    // as soon as the mesh has its triangles.
+    private action LoadModelFile(text modelPath) returns TriangleMesh
+        File file
+        file:SetPath(modelPath)
+        ModelLoader loader
+        ModelData data = loader:Load(file)
+        if data = undefined
+            alert("Could not load the model " + modelPath + ". Lamprey reads the formats ModelLoader does, such as .stl and .obj.")
+        end
         TriangleMesh mesh
         mesh:Load(data)
+        return mesh
+    end
+
+    // The mesh comes in through the pendingMesh field rather than a
+    // parameter, so that once this action lets go of it nothing else holds it.
+    private action SliceMesh(Profile profile, text gcodePath) returns text
+        TriangleMesh mesh = pendingMesh
+        pendingMesh = undefined
         Log("model: " + mesh:GetTriangleCount() + " triangles, " + mesh:GetVertexCount() + " vertices")
 
         MeshSlicer slicer
         ConfigureSlicer(profile, slicer)
         slicer:SetTriangles(mesh)
+        // the slicer now has its own copy of the vertices (it shares only the
+        // corner list), so the mesh's coordinates can go before slicing
+        mesh = undefined
         Log("base faced " + slicer:GetBaseDirection() + " in the file, unit scale " + format:Short(slicer:GetUnitScale())
             + ", " + slicer:GetUniqueVertexCount() + " distinct vertices")
         NumberBuffer planeRange = slicer:GetSliceRange()
@@ -152,6 +208,15 @@ class SliceJob
         end
         Log("outlines: " + contours:GetSize() + " (" + conGen:GetFlippedCount() + " reoriented, " + conGen:GetDroppedCount()
             + " specks dropped, points " + conGen:GetPointsBefore() + " -> " + conGen:GetPointsAfter() + ")")
+
+        // SliceMesh keeps every local until it returns, so let go of each
+        // stage's data once the next stage has what it needs: the slicer and
+        // the raw slice segments are done once the outlines exist.
+        segments = undefined
+        slicer = undefined
+        conGen = undefined
+        planes = undefined
+        planeRange = undefined
 
         PathGenerator paths
         ConfigurePaths(profile, paths)
@@ -198,6 +263,7 @@ class SliceJob
                 end
             end
             orderer:SetSupport(trees:GetPaths())
+            trees = undefined
         end
 
         if profile:GetText("adhesionType") not= "none"
@@ -208,6 +274,7 @@ class SliceJob
             end
             orderer:SetSkirt(skirtGen:Generate(base))
             Warn(skirtGen:GetWarnings(), "")
+            skirtGen = undefined
         end
 
         Array<Contour> ordered = orderer:Order(contours, walls, skin, infill, planeCount)
@@ -215,6 +282,18 @@ class SliceJob
         if ordered:GetSize() = 0
             alert("Nothing is left to print: every path was too short. Check lineWidth, wallCount and the minLoopLength / minLineLength settings against the model's size.")
         end
+        // PathOrderer made new contours for everything it ordered, so the
+        // unordered paths (and the generators holding them) can go before
+        // the G-code is written.
+        walls = undefined
+        skin = undefined
+        infill = undefined
+        topSurface = undefined
+        ironing = undefined
+        paths = undefined
+        base = undefined
+        supportAreas = undefined
+        orderer = undefined
 
         GcodeWriter gcode
         ConfigureGcode(profile, gcode)
@@ -233,6 +312,10 @@ class SliceJob
         if gcode:GetSkippedRetractCount() > 0
             Log("  " + gcode:GetSkippedRetractCount() + " retracts skipped to avoid grinding the filament")
         end
+        // the G-code file holds everything from here on
+        ordered = undefined
+        contours = undefined
+        gcode = undefined
 
         if profile:GetBoolean("write3mf")
             BambuPackager packer

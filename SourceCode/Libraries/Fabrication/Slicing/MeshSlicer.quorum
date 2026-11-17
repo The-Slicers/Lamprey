@@ -215,6 +215,7 @@ class MeshSlicer
         PointIndex points
         IntegerBuffer firstVertex       // per distinct point: the first vertex there
         mergedIds:Empty()
+        mergedIds:Reserve(count)        // one per vertex: size it once instead of doubling
         integer v = 0
         repeat while v < count
             integer xy = flat:IdOf(vertX:Get(v), vertY:Get(v))
@@ -329,11 +330,19 @@ class MeshSlicer
             alert("MeshSlicer:Slice needs the planes from BuildPlanes, which hasn't been called.")
         end
         Array<Segment> result
-        Array<SliceCrossing> crossings
         maxCrossingsPerFace = 0
         oddCount = 0
 
         integer cornersPerFace = 3
+        // one crossing per triangle edge at most, so a few are made once and
+        // CollectCrossings overwrites them for every triangle and plane
+        Array<SliceCrossing> crossings
+        integer spare = 0
+        repeat while spare < cornersPerFace
+            SliceCrossing crossing
+            crossings:Add(crossing)
+            spare = spare + 1
+        end
         integer faceCount = GetFaceCount()
         integer planeCount = planeZ:GetSize()
 
@@ -362,10 +371,7 @@ class MeshSlicer
 
             integer i = idStart
             repeat while i <= idEnd
-                crossings:Empty()
-                CollectCrossings(f, cornersPerFace, planeZ:Get(i), crossings)
-
-                integer n = crossings:GetSize()
+                integer n = CollectCrossings(f, cornersPerFace, planeZ:Get(i), crossings)
                 if n > maxCrossingsPerFace
                     maxCrossingsPerFace = n
                 end
@@ -670,9 +676,12 @@ class MeshSlicer
     end
 
     // walks the edges of triangle f and records every edge that has
-    // one end below the plane and the other at or above it
+    // one end below the plane and the other at or above it, overwriting
+    // the first crossings in result (which holds one per edge); returns
+    // how many it filled in
     private action CollectCrossings(integer f, integer cornersPerFace, number planeValue,
-                                    Array<SliceCrossing> result)
+                                    Array<SliceCrossing> result) returns integer
+        integer count = 0
         integer j = 0
         repeat while j < cornersPerFace
             integer k = j + 1
@@ -698,16 +707,17 @@ class MeshSlicer
                 // t = how far along the edge (0..1) the plane sits
                 number t = (planeValue - vertZ:Get(low)) / (vertZ:Get(high) - vertZ:Get(low))
 
-                SliceCrossing point
+                SliceCrossing point = result:Get(count)
                 point:x = vertX:Get(low) + t * (vertX:Get(high) - vertX:Get(low))
                 point:y = vertY:Get(low) + t * (vertY:Get(high) - vertY:Get(low))
                 point:edgeLow = low
                 point:edgeHigh = high
                 point:rising = aBelow
-                result:Add(point)
+                count = count + 1
             end
             j = j + 1
         end
+        return count
     end
 
     // Turns a triangle's two crossings into a segment. The rising crossing

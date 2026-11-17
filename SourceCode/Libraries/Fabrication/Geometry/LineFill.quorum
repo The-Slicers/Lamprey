@@ -49,6 +49,16 @@ class LineFill
     Math math
     GeometryUtilities util
 
+    // Hatch's working buffers, kept between calls and emptied, so filling
+    // layer after layer stops allocating them (see PolygonOperations)
+    NumberBuffer hatchRx
+    NumberBuffer hatchRy
+    IntegerBuffer hatchLoopStart
+    IntegerBuffer hatchSegLine
+    NumberBuffer hatchSegA
+    NumberBuffer hatchSegB
+    NumberBuffer hatchHits
+
     /*
     Fills a region with separate straight lines.
 
@@ -132,9 +142,12 @@ class LineFill
         end
 
         // rotate the region by -angle so the lines become horizontal
-        NumberBuffer rx
-        NumberBuffer ry
-        IntegerBuffer loopStart
+        NumberBuffer rx = hatchRx
+        rx:Empty()
+        NumberBuffer ry = hatchRy
+        ry:Empty()
+        IntegerBuffer loopStart = hatchLoopStart
+        loopStart:Empty()
         integer c = 0
         repeat while c < region:GetSize()
             Contour con = region:Get(c)
@@ -164,11 +177,15 @@ class LineFill
         end
 
         // with join on, the lines are kept (in rotated space) and chained after
-        IntegerBuffer segLine
-        NumberBuffer segA
-        NumberBuffer segB
+        IntegerBuffer segLine = hatchSegLine
+        segLine:Empty()
+        NumberBuffer segA = hatchSegA
+        segA:Empty()
+        NumberBuffer segB = hatchSegB
+        segB:Empty()
 
-        NumberBuffer hits
+        NumberBuffer hits = hatchHits
+        hits:Empty()
         integer lineCount = 0
         integer line = util:CeilingToInt(lowY / spacing)
         repeat while cast(number, line) * spacing <= highY
@@ -245,10 +262,10 @@ class LineFill
                              NumberBuffer rx, NumberBuffer ry, IntegerBuffer loopStart, integer loopCount,
                              number spacing, number cs, number sn, integer planeIndex, Array<Contour> target)
         integer count = segLine:GetSize()
-        Array<boolean> used
+        IntegerBuffer used
         integer i = 0
         repeat while i < count
-            used:Add(false)
+            used:Add(0)
             i = i + 1
         end
         // longest sideways step a link may take: steep edges are fine,
@@ -258,8 +275,8 @@ class LineFill
 
         integer seed = 0
         repeat while seed < count
-            if not used:Get(seed)
-                used:Set(seed, true)
+            if used:Get(seed) = 0
+                used:Set(seed, 1)
                 NumberBuffer px
                 NumberBuffer py
                 integer cur = seed
@@ -285,7 +302,7 @@ class LineFill
                         elseif segLine:Get(k) > nextLine
                             scanning = false
                         else
-                            if segLine:Get(k) = nextLine and not used:Get(k)
+                            if segLine:Get(k) = nextLine and used:Get(k) = 0
                                 number startX = segA:Get(k)
                                 if atRight
                                     startX = segB:Get(k)
@@ -305,7 +322,7 @@ class LineFill
                     if best = -1
                         going = false
                     else
-                        used:Set(best, true)
+                        used:Set(best, 1)
                         if atRight
                             px:Add(segB:Get(best))
                             py:Add(nextY)

@@ -23,7 +23,7 @@ use Tests.LampreyTests
 */
 class Main
     boolean runTests = false
-    text modelPath = "assets/3dbenchy.stl"
+    text modelPath = "assets/werewolf_75mm.stl"
     text profilesPath = "Profiles/profiles.json"
     text profileName = "bambu-a1" // or "bambu-a1", "bambu-p2s", "ender3-v2", "ender3-v2-fine", "bambu-p2s-petg"
     text outputFolder = "Outputs"
@@ -39,24 +39,17 @@ class Main
             number start = timer:GetEpochTime()
             ArgumentChecker checker
             checker:RequireFile("Model", modelPath)
-            File file
-            file:SetPath(modelPath)
-            ModelLoader loader
-            ModelData data = loader:Load(file)
-            if data = undefined
-                alert("Could not load the model " + modelPath + ". Lamprey reads the formats ModelLoader does, such as .stl and .obj.")
-            end
     
             ProfileManager profiles
             profiles:Load(profilesPath)
             PrintWarnings(profiles:GetWarnings())
             Profile profile = profiles:Require(profileName)
             profile:Set("supportsEnabled", "true")
-            profile:Set("adhesionType", "brim")
+            profile:Set("adhesionType", "none")
     
             text gcodePath = outputFolder + "/" + BaseName(modelPath) + ".gcode"
             SliceJob job
-            job:Run(data, profile, gcodePath)
+            job:RunFile(modelPath, profile, gcodePath)
     
             // a standalone copy of the Bambu settings that went into the 3MF, to inspect or diff
             if profile:GetBoolean("write3mf")

@@ -3,8 +3,10 @@ package Libraries.Fabrication.Printing.Bambu
 use Libraries.Compute.Math
 use Libraries.Containers.Array
 use Libraries.Containers.Number64BitArray
+use Libraries.Containers.Integer32BitArray
 use Libraries.System.DateTime
 use Libraries.System.File
+use Libraries.System.FileReader
 use Libraries.Data.Compression.ZipWriter
 use Libraries.Data.Formats.NumberFormatter
 use Libraries.Fabrication.ArgumentChecker
@@ -62,10 +64,32 @@ class BambuPackager
     integer bedTemperature = 0
     number filamentDiameter = 1.75
 
-    // Extrusion segments, five numbers each: x0, y0, x1, y1, z.
+    // Extrusion segments, five numbers each: x0, y0, x1, y1, z. While every
+    // value is a whole number of thousandths of a mm (G-code coordinates
+    // have 3 decimals), they are kept as integers in segmentMilli, half the
+    // memory of doubles; the first value that isn't moves them all to
+    // segments. SegmentValue reads back the same number either way.
     Number64BitArray segments
+    Integer32BitArray segmentMilli
+    boolean milliStorage = true
+    boolean milliOk = false
+    boolean sawNegativeZero = false
     integer segmentCount = 0
     integer segmentCapacity = 0
+
+    // What the line-by-line scan of a file found besides the moves
+    text headerTime = ""
+    text headerLayers = ""
+    text headerMaxZ = ""
+    text headerDiameter = ""
+    boolean haveTime = false
+    boolean haveLayers = false
+    boolean haveMaxZ = false
+    boolean haveDiameter = false
+    boolean toolZeroFound = false
+
+    // 10^0 ... 10^15, exact as doubles, for reading decimals
+    Number64BitArray powersOfTen
     number boundsMinX = 0.0
     number boundsMaxX = 0.0
     number boundsMinY = 0.0
@@ -107,6 +131,14 @@ class BambuPackager
         cr = cr:GetCarriageReturn()
         tab = tab:GetTab()
         dq = dq:GetDoubleQuote()
+        powersOfTen:SetSize(16)
+        number power = 1.0
+        integer k = 0
+        repeat while k < 16
+            powersOfTen:Set(k, power)
+            power = power * 10.0
+            k = k + 1
+        end
     end
 
     /*
@@ -361,25 +393,29 @@ class BambuPackager
             end
             checker:RequireFile("Bambu settings template", settingsPath)
         end
+        // The G-code is never read whole: its start is read for the header,
+        // the moves are scanned a line at a time, and the archive entry is
+        // copied from the file with the header swapped in (AddFile).
         File gcodeFile
         gcodeFile:SetPath(gcodePath)
-        text gcode = gcodeFile:Read()
-        Report("read the G-code (" + gcode:GetSize() + " characters)")
-        text top = Beginning(gcode, 2000)
+        text gcodeFullPath = gcodeFile:GetAbsolutePath()
+        ZipWriter zip
+        text head = zip:ReadStart(gcodeFullPath, 12000)
+        Report("read the start of the G-code")
+        text top = Beginning(head, 2000)
         if not top:Contains("; HEADER_BLOCK_START")
             alert(gcodePath + " has no '; HEADER_BLOCK_START' at the top, so it can't be packed for a Bambu printer. Write it with bambuExtras on (GcodeWriter:SetBambuExtras(true)).")
         end
-        if not SelectsToolZero(gcode)
-            warnings:Add("The G-code never selects T0, so the printer's filament mapping won't load anything. Put Bambu's M620 S0A / T0 / M621 S0A blocks back in the start G-code.")
-        end
         number height = layerHeight
         if height <= 0
-            height = FindLayerHeight(Beginning(gcode, 3000))
+            height = FindLayerHeight(Beginning(head, 3000))
         end
+        Report("checked the header and layer height")
 
-        Report("checked the header, T0 and layer height")
-
-        Scan(gcode)
+        ScanFile(gcodeFile)
+        if not toolZeroFound
+            warnings:Add("The G-code never selects T0, so the printer's filament mapping won't load anything. Put Bambu's M620 S0A / T0 / M621 S0A blocks back in the start G-code.")
+        end
         Report("scanned the moves: " + segmentCount + " extrusion segments, " + layers + " layers, " + Fixed(lengthMm / 1000.0, 2) + " m of filament, nozzle " + nozzleTemperature + ", bed " + bedTemperature)
         number density = FilamentDensity(type)
         number radius = filamentDiameter / 2.0
@@ -422,7 +458,17 @@ class BambuPackager
         text settings = template:ToText()
         Report("filled in the settings template (Bambu Studio " + version + ")")
 
-        text newGcode = RewriteHeader(gcode, filamentGrams, volumeCm3, density)
+        // where the header block is, as GetSubtext positions in the file's text
+        integer blockStart = head:IndexOf("; HEADER_BLOCK_START")
+        integer blockEnd = -1
+        if blockStart >= 0
+            blockEnd = head:IndexOf("; HEADER_BLOCK_END", blockStart)
+        end
+        text nl = lf
+        if top:Contains(cr + lf)
+            nl = cr + lf
+        end
+        text block = HeaderBlock(nl, filamentGrams, volumeCm3, density)
         text fileName = FileName(outputPath)
         text name = fileName:Replace(".gcode.3mf", "")
         DateTime clock
@@ -431,7 +477,6 @@ class BambuPackager
         Report("rewrote the G-code header")
 
         // same entries, same order as Bambu Studio's own export
-        ZipWriter zip
         zip:Open(outputPath)
         zip:AddText("[Content_Types].xml", ContentTypes())
         RenderThumbnail(zip, 512, colour)
@@ -447,8 +492,17 @@ class BambuPackager
         zip:AddText("Metadata/plate_1.json", PlateJson(colour, height, name))
         zip:AddText("3D/3dmodel.model", Model(version, today))
         zip:AddText("Metadata/project_settings.config", settings)
-        zip:AddMd5("Metadata/plate_1.gcode.md5", newGcode)
-        zip:AddText("Metadata/plate_1.gcode", newGcode)
+        if blockEnd >= 0
+            zip:AddMd5OfFile("Metadata/plate_1.gcode.md5", gcodeFullPath, blockStart, blockEnd + 18, block)
+            zip:AddFile("Metadata/plate_1.gcode", gcodeFullPath, blockStart, blockEnd + 18, block)
+        else
+            // the header's end isn't in the first 12000 characters: do it the
+            // slow way, with the whole text, exactly as before
+            text gcode = gcodeFile:Read()
+            text newGcode = RewriteHeader(gcode, filamentGrams, volumeCm3, density)
+            zip:AddMd5("Metadata/plate_1.gcode.md5", newGcode)
+            zip:AddText("Metadata/plate_1.gcode", newGcode)
+        end
         Report("added the G-code and its MD5")
         zip:AddText("Metadata/_rels/model_settings.config.rels", ModelSettingsRels())
         zip:AddText("Metadata/model_settings.config", ModelSettings())
@@ -625,40 +679,19 @@ class BambuPackager
         output packer:GetLayerCount() + " layers, " + packer:GetFilamentLength() + " mm of filament"
     */
     action Scan(text gcode)
-        seconds = 0
-        layers = 0
-        maxZ = 0.0
-        lengthMm = 0.0
-        firstLayerSeconds = 0.0
-        nozzleTemperature = 0
-        bedTemperature = 0
-        filamentDiameter = 1.75
-        segmentCount = 0
-        x = 0.0
-        y = 0.0
-        z = 0.0
-        feed = 3000.0
-        layer = -1
-
+        ResetScan()
         text value = HeaderValue(gcode, "; total estimated time:")
-        if value not= ""
-            seconds = ParseDuration(value)
-        end
+        haveTime = true
+        headerTime = value
         value = HeaderValue(gcode, "; total layer number:")
-        text digits = Leading(value, digitCharacters)
-        if digits not= ""
-            layers = digits:ParseInteger()
-        end
+        haveLayers = true
+        headerLayers = value
         value = HeaderValue(gcode, "; max_z_height:")
-        digits = Leading(value, "0123456789.")
-        if IsNumber(digits)
-            maxZ = digits:ParseNumber()
-        end
+        haveMaxZ = true
+        headerMaxZ = value
         value = HeaderValue(gcode, "; filament_diameter:")
-        digits = Leading(value, "0123456789.")
-        if IsNumber(digits)
-            filamentDiameter = digits:ParseNumber()
-        end
+        haveDiameter = true
+        headerDiameter = value
 
         integer size = gcode:GetSize()
         integer startCodeEnd = gcode:IndexOf(";========== END OF START G-CODE")
@@ -676,16 +709,8 @@ class BambuPackager
             if lineEnd < 0 or lineEnd > headEnd
                 lineEnd = headEnd
             end
-            text line = TrimStart(gcode:GetSubtext(position, lineEnd))
+            StartLine(gcode:GetSubtext(position, lineEnd))
             position = lineEnd + 1
-            integer nozzle = CommandTemperature(line, "M109 S", true)
-            if nozzle > nozzleTemperature
-                nozzleTemperature = nozzle
-            end
-            integer bed = CommandTemperature(line, "M190 S", false)
-            if bed > bedTemperature
-                bedTemperature = bed
-            end
         end
 
         // moves from the end of the start code onward
@@ -698,8 +723,155 @@ class BambuPackager
             ScanLine(gcode:GetSubtext(position, moveLineEnd))
             position = moveLineEnd + 1
         end
+        ApplyHeaderValues()
     end
 
+    /*
+    Scan for a file, read a line at a time instead of whole: the same
+    numbers as Scan(file:Read()). It also notes whether a line selects T0.
+    Lines before the ";========== END OF START G-CODE" marker are read for
+    temperatures and the rest for moves; a file without the marker is read
+    a second time, since then every line counts as a move, as in Scan.
+    */
+    private action ScanFile(File file)
+        ResetScan()
+        text marker = ";========== END OF START G-CODE"
+        boolean inStart = true
+        FileReader reader
+        reader:OpenForRead(file)
+        repeat while not reader:IsAtEndOfFile()
+            text line = reader:ReadLine()
+            NoteLine(line)
+            if inStart
+                integer markerAt = line:IndexOf(marker)
+                if markerAt < 0
+                    StartLine(line)
+                else
+                    inStart = false
+                    if markerAt > 0
+                        StartLine(line:GetSubtext(0, markerAt))
+                    end
+                    ScanLine(line:GetSubtext(markerAt))
+                end
+            else
+                ScanLine(line)
+            end
+        end
+        reader:Close()
+        if inStart
+            FileReader again
+            again:OpenForRead(file)
+            repeat while not again:IsAtEndOfFile()
+                ScanLine(again:ReadLine())
+            end
+            again:Close()
+        end
+        ApplyHeaderValues()
+    end
+
+    /* Puts every number Scan finds back to where a scan starts. */
+    private action ResetScan
+        seconds = 0
+        layers = 0
+        maxZ = 0.0
+        lengthMm = 0.0
+        firstLayerSeconds = 0.0
+        nozzleTemperature = 0
+        bedTemperature = 0
+        filamentDiameter = 1.75
+        segmentCount = 0
+        segmentCapacity = 0
+        Number64BitArray freshSegments
+        segments = freshSegments
+        Integer32BitArray freshMilli
+        segmentMilli = freshMilli
+        milliStorage = true
+        sawNegativeZero = false
+        x = 0.0
+        y = 0.0
+        z = 0.0
+        feed = 3000.0
+        layer = -1
+        headerTime = ""
+        headerLayers = ""
+        headerMaxZ = ""
+        headerDiameter = ""
+        haveTime = false
+        haveLayers = false
+        haveMaxZ = false
+        haveDiameter = false
+        toolZeroFound = false
+    end
+
+    /* The header values, read from the first line starting with each prefix. */
+    private action ApplyHeaderValues
+        if headerTime not= ""
+            seconds = ParseDuration(headerTime)
+        end
+        text digits = Leading(headerLayers, digitCharacters)
+        if digits not= ""
+            layers = digits:ParseInteger()
+        end
+        digits = Leading(headerMaxZ, "0123456789.")
+        if IsNumber(digits)
+            maxZ = digits:ParseNumber()
+        end
+        digits = Leading(headerDiameter, "0123456789.")
+        if IsNumber(digits)
+            filamentDiameter = digits:ParseNumber()
+        end
+    end
+
+    /* For ScanFile: the header lines and T0, the first time each is seen. */
+    private action NoteLine(text line)
+        if not haveTime and line:StartsWith("; total estimated time:")
+            haveTime = true
+            headerTime = LineValue(line, "; total estimated time:")
+        end
+        if not haveLayers and line:StartsWith("; total layer number:")
+            haveLayers = true
+            headerLayers = LineValue(line, "; total layer number:")
+        end
+        if not haveMaxZ and line:StartsWith("; max_z_height:")
+            haveMaxZ = true
+            headerMaxZ = LineValue(line, "; max_z_height:")
+        end
+        if not haveDiameter and line:StartsWith("; filament_diameter:")
+            haveDiameter = true
+            headerDiameter = LineValue(line, "; filament_diameter:")
+        end
+        if not toolZeroFound and IsToolZeroLine(line)
+            toolZeroFound = true
+        end
+    end
+
+    /* The rest of a line after its prefix, trimmed, as HeaderValue gives it. */
+    private action LineValue(text line, text prefix) returns text
+        text value = line:GetSubtext(prefix:GetSize())
+        return value:Trim()
+    end
+
+    /* A line of the start code: the nozzle and bed temperatures it sets, if any. */
+    private action StartLine(text line)
+        text trimmed = TrimStart(line)
+        integer nozzle = CommandTemperature(trimmed, "M109 S", true)
+        if nozzle > nozzleTemperature
+            nozzleTemperature = nozzle
+        end
+        integer bed = CommandTemperature(trimmed, "M190 S", false)
+        if bed > bedTemperature
+            bedTemperature = bed
+        end
+    end
+
+    /*
+    One G-code line: a ;LAYER: comment, or a G0 / G1 move. The line is read
+    in place (GetUnicodeInteger), without splitting it into words or making
+    a text per character, so a scan of a large file makes little garbage.
+    The words and numbers found are the same as splitting the code on
+    spaces: runs of spaces count as one, a later X, Y, Z, F or E word
+    replaces an earlier one, and a word must be at least two characters.
+    */
     private action ScanLine(text line)
         if line:StartsWith(";LAYER:")
             text layerText = line:GetSubtext(7)
@@ -714,62 +886,85 @@ class BambuPackager
         end
         code = code:Replace(tab, " ")
         code = code:Trim()
-        if code = ""
+        integer size = code:GetSize()
+        if size = 0
             return now
         end
-        Array<text> words = code:Split(" ", false)
-        text command = words:Get(0)
-        if command not= "G0" and command not= "G1"
+        // the command (the first word) must be G0 or G1
+        integer commandEnd = code:IndexOf(" ")
+        if commandEnd < 0
+            commandEnd = size
+        end
+        if commandEnd not= 2 or code:GetUnicodeInteger(0) not= 71
+            return now
+        end
+        integer commandDigit = code:GetUnicodeInteger(1)
+        if commandDigit not= 48 and commandDigit not= 49
             return now
         end
 
         // later copies of a letter win, like the Python dictionary
-        text xText = ""
-        text yText = ""
-        text zText = ""
-        text fText = ""
-        text eText = ""
-        integer i = 1
-        repeat while i < words:GetSize()
-            text word = words:Get(i)
-            if word:GetSize() > 1
-                text letter = word:GetCharacter(0)
-                text amount = word:GetSubtext(1)
-                if letter = "X"
-                    xText = amount
-                elseif letter = "Y"
-                    yText = amount
-                elseif letter = "Z"
-                    zText = amount
-                elseif letter = "F"
-                    fText = amount
-                elseif letter = "E"
-                    eText = amount
+        integer xStart = -1
+        integer xEnd = -1
+        integer yStart = -1
+        integer yEnd = -1
+        integer zStart = -1
+        integer zEnd = -1
+        integer fStart = -1
+        integer fEnd = -1
+        integer eStart = -1
+        integer eEnd = -1
+        integer i = commandEnd
+        repeat while i < size
+            if code:GetUnicodeInteger(i) = 32
+                i = i + 1
+            else
+                integer wordStart = i
+                repeat while i < size and code:GetUnicodeInteger(i) not= 32
+                    i = i + 1
+                end
+                if i - wordStart > 1
+                    integer letter = code:GetUnicodeInteger(wordStart)
+                    if letter = 88          // X
+                        xStart = wordStart + 1
+                        xEnd = i
+                    elseif letter = 89      // Y
+                        yStart = wordStart + 1
+                        yEnd = i
+                    elseif letter = 90      // Z
+                        zStart = wordStart + 1
+                        zEnd = i
+                    elseif letter = 70      // F
+                        fStart = wordStart + 1
+                        fEnd = i
+                    elseif letter = 69      // E
+                        eStart = wordStart + 1
+                        eEnd = i
+                    end
                 end
             end
-            i = i + 1
         end
 
         number nextX = x
-        if xText not= ""
-            nextX = ToNumber(xText, x)
+        if xStart >= 0
+            nextX = NumberAt(code, xStart, xEnd, x)
         end
         number nextY = y
-        if yText not= ""
-            nextY = ToNumber(yText, y)
+        if yStart >= 0
+            nextY = NumberAt(code, yStart, yEnd, y)
         end
-        if zText not= ""
-            z = ToNumber(zText, z)
+        if zStart >= 0
+            z = NumberAt(code, zStart, zEnd, z)
         end
-        if fText not= ""
-            number newFeed = ToNumber(fText, feed)
+        if fStart >= 0
+            number newFeed = NumberAt(code, fStart, fEnd, feed)
             if newFeed not= 0
                 feed = newFeed
             end
         end
         number extruded = 0.0
-        if eText not= ""
-            extruded = ToNumber(eText, 0.0)
+        if eStart >= 0
+            extruded = NumberAt(code, eStart, eEnd, 0.0)
         end
 
         number dx = nextX - x
@@ -812,6 +1007,27 @@ class BambuPackager
     end
 
     private action AddSegment(number x0, number y0, number x1, number y1, number segmentZ)
+        integer mx0 = 0
+        integer my0 = 0
+        integer mx1 = 0
+        integer my1 = 0
+        integer mz = 0
+        if milliStorage
+            boolean exact = not sawNegativeZero
+            mx0 = Milli(x0)
+            exact = exact and milliOk
+            my0 = Milli(y0)
+            exact = exact and milliOk
+            mx1 = Milli(x1)
+            exact = exact and milliOk
+            my1 = Milli(y1)
+            exact = exact and milliOk
+            mz = Milli(segmentZ)
+            exact = exact and milliOk
+            if not exact
+                UseDoubleStorage()
+            end
+        end
         integer needed = (segmentCount + 1) * 5
         if needed > segmentCapacity
             integer capacity = segmentCapacity * 2
@@ -821,45 +1037,114 @@ class BambuPackager
             repeat while capacity < needed
                 capacity = capacity * 2
             end
-            Number64BitArray bigger
-            bigger:SetSize(capacity)
             integer used = segmentCount * 5
             integer i = 0
-            repeat while i < used
-                bigger:Set(i, segments:Get(i))
-                i = i + 1
+            if milliStorage
+                Integer32BitArray biggerMilli
+                biggerMilli:SetSize(capacity)
+                repeat while i < used
+                    biggerMilli:Set(i, segmentMilli:Get(i))
+                    i = i + 1
+                end
+                segmentMilli = biggerMilli
+            else
+                Number64BitArray bigger
+                bigger:SetSize(capacity)
+                repeat while i < used
+                    bigger:Set(i, segments:Get(i))
+                    i = i + 1
+                end
+                segments = bigger
             end
-            segments = bigger
             segmentCapacity = capacity
         end
         integer base = segmentCount * 5
-        segments:Set(base, x0)
-        segments:Set(base + 1, y0)
-        segments:Set(base + 2, x1)
-        segments:Set(base + 3, y1)
-        segments:Set(base + 4, segmentZ)
+        if milliStorage
+            segmentMilli:Set(base, mx0)
+            segmentMilli:Set(base + 1, my0)
+            segmentMilli:Set(base + 2, mx1)
+            segmentMilli:Set(base + 3, my1)
+            segmentMilli:Set(base + 4, mz)
+        else
+            segments:Set(base, x0)
+            segments:Set(base + 1, y0)
+            segments:Set(base + 2, x1)
+            segments:Set(base + 3, y1)
+            segments:Set(base + 4, segmentZ)
+        end
         segmentCount = segmentCount + 1
+    end
+
+    /*
+    The value as whole thousandths of a mm, with milliOk true only if
+    reading it back (SegmentValue) gives exactly the same number.
+    */
+    private action Milli(number value) returns integer
+        milliOk = false
+        if value > 2000000.0 or value < -2000000.0
+            return 0
+        end
+        number scaled = value * 1000.0
+        integer q = 0
+        if scaled >= 0
+            q = cast(integer, scaled + 0.5)
+        else
+            q = 0 - cast(integer, 0.5 - scaled)
+        end
+        if cast(number, q) / 1000.0 = value
+            milliOk = true
+        end
+        return q
+    end
+
+    /* Moves the segments from thousandths to doubles, keeping every value. */
+    private action UseDoubleStorage
+        if not milliStorage
+            return now
+        end
+        Number64BitArray doubles
+        if segmentCapacity > 0
+            doubles:SetSize(segmentCapacity)
+            integer used = segmentCount * 5
+            integer i = 0
+            repeat while i < used
+                doubles:Set(i, cast(number, segmentMilli:Get(i)) / 1000.0)
+                i = i + 1
+            end
+        end
+        segments = doubles
+        Integer32BitArray emptyMilli
+        segmentMilli = emptyMilli
+        milliStorage = false
+    end
+
+    /* Number index of the segment list (5 per segment), however it is stored. */
+    private action SegmentValue(integer index) returns number
+        if milliStorage
+            return cast(number, segmentMilli:Get(index)) / 1000.0
+        end
+        return segments:Get(index)
     end
 
     private action ComputeBounds
         if segmentCount = 0
             return now
         end
-        boundsMinX = segments:Get(0)
+        boundsMinX = SegmentValue(0)
         boundsMaxX = boundsMinX
-        boundsMinY = segments:Get(1)
+        boundsMinY = SegmentValue(1)
         boundsMaxY = boundsMinY
-        boundsMinZ = segments:Get(4)
+        boundsMinZ = SegmentValue(4)
         boundsMaxZ = boundsMinZ
         integer i = 0
         repeat while i < segmentCount
             integer base = i * 5
-            boundsMinX = math:MinimumOf(boundsMinX, math:MinimumOf(segments:Get(base), segments:Get(base + 2)))
-            boundsMaxX = math:MaximumOf(boundsMaxX, math:MaximumOf(segments:Get(base), segments:Get(base + 2)))
-            boundsMinY = math:MinimumOf(boundsMinY, math:MinimumOf(segments:Get(base + 1), segments:Get(base + 3)))
-            boundsMaxY = math:MaximumOf(boundsMaxY, math:MaximumOf(segments:Get(base + 1), segments:Get(base + 3)))
-            boundsMinZ = math:MinimumOf(boundsMinZ, segments:Get(base + 4))
-            boundsMaxZ = math:MaximumOf(boundsMaxZ, segments:Get(base + 4))
+            boundsMinX = math:MinimumOf(boundsMinX, math:MinimumOf(SegmentValue(base), SegmentValue(base + 2)))
+            boundsMaxX = math:MaximumOf(boundsMaxX, math:MaximumOf(SegmentValue(base), SegmentValue(base + 2)))
+            boundsMinY = math:MinimumOf(boundsMinY, math:MinimumOf(SegmentValue(base + 1), SegmentValue(base + 3)))
+            boundsMaxY = math:MaximumOf(boundsMaxY, math:MaximumOf(SegmentValue(base + 1), SegmentValue(base + 3)))
+            boundsMinZ = math:MinimumOf(boundsMinZ, SegmentValue(base + 4))
+            boundsMaxZ = math:MaximumOf(boundsMaxZ, SegmentValue(base + 4))
             i = i + 1
         end
     end
@@ -890,11 +1175,11 @@ class BambuPackager
         integer s = 0
         repeat while s < segmentCount
             integer base = s * 5
-            number segmentZ = segments:Get(base + 4)
-            number ax = offsetX + (segments:Get(base) - boundsMinX) * scale
-            number ay = size - 1 - (offsetY + (segments:Get(base + 1) - boundsMinY) * scale)
-            number bx = offsetX + (segments:Get(base + 2) - boundsMinX) * scale
-            number by = size - 1 - (offsetY + (segments:Get(base + 3) - boundsMinY) * scale)
+            number segmentZ = SegmentValue(base + 4)
+            number ax = offsetX + (SegmentValue(base) - boundsMinX) * scale
+            number ay = size - 1 - (offsetY + (SegmentValue(base + 1) - boundsMinY) * scale)
+            number bx = offsetX + (SegmentValue(base + 2) - boundsMinX) * scale
+            number by = size - 1 - (offsetY + (SegmentValue(base + 3) - boundsMinY) * scale)
             integer steps = cast(integer, math:MaximumOf(math:AbsoluteValue(bx - ax), math:AbsoluteValue(by - ay))) + 1
             number shade = 1.0
             if boundsMaxZ > boundsMinZ
@@ -938,6 +1223,11 @@ class BambuPackager
         if top:Contains(cr + lf)
             nl = cr + lf
         end
+        return gcode:GetSubtext(0, blockStart) + HeaderBlock(nl, grams, volumeCm3, density) + gcode:GetSubtext(blockEnd)
+    end
+
+    /* The new header block, from "; HEADER_BLOCK_START" to "; HEADER_BLOCK_END". */
+    private action HeaderBlock(text nl, number grams, number volumeCm3, number density) returns text
         text time = FormatTime(seconds)
         text block = "; HEADER_BLOCK_START" + nl
         block = block + "; generated by the Lamprey slicer" + nl
@@ -952,7 +1242,7 @@ class BambuPackager
         block = block + "; filament: 1" + nl
         block = block + "; support_material_on_wipe_tower: 0" + nl
         block = block + "; HEADER_BLOCK_END"
-        return gcode:GetSubtext(0, blockStart) + block + gcode:GetSubtext(blockEnd)
+        return block
     end
 
     // ------------------------------------------------------------ archive parts
@@ -1224,27 +1514,23 @@ class BambuPackager
     end
 
     /* True if a line (ignoring leading spaces) is T0, alone or followed by a non-word character. */
-    private action SelectsToolZero(text gcode) returns boolean
-        integer size = gcode:GetSize()
-        integer position = 0
-        repeat while position < size
-            integer lineEnd = gcode:IndexOf(lf, position)
-            if lineEnd < 0
-                lineEnd = size
-            end
-            text line = TrimStart(gcode:GetSubtext(position, lineEnd))
-            if line:StartsWith("T0")
-                if line:GetSize() = 2
-                    return true
-                end
-                text following = line:GetCharacter(2)
-                if not wordCharacters:Contains(following)
-                    return true
-                end
-            end
-            position = lineEnd + 1
+    private action IsToolZeroLine(text line) returns boolean
+        integer size = line:GetSize()
+        integer i = 0
+        repeat while i < size and IsSpaceCode(line:GetUnicodeInteger(i))
+            i = i + 1
         end
-        return false
+        if i + 2 > size
+            return false
+        end
+        if line:GetUnicodeInteger(i) not= 84 or line:GetUnicodeInteger(i + 1) not= 48
+            return false
+        end
+        if i + 2 = size
+            return true
+        end
+        text following = line:GetCharacter(i + 2)
+        return not wordCharacters:Contains(following)
     end
 
     /* The number after "Layer height:", or 0 if there is none. */
@@ -1271,8 +1557,11 @@ class BambuPackager
     private action TrimStart(text value) returns text
         integer i = 0
         integer size = value:GetSize()
-        repeat while i < size and IsSpace(value:GetCharacter(i))
+        repeat while i < size and IsSpaceCode(value:GetUnicodeInteger(i))
             i = i + 1
+        end
+        if i = 0
+            return value
         end
         return value:GetSubtext(i)
     end
@@ -1295,25 +1584,38 @@ class BambuPackager
         return c = " " or c = tab or c = cr or c = lf
     end
 
+    /* A space, tab, carriage return or line feed, by character code. */
+    private action IsSpaceCode(integer c) returns boolean
+        return c = 32 or c = 9 or c = 13 or c = 10
+    end
+
+    private action IsDigitCode(integer c) returns boolean
+        return c >= 48 and c <= 57
+    end
+
     /* True for text like 12, -3.5, .25 or 1e-3, which ParseNumber can read. */
     private action IsNumber(text value) returns boolean
-        integer size = value:GetSize()
-        if size = 0
+        return IsNumberAt(value, 0, value:GetSize())
+    end
+
+    /* IsNumber for the characters from start up to (not including) finish, read in place. */
+    private action IsNumberAt(text value, integer start, integer finish) returns boolean
+        if finish <= start
             return false
         end
-        integer i = 0
-        text first = value:GetCharacter(0)
-        if first = "-" or first = "+"
-            i = 1
+        integer i = start
+        integer first = value:GetUnicodeInteger(start)
+        if first = 45 or first = 43        // - or +
+            i = start + 1
         end
         integer mantissaDigits = 0
-        repeat while i < size and IsDigit(value:GetCharacter(i))
+        repeat while i < finish and IsDigitCode(value:GetUnicodeInteger(i))
             i = i + 1
             mantissaDigits = mantissaDigits + 1
         end
-        if i < size and value:GetCharacter(i) = "."
+        if i < finish and value:GetUnicodeInteger(i) = 46       // .
             i = i + 1
-            repeat while i < size and IsDigit(value:GetCharacter(i))
+            repeat while i < finish and IsDigitCode(value:GetUnicodeInteger(i))
                 i = i + 1
                 mantissaDigits = mantissaDigits + 1
             end
@@ -1321,13 +1623,13 @@ class BambuPackager
         if mantissaDigits = 0
             return false
         end
-        if i < size and (value:GetCharacter(i) = "e" or value:GetCharacter(i) = "E")
+        if i < finish and (value:GetUnicodeInteger(i) = 101 or value:GetUnicodeInteger(i) = 69)     // e or E
             i = i + 1
-            if i < size and (value:GetCharacter(i) = "-" or value:GetCharacter(i) = "+")
+            if i < finish and (value:GetUnicodeInteger(i) = 45 or value:GetUnicodeInteger(i) = 43)
                 i = i + 1
             end
             integer exponentDigits = 0
-            repeat while i < size and IsDigit(value:GetCharacter(i))
+            repeat while i < finish and IsDigitCode(value:GetUnicodeInteger(i))
                 i = i + 1
                 exponentDigits = exponentDigits + 1
             end
@@ -1335,14 +1637,78 @@ class BambuPackager
                 return false
             end
         end
-        return i = size
+        return i = finish
     end
 
     private action ToNumber(text value, number fallback) returns number
-        if IsNumber(value)
-            return value:ParseNumber()
+        return NumberAt(value, 0, value:GetSize(), fallback)
+    end
+
+    /* The number in value from start up to (not including) finish, or fallback if it isn't one. */
+    private action NumberAt(text value, integer start, integer finish, number fallback) returns number
+        if not IsNumberAt(value, start, finish)
+            return fallback
         end
-        return fallback
+        return ParseNumberAt(value, start, finish)
+    end
+
+    /*
+    Reads a number IsNumberAt accepted, giving exactly what ParseNumber
+    (Java's Double.parseDouble) gives for that text. Up to 15 digits with no
+    exponent, the digits make a whole number below 2^53, which a double
+    holds exactly; dividing it once by an exact power of ten rounds once to
+    the nearest double, which is the double parseDouble returns. Anything
+    else goes to ParseNumber.
+    */
+    private action ParseNumberAt(text value, integer start, integer finish) returns number
+        integer i = start
+        boolean negative = false
+        integer first = value:GetUnicodeInteger(i)
+        if first = 45
+            negative = true
+            i = i + 1
+        elseif first = 43
+            i = i + 1
+        end
+        number mantissa = 0.0
+        integer digits = 0
+        integer decimals = 0
+        boolean fraction = false
+        repeat while i < finish
+            integer c = value:GetUnicodeInteger(i)
+            if c = 46
+                fraction = true
+            elseif c >= 48 and c <= 57
+                mantissa = mantissa * 10.0 + cast(number, c - 48)
+                digits = digits + 1
+                if fraction
+                    decimals = decimals + 1
+                end
+            else
+                return SlowNumber(value, start, finish)    // an exponent
+            end
+            i = i + 1
+        end
+        if digits > 15
+            return SlowNumber(value, start, finish)
+        end
+        number result = mantissa / powersOfTen:Get(decimals)
+        if negative
+            if mantissa = 0
+                sawNegativeZero = true
+            end
+            return -result
+        end
+        return result
+    end
+
+    private action SlowNumber(text value, integer start, integer finish) returns number
+        text part = value:GetSubtext(start, finish)
+        number result = part:ParseNumber()
+        if result = 0 and value:GetUnicodeInteger(start) = 45
+            sawNegativeZero = true
+        end
+        return result
     end
 
     private action ToInteger(text value, integer fallback) returns integer

@@ -13,7 +13,10 @@ long as it only uses Add, Get, Set, GetSize, SetSize, Empty and RemoveAt.
 Integer32BitArray on its own is awkward to use directly: it has no storage
 until SetSize is called (GetSize crashes before that), SetSize throws the old
 items away instead of copying them, and it has no Add. IntegerBuffer keeps its
-own count and capacity and copies the items when it grows.
+own count and capacity and copies the items when it grows. A new buffer
+holds no storage until its first item, and then room for only 4, so the
+many buffers that stay empty or small (the point lists of short infill
+lines, say) cost little; larger ones double as they grow.
 
 Empty keeps the memory and only resets the count, so a buffer that is filled
 and emptied over and over (as PolygonOperations does on every call) allocates
@@ -40,12 +43,6 @@ class IntegerBuffer
     Integer32BitArray items
     integer capacity = 0
     integer count = 0
-
-    /* A new Integer32BitArray has no storage until SetSize, so give it some. */
-    on create
-        items:SetSize(16)
-        capacity = 16
-    end
 
     /*
     Adds an integer to the end.
@@ -248,6 +245,9 @@ class IntegerBuffer
             return now
         end
         integer grown = capacity * 2
+        if grown < 4
+            grown = 4
+        end
         if grown < size
             grown = size
         end

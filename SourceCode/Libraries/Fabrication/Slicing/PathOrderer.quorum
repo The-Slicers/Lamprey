@@ -343,10 +343,10 @@ class PathOrderer
             // are islands, the rest are tines): always go to the nearest one
             integer islandCount = islands:GetSize()
             integer stops = islandCount + tines:GetSize()
-            Array<boolean> done
+            IntegerBuffer done
             i = 0
             repeat while i < stops
-                done:Add(false)
+                done:Add(0)
                 i = i + 1
             end
             integer visited = 0
@@ -355,7 +355,7 @@ class PathOrderer
                 number bestD2 = 0.0
                 i = 0
                 repeat while i < stops
-                    if not done:Get(i)
+                    if done:Get(i) = 0
                         Contour target = StopAt(i, islands, tines)
                         number d2 = target:NearestVertexDistance2(nozzleX, nozzleY)
                         if best = -1 or d2 < bestD2
@@ -365,7 +365,7 @@ class PathOrderer
                     end
                     i = i + 1
                 end
-                done:Set(best, true)
+                done:Set(best, 1)
                 if best < islandCount
                     PrintIsland(best, layerWalls, wallIsland, layerSkin, skinIsland, layerInfill, infillIsland,
                                 layerTop, topIsland, layerIron, ironIsland)
@@ -450,12 +450,12 @@ class PathOrderer
     // vertex nearest the nozzle (support, where a seam doesn't show).
     private action OrderLoops(Array<Contour> loops, integer role, boolean useSeam)
         IntegerBuffer seams
-        Array<boolean> used
+        IntegerBuffer used
         integer i = 0
         repeat while i < loops:GetSize()
             Contour loop = loops:Get(i)
             seams:Add(SeamVertex(loop))
-            used:Add(false)
+            used:Add(0)
             i = i + 1
         end
 
@@ -465,7 +465,7 @@ class PathOrderer
             number bestD2 = 0.0
             i = 0
             repeat while i < loops:GetSize()
-                if not used:Get(i)
+                if used:Get(i) = 0
                     Contour cand = loops:Get(i)
                     number d2 = 0.0
                     if useSeam
@@ -482,7 +482,7 @@ class PathOrderer
                 end
                 i = i + 1
             end
-            used:Set(best, true)
+            used:Set(best, 1)
 
             Contour src = loops:Get(best)
             integer start = seams:Get(best)
@@ -638,6 +638,10 @@ class PathOrderer
     private action RotatedLoop(Contour src, integer start) returns Contour
         Contour path
         integer n = src:GetSize()
+        // room for every point up front (AddSpaced may drop a few), so the
+        // loop's buffers don't regrow while it is copied
+        path:xs:Reserve(n)
+        path:ys:Reserve(n)
         integer i = 0
         repeat while i < n
             integer v = (start + i) mod n
@@ -702,10 +706,10 @@ class PathOrderer
     end
 
     private action OrderLines(Array<Contour> lines, integer role)
-        Array<boolean> used
+        IntegerBuffer used
         integer i = 0
         repeat while i < lines:GetSize()
-            used:Add(false)
+            used:Add(0)
             i = i + 1
         end
 
@@ -716,7 +720,7 @@ class PathOrderer
             number bestD2 = 0.0
             i = 0
             repeat while i < lines:GetSize()
-                if not used:Get(i)
+                if used:Get(i) = 0
                     Contour line = lines:Get(i)
                     number hx = line:HeadX() - nozzleX
                     number hy = line:HeadY() - nozzleY
@@ -737,7 +741,7 @@ class PathOrderer
                 end
                 i = i + 1
             end
-            used:Set(best, true)
+            used:Set(best, 1)
 
             Contour src = lines:Get(best)
             Contour path

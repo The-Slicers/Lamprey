@@ -1,0 +1,198 @@
+package Libraries.Fabrication.Slicing
+
+use Libraries.Data.Containers.IntegerBuffer
+
+/*
+The EdgeMap class maps a mesh edge, given as its two vertex ids (lower
+first), to a segment index. ContourGenerator uses it to find which slice
+segment starts or ends on an edge. It does the job of a
+HashTable<text, integer> keyed by text such as "412_9087", without building
+a text for every key or an object for every value: keys and values sit in
+three IntegerBuffers (open addressing with linear probing), and Empty keeps
+that memory for the next plane.
+
+Like the HashTable it replaces, a key keeps the first value added for it:
+AddIfAbsent does nothing for a key already there.
+
+Attribute: Example
+
+    use Libraries.Fabrication.Slicing.EdgeMap
+
+    class Main
+        action Main
+            EdgeMap starts
+            starts:Empty(100)
+            starts:AddIfAbsent(4, 12, 0)
+            starts:AddIfAbsent(4, 12, 7)        // ignored: the key is taken
+            output starts:HasKey(4, 12)         // true
+            output starts:GetValue(4, 12)       // 0
+            output starts:HasKey(12, 4)         // false
+        end
+    end
+*/
+class EdgeMap
+    IntegerBuffer lows
+    IntegerBuffer highs
+    IntegerBuffer values        // -1 in a free slot (values are segment indexes, never negative)
+    integer slots = 0
+    integer count = 0
+
+    /*
+    Removes every key and makes room for about expected keys without
+    growing. The memory is kept for the next use.
+
+    Attribute: Parameter expected How many keys will probably be added.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Slicing.EdgeMap
+
+        EdgeMap starts
+        starts:Empty(1000)
+    */
+    action Empty(integer expected)
+        integer size = 16
+        repeat while size < expected * 2
+            size = size * 2
+        end
+        Clear(size)
+    end
+
+    /*
+    True if the edge has a value.
+
+    Attribute: Parameter low The edge's lower vertex id.
+    Attribute: Parameter high The edge's higher vertex id.
+    Attribute: Returns True if the edge was added.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Slicing.EdgeMap
+
+        EdgeMap starts
+        starts:Empty(10)
+        starts:AddIfAbsent(1, 2, 5)
+        output starts:HasKey(1, 2)
+    */
+    action HasKey(integer low, integer high) returns boolean
+        if slots = 0
+            return false
+        end
+        return values:Get(Find(low, high)) not= -1
+    end
+
+    /*
+    The value added for the edge, or -1 if there is none.
+
+    Attribute: Parameter low The edge's lower vertex id.
+    Attribute: Parameter high The edge's higher vertex id.
+    Attribute: Returns The value, or -1.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Slicing.EdgeMap
+
+        EdgeMap starts
+        starts:Empty(10)
+        starts:AddIfAbsent(1, 2, 5)
+        output starts:GetValue(1, 2)        // 5
+    */
+    action GetValue(integer low, integer high) returns integer
+        if slots = 0
+            return -1
+        end
+        return values:Get(Find(low, high))
+    end
+
+    /*
+    Adds the edge with a value, unless the edge is already there (then the
+    first value stays, as with HashTable when HasKey is checked first).
+
+    Attribute: Parameter low The edge's lower vertex id.
+    Attribute: Parameter high The edge's higher vertex id.
+    Attribute: Parameter value The value, 0 or more.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Slicing.EdgeMap
+
+        EdgeMap starts
+        starts:Empty(10)
+        starts:AddIfAbsent(1, 2, 5)
+    */
+    action AddIfAbsent(integer low, integer high, integer value)
+        if value < 0
+            alert("EdgeMap:AddIfAbsent needs a value of 0 or more, not " + value)
+        end
+        if slots = 0 or (count + 1) * 2 > slots
+            Grow()
+        end
+        integer slot = Find(low, high)
+        if values:Get(slot) = -1
+            lows:Set(slot, low)
+            highs:Set(slot, high)
+            values:Set(slot, value)
+            count = count + 1
+        end
+    end
+
+    /* The key's slot, or the free slot where it would go. */
+    private action Find(integer low, integer high) returns integer
+        integer slot = (low * 73856093 + high * 19349663) mod slots
+        if slot < 0
+            slot = slot + slots
+        end
+        repeat while values:Get(slot) not= -1 and (lows:Get(slot) not= low or highs:Get(slot) not= high)
+            slot = slot + 1
+            if slot = slots
+                slot = 0
+            end
+        end
+        return slot
+    end
+
+    private action Clear(integer size)
+        slots = size
+        count = 0
+        lows:Empty()
+        lows:SetSize(size)
+        highs:Empty()
+        highs:SetSize(size)
+        values:Empty()
+        integer i = 0
+        repeat while i < size
+            values:Add(-1)
+            i = i + 1
+        end
+    end
+
+    /* Twice the slots, with every key moved over. */
+    private action Grow
+        integer size = slots * 2
+        if size < 16
+            size = 16
+        end
+        IntegerBuffer oldLows
+        IntegerBuffer oldHighs
+        IntegerBuffer oldValues
+        integer i = 0
+        repeat while i < slots
+            if values:Get(i) not= -1
+                oldLows:Add(lows:Get(i))
+                oldHighs:Add(highs:Get(i))
+                oldValues:Add(values:Get(i))
+            end
+            i = i + 1
+        end
+        Clear(size)
+        i = 0
+        repeat while i < oldValues:GetSize()
+            integer slot = Find(oldLows:Get(i), oldHighs:Get(i))
+            lows:Set(slot, oldLows:Get(i))
+            highs:Set(slot, oldHighs:Get(i))
+            values:Set(slot, oldValues:Get(i))
+            count = count + 1
+            i = i + 1
+        end
+    end
+end

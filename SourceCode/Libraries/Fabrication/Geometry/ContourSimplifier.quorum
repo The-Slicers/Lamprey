@@ -59,12 +59,12 @@ class ContourSimplifier
         if n < 4 or tolerance <= 0
             return now
         end
-        Array<boolean> keep = MarkKept(contour, contour:closed, tolerance * tolerance)
+        IntegerBuffer keep = MarkKept(contour, contour:closed, tolerance * tolerance)
 
         integer kept = 0
         integer i = 0
         repeat while i < n
-            if keep:Get(i)
+            if keep:Get(i) = 1
                 kept = kept + 1
             end
             i = i + 1
@@ -77,7 +77,7 @@ class ContourSimplifier
         NumberBuffer newYs
         i = 0
         repeat while i < n
-            if keep:Get(i)
+            if keep:Get(i) = 1
                 newXs:Add(contour:xs:Get(i))
                 newYs:Add(contour:ys:Get(i))
             end
@@ -116,11 +116,11 @@ class ContourSimplifier
             return undefined
         end
         number tol2 = tolerance * tolerance
-        Array<boolean> keep = MarkKept(loop, true, tol2)
+        IntegerBuffer keep = MarkKept(loop, true, tol2)
         Contour out
         integer i = 0
         repeat while i < n
-            if keep:Get(i)
+            if keep:Get(i) = 1
                 out:AddPoint(loop:xs:Get(i), loop:ys:Get(i))
             end
             i = i + 1
@@ -137,12 +137,12 @@ class ContourSimplifier
     end
 
     /* Which points the Ramer-Douglas-Peucker pass keeps. */
-    private action MarkKept(Contour con, boolean asLoop, number tol2) returns Array<boolean>
+    private action MarkKept(Contour con, boolean asLoop, number tol2) returns IntegerBuffer
         integer n = con:GetSize()
-        Array<boolean> keep
+        IntegerBuffer keep
         integer i = 0
         repeat while i < n
-            keep:Add(false)
+            keep:Add(0)
             i = i + 1
         end
 
@@ -161,14 +161,14 @@ class ContourSimplifier
                 end
                 i = i + 1
             end
-            keep:Set(0, true)
-            keep:Set(far, true)
+            keep:Set(0, 1)
+            keep:Set(far, 1)
             MarkRange(con, 0, far, tol2, keep)
             MarkRange(con, far, n, tol2, keep)  // n stands for point 0 closing the loop
             DropStartIfStraight(con, keep, tol2)
         else
-            keep:Set(0, true)
-            keep:Set(n - 1, true)
+            keep:Set(0, 1)
+            keep:Set(n - 1, 1)
             MarkRange(con, 0, n - 1, tol2, keep)
         end
         return keep
@@ -181,14 +181,14 @@ class ContourSimplifier
     stay. (The far point needs no check: the point farthest from any other
     point is always a corner of the convex hull.)
     */
-    private action DropStartIfStraight(Contour con, Array<boolean> keep, number tol2)
+    private action DropStartIfStraight(Contour con, IntegerBuffer keep, number tol2)
         integer n = con:GetSize()
         integer kept = 0
         integer next = -1
         integer previous = -1
         integer i = 1
         repeat while i < n
-            if keep:Get(i)
+            if keep:Get(i) = 1
                 kept = kept + 1
                 if next = -1
                     next = i
@@ -212,11 +212,11 @@ class ContourSimplifier
             end
             i = i + 1
         end
-        keep:Set(0, false)
+        keep:Set(0, 0)
     end
 
     /* Marks the points between first and last that must stay (index n means point 0). */
-    private action MarkRange(Contour con, integer first, integer last, number tol2, Array<boolean> keep)
+    private action MarkRange(Contour con, integer first, integer last, number tol2, IntegerBuffer keep)
         integer n = con:GetSize()
         IntegerBuffer stackA
         IntegerBuffer stackB
@@ -250,7 +250,7 @@ class ContourSimplifier
                 end
 
                 if worst not= -1
-                    keep:Set(worst, true)
+                    keep:Set(worst, 1)
                     stackA:Add(a)
                     stackB:Add(worst)
                     stackA:Add(worst)

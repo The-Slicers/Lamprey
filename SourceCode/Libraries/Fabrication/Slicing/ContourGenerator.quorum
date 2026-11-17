@@ -1,7 +1,6 @@
 package Libraries.Fabrication.Slicing
 
 use Libraries.Containers.Array
-use Libraries.Containers.HashTable
 use Libraries.Fabrication.ArgumentChecker
 use Libraries.Fabrication.Geometry.Contour
 use Libraries.Fabrication.Geometry.ContourSimplifier
@@ -53,6 +52,9 @@ class ContourGenerator
     ContourSimplifier simplifier
     PolygonOperations ops
     ArgumentChecker checker
+    // ChainPlane's edge maps, reused plane after plane
+    EdgeMap planeStarts
+    EdgeMap planeEnds
 
     /*
     How far (mm) a loop may move when its points are thinned out; 0 keeps
@@ -331,24 +333,20 @@ class ContourGenerator
     private action ChainPlane(Array<Segment> segments, IntegerBuffer order, integer from, integer to,
                               integer planeIndex, number maxGap, Array<Contour> result)
         integer n = to - from
-        Array<boolean> used
+        IntegerBuffer used
         Array<Contour> open
         Array<Contour> planeResult
-        HashTable<text, integer> startMap // edge key -> segment starting it
-        HashTable<text, integer> endMap // edge key -> segment ending it
+        EdgeMap startMap = planeStarts      // mesh edge -> segment starting on it
+        startMap:Empty(n)
+        EdgeMap endMap = planeEnds          // mesh edge -> segment ending on it
+        endMap:Empty(n)
 
         integer i = 0
         repeat while i < n
-            used:Add(false)
+            used:Add(0)
             Segment seg = segments:Get(order:Get(from + i))
-            text startKey = StartKey(seg)
-            text endKey = EndKey(seg)
-            if not startMap:HasKey(startKey)
-                startMap:Add(startKey, i)
-            end
-            if not endMap:HasKey(endKey)
-                endMap:Add(endKey, i)
-            end
+            startMap:AddIfAbsent(seg:aLow, seg:aHigh, i)
+            endMap:AddIfAbsent(seg:bLow, seg:bHigh, i)
             i = i + 1
         end
 
@@ -358,9 +356,9 @@ class ContourGenerator
         repeat while pass < 2
             i = 0
             repeat while i < n
-                if not used:Get(i)
+                if used:Get(i) = 0
                     Segment seed = segments:Get(order:Get(from + i))
-                    if pass = 1 or not endMap:HasKey(StartKey(seed))
+                    if pass = 1 or not endMap:HasKey(seed:aLow, seed:aHigh)
                         Contour c = WalkChain(segments, order, from, i, startMap, used)
                         c:planeIndex = planeIndex
                         if c:closed
@@ -520,31 +518,31 @@ class ContourGenerator
     // follows segments from the seed until chain closes, runs out,
     // or reaches a segment that is already in use
     private action WalkChain(Array<Segment> segments, IntegerBuffer order, integer from, integer seedLocal,
-                             HashTable<text, integer> startMap, Array<boolean> used) returns Contour
+                             EdgeMap startMap, IntegerBuffer used) returns Contour
         Contour c
         Segment first = segments:Get(order:Get(from + seedLocal))
-        text firstKey = StartKey(first)
+        integer firstLow = first:aLow
+        integer firstHigh = first:aHigh
         c:AddPoint(first:x0, first:y0)
 
         integer curr = seedLocal
         repeat while true
-            used:Set(curr, true)
+            used:Set(curr, 1)
             Segment seg = segments:Get(order:Get(from + curr))
             c:AddPoint(seg:x1, seg:y1)
 
-            text endKey = EndKey(seg)
-            if endKey = firstKey
+            if seg:bLow = firstLow and seg:bHigh = firstHigh
                 c:closed = true
                 c:DropClosingDuplicate()
                 return c
             end
 
-            if not startMap:HasKey(endKey)
+            if not startMap:HasKey(seg:bLow, seg:bHigh)
                 return c
             end
 
-            integer nextIndex = startMap:GetValue(endKey)
-            if used:Get(nextIndex)
+            integer nextIndex = startMap:GetValue(seg:bLow, seg:bHigh)
+            if used:Get(nextIndex) = 1
                 return c
             end
 
@@ -557,10 +555,10 @@ class ContourGenerator
     // repeatedly joins the closest tail-to-head pair of open chains
     // chains that are not able to be closed are marked as open
     private action BridgeGaps(Array<Contour> open, number maxGap, Array<Contour> result)
-        Array<boolean> alive
+        IntegerBuffer alive
         integer i = 0
         repeat while i < open:GetSize()
-            alive:Add(true)
+            alive:Add(1)
             i = i + 1
         end
 
@@ -572,13 +570,13 @@ class ContourGenerator
 
             i = 0
             repeat while i < open:GetSize()
-                if alive:Get(i)
+                if alive:Get(i) = 1
                     Contour a = open:Get(i)
                     number tx = a:TailX()
                     number ty = a:TailY()
                     integer j = 0
                     repeat while j < open:GetSize()
-                        if alive:Get(j)
+                        if alive:Get(j) = 1
                             Contour b = open:Get(j)
                             if i not= j or a:GetSize() >= 3
                                 number dx = b:HeadX() - tx
@@ -600,7 +598,7 @@ class ContourGenerator
             if bestI = -1
                 i = 0
                 repeat while i < open:GetSize()
-                    if alive:Get(i)
+                    if alive:Get(i) = 1
                         result:Add(open:Get(i))
                         openCount = openCount + 1
                     end
@@ -614,19 +612,11 @@ class ContourGenerator
                 joined:closed = true
                 joined:DropClosingDuplicate()
                 result:Add(joined)
-                alive:Set(bestI, false)
+                alive:Set(bestI, 0)
             else
                 joined:AppendAll(open:Get(bestJ))
-                alive:Set(bestJ, false)
+                alive:Set(bestJ, 0)
             end
         end
-    end
-
-    private action StartKey(Segment s) returns text
-        return "" + s:aLow + "_" + s:aHigh
-    end
-
-    private action EndKey(Segment s) returns text
-        return "" + s:bLow + "_" + s:bHigh
     end
 end

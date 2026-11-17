@@ -138,7 +138,7 @@ class TreeSupport
     // model by layer
     ContourLayers modelLayers
     integer planeTotal = 0
-    Array<boolean> hasBox
+    IntegerBuffer hasBox
     NumberBuffer boxMinX
     NumberBuffer boxMinY
     NumberBuffer boxMaxX
@@ -152,7 +152,7 @@ class TreeSupport
     NumberBuffer segAy
     NumberBuffer segBx
     NumberBuffer segBy
-    Array<boolean> slotHas
+    IntegerBuffer slotHas
     NumberBuffer slotMinX
     NumberBuffer slotMinY
     NumberBuffer slotMaxX
@@ -1008,7 +1008,7 @@ class TreeSupport
         number maxY = 0.0
         p = 0
         repeat while p < planeTotal
-            if hasBox:Get(p)
+            if hasBox:Get(p) = 1
                 if not any
                     minX = boxMinX:Get(p)
                     minY = boxMinY:Get(p)
@@ -1057,12 +1057,12 @@ class TreeSupport
         integer rows = r1 - r0 + 1
         integer cols = c1 - c0 + 1
 
-        Array<boolean> prev
-        Array<boolean> cur
+        IntegerBuffer prev
+        IntegerBuffer cur
         integer i = 0
         repeat while i < rows * cols
-            prev:Add(false)
-            cur:Add(false)
+            prev:Add(0)
+            cur:Add(0)
             i = i + 1
         end
         NumberBuffer hits
@@ -1072,11 +1072,11 @@ class TreeSupport
             firstTipOfSurface:Set(layer, tipX:GetSize())
             i = 0
             repeat while i < rows * cols
-                cur:Set(i, false)
+                cur:Set(i, 0)
                 i = i + 1
             end
 
-            if hasBox:Get(layer)
+            if hasBox:Get(layer) = 1
                 if layer > 0
                     ComputeOverhangIslands(layer)
                 end
@@ -1111,9 +1111,9 @@ class TreeSupport
                         if h mod 2 = 1
                             isIn = true
                         end
-                        cur:Set(idx, isIn)
+                        cur:Set(idx, Flag(isIn))
                         if isIn and layer > 0
-                            if not prev:Get(idx)
+                            if prev:Get(idx) = 0
                                 // the model's underside passes this grid point here
                                 if WantsTip(gx, gy, layer)
                                     AddTip(gx, gy, layer)
@@ -1145,7 +1145,7 @@ class TreeSupport
         if layer < 0 or layer >= planeTotal
             return now
         end
-        if not slotHas:Get(layer)
+        if slotHas:Get(layer) = 0
             return now
         end
         if gy < slotMinY:Get(layer) or gy > slotMaxY:Get(layer)
@@ -1440,7 +1440,7 @@ class TreeSupport
         IntegerBuffer nodeDist      // layers below its tine's top
         IntegerBuffer nodeWeight    // how many tines it carries
         NumberBuffer nodeR          // radius on its current layer
-        Array<boolean> nodeSq        // last placement still overlapped the model
+        IntegerBuffer nodeSq        // last placement still overlapped the model
 
         // tines were added bottom-up, so tipLayer never decreases
         integer cursor = tipCount - 1
@@ -1460,7 +1460,7 @@ class TreeSupport
                         nodeDist:Add(0)
                         nodeWeight:Add(1)
                         nodeR:Add(tipRadius)
-                        nodeSq:Add(false)
+                        nodeSq:Add(0)
                         if maxLoad < 1
                             maxLoad = 1
                         end
@@ -1541,7 +1541,7 @@ class TreeSupport
                             if minRestWidth > 0
                                 steered = SteerAway(layer, px, py, nodeR:Get(i))
                             end
-                            if not steered and nodeSq:Get(i)
+                            if not steered and nodeSq:Get(i) = 1
                                 steered = SteerClear(layer - 1, px, py, need)
                             end
                             if not steered
@@ -1560,12 +1560,12 @@ class TreeSupport
                 // other, one wholly inside the other, or one's centre inside
                 // the other (they'd only print as one fused blob otherwise),
                 // unless the trunk would carry more than maxBranches tines
-                Array<boolean> alive
+                IntegerBuffer alive
                 IntegerBuffer into
                 NumberBuffer mergedR
                 i = 0
                 repeat while i < n
-                    alive:Add(true)
+                    alive:Add(1)
                     into:Add(i)
                     mergedR:Add(nodeR:Get(i))
                     i = i + 1
@@ -1575,13 +1575,13 @@ class TreeSupport
                 number mergeReach = util:Max2(maxMove, maxRadius) + maxMove
                 i = 0
                 repeat while i < n
-                    if alive:Get(i) and nodeDist:Get(i) >= tineLayers
+                    if alive:Get(i) = 1 and nodeDist:Get(i) >= tineLayers
                         near:Empty()
                         NodeCandidates(newX:Get(i), newY:Get(i), mergeReach, near)
                         integer k = 0
                         repeat while k < near:GetSize()
                             integer m = near:Get(k)
-                            if m > i and alive:Get(m) and nodeDist:Get(m) >= tineLayers
+                            if m > i and alive:Get(m) = 1 and nodeDist:Get(m) >= tineLayers
                                 number mdx = newX:Get(i) - newX:Get(m)
                                 number mdy = newY:Get(i) - newY:Get(m)
                                 number md2 = mdx * mdx + mdy * mdy
@@ -1647,10 +1647,10 @@ class TreeSupport
                                         nodeDist:Set(i, nodeDist:Get(m))
                                     end
                                     mergedR:Set(i, mergedRadius)
-                                    if nodeSq:Get(m)
-                                        nodeSq:Set(i, true)
+                                    if nodeSq:Get(m) = 1
+                                        nodeSq:Set(i, 1)
                                     end
-                                    alive:Set(m, false)
+                                    alive:Set(m, 0)
                                     into:Set(m, i)
                                 end
                             end
@@ -1666,16 +1666,16 @@ class TreeSupport
                 IntegerBuffer outDist
                 IntegerBuffer outWeight
                 NumberBuffer outR
-                Array<boolean> outSq
-                Array<boolean> kept
+                IntegerBuffer outSq
+                IntegerBuffer kept
                 i = 0
                 repeat while i < n
-                    kept:Add(false)
+                    kept:Add(0)
                     i = i + 1
                 end
                 i = 0
                 repeat while i < n
-                    if alive:Get(i)
+                    if alive:Get(i) = 1
                         integer dist = nodeDist:Get(i)
                         number gap = xyGap
                         if dist + 1 < tineLayers
@@ -1699,8 +1699,8 @@ class TreeSupport
                             outDist:Add(dist + 1)
                             outWeight:Add(nodeWeight:Get(i))
                             outR:Add(rn)
-                            outSq:Add(placeOverlap)
-                            kept:Set(i, true)
+                            outSq:Add(Flag(placeOverlap))
+                            kept:Set(i, 1)
                             circleX:Add(nodeX:Get(i))
                             circleY:Add(nodeY:Get(i))
                             circleR:Add(nodeR:Get(i))
@@ -1717,8 +1717,8 @@ class TreeSupport
                 // branches merged away this layer still print here
                 i = 0
                 repeat while i < n
-                    if not alive:Get(i)
-                        if kept:Get(into:Get(i))
+                    if alive:Get(i) = 0
+                        if kept:Get(into:Get(i)) = 1
                             circleX:Add(nodeX:Get(i))
                             circleY:Add(nodeY:Get(i))
                             circleR:Add(nodeR:Get(i))
@@ -2045,7 +2045,7 @@ class TreeSupport
                              NumberBuffer circleX, NumberBuffer circleY, NumberBuffer circleR,
                              NumberBuffer outX, NumberBuffer outY,
                              IntegerBuffer outDist, IntegerBuffer outWeight,
-                             NumberBuffer outR, Array<boolean> outSq)
+                             NumberBuffer outR, IntegerBuffer outSq)
         number r = branchR
         if layer + 1 < baseLayers
             r = r + baseFlare * cast(number, baseLayers - layer - 1) / cast(number, baseLayers)
@@ -2092,7 +2092,7 @@ class TreeSupport
             outDist:Add(childDist + 1)
             outWeight:Add(1)
             outR:Add(cr)
-            outSq:Add(placeOverlap)
+            outSq:Add(Flag(placeOverlap))
         end
     end
 
@@ -2466,10 +2466,10 @@ class TreeSupport
     // open lines may be printed backwards
     private action AppendInTravelOrder(Array<Contour> list)
         integer n = list:GetSize()
-        Array<boolean> used
+        IntegerBuffer used
         integer i = 0
         repeat while i < n
-            used:Add(false)
+            used:Add(0)
             i = i + 1
         end
         integer done = 0
@@ -2479,10 +2479,10 @@ class TreeSupport
             number bestD2 = 0.0
             i = 0
             repeat while i < n
-                if not used:Get(i)
+                if used:Get(i) = 0
                     Contour con = list:Get(i)
                     if con:GetSize() = 0
-                        used:Set(i, true)
+                        used:Set(i, 1)
                         done = done + 1
                     else
                         number ax = con:xs:Get(0) - travelX
@@ -2509,7 +2509,7 @@ class TreeSupport
                 i = i + 1
             end
             if best >= 0
-                used:Set(best, true)
+                used:Set(best, 1)
                 done = done + 1
                 Contour chosen = list:Get(best)
                 if bestFlip
@@ -2668,7 +2668,7 @@ class TreeSupport
         slotCellBase:Add(cellStart:GetSize())
         slotBandBase:Add(bandStart:GetSize())
         if count = 0
-            slotHas:Add(false)
+            slotHas:Add(0)
             slotMinX:Add(0.0)
             slotMinY:Add(0.0)
             slotMaxX:Add(0.0)
@@ -2705,7 +2705,7 @@ class TreeSupport
         integer bands = util:FloorToInt(math:SquareRoot(cast(number, count))) + 1
         number bandH = h / cast(number, bands)
 
-        slotHas:Add(true)
+        slotHas:Add(1)
         slotMinX:Add(lowX)
         slotMinY:Add(lowY)
         slotMaxX:Add(highX)
@@ -2869,7 +2869,7 @@ class TreeSupport
         if slot < 0 or slot >= slotHas:GetSize()
             return now
         end
-        if not slotHas:Get(slot)
+        if slotHas:Get(slot) = 0
             return now
         end
         if x < slotMinX:Get(slot) - reach or x > slotMaxX:Get(slot) + reach
@@ -2938,7 +2938,7 @@ class TreeSupport
         if slot < 0 or slot >= slotHas:GetSize()
             return false
         end
-        if not slotHas:Get(slot)
+        if slotHas:Get(slot) = 0
             return false
         end
         if x < slotMinX:Get(slot) or x > slotMaxX:Get(slot)
@@ -3008,7 +3008,7 @@ class TreeSupport
                 end
                 k = k + 1
             end
-            hasBox:Add(found)
+            hasBox:Add(Flag(found))
             boxMinX:Add(lowX)
             boxMinY:Add(lowY)
             boxMaxX:Add(highX)
@@ -3018,6 +3018,14 @@ class TreeSupport
     end
 
     // Net area of a set of loops (holes subtract).
+    /* 1 for true, 0 for false: the flags are kept in IntegerBuffers, not Array<boolean>, which boxes every value. */
+    private action Flag(boolean value) returns integer
+        if value
+            return 1
+        end
+        return 0
+    end
+
     private action TotalArea(Array<Contour> loops) returns number
         number twice = 0.0
         integer i = 0

@@ -44,6 +44,9 @@ Attribute: Example
 class PolygonOffsetter
     Math math
     PolygonOperations ops
+    // OffsetLoops's working buffers, kept between calls (see PolygonOperations)
+    NumberBuffer rawX
+    NumberBuffer rawY
 
     // 16 degree arc step for rounded corners (max sag ~1% of the distance)
     number stepCos = 0.9612616959383189
@@ -132,8 +135,10 @@ class PolygonOffsetter
         end
 
         ops:Clear()
-        NumberBuffer qx
-        NumberBuffer qy
+        NumberBuffer qx = rawX
+        qx:Empty()
+        NumberBuffer qy = rawY
+        qy:Empty()
         integer i = 0
         repeat while i < loops:GetSize()
             Contour con = loops:Get(i)
