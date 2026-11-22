@@ -1,0 +1,367 @@
+package Tests
+
+use Libraries.Containers.Array
+use Libraries.Compute.Math
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Geometry.OutlineEdges
+use Libraries.Fabrication.Geometry.VoronoiDiagram
+use Libraries.Fabrication.Geometry.SkeletalTrapezoidation
+use Libraries.Fabrication.Geometry.CenterMarking
+use Libraries.Fabrication.Geometry.GeometryUtilities
+
+class CenterMarkingTests
+    GeometryUtilities util
+    Math math
+    integer passed = 0
+    integer failed = 0
+
+    action Run returns integer
+        TestArraySizesMatchTheSkeleton()
+        TestBeadCountKnownValues()
+        TestUntouchedNodeHasNoBeadCount()
+        TestFeetAreNeverCentral()
+        TestCentreOfSquareIsCentral()
+        TestCentralEdgesHaveCentralInteriorEnds()
+        TestShortGapsBetweenCentralNodesAreFilled()
+        TestWedgeSpineIsCentral()
+        TestSignificanceRuleDirection()
+        TestEqualRadiusEdgesAreMarked()
+        TestMarkingIsSymmetric()
+
+        output "CenterMarking tests: passed " + passed + ", failed " + failed
+        return failed
+    end
+
+    action Check(boolean condition, text name)
+        if condition
+            passed = passed + 1
+        else
+            failed = failed + 1
+            output "FAIL: " + name
+        end
+    end
+
+    // ------------------------------------------------------------ fixtures
+
+    // Counter-clockwise square from (x0, y0) to (x1, y1), in millimetres.
+    private action Square(number x0, number y0, number x1, number y1) returns Contour
+        Contour c
+        c:AddPoint(x0, y0)
+        c:AddPoint(x1, y0)
+        c:AddPoint(x1, y1)
+        c:AddPoint(x0, y1)
+        c:closed = true
+        return c
+    end
+
+    // Clockwise square, as ContourGenerator orients a hole.
+    private action HoleSquare(number x0, number y0, number x1, number y1) returns Contour
+        Contour c
+        c:AddPoint(x0, y0)
+        c:AddPoint(x0, y1)
+        c:AddPoint(x1, y1)
+        c:AddPoint(x1, y0)
+        c:closed = true
+        return c
+    end
+
+    // The reference shape: outer 0..1 mm, hole 0.4..0.6 mm.
+    private action ReferenceContours returns Array<Contour>
+        Array<Contour> contours
+        contours:Add(Square(0, 0, 1, 1))
+        contours:Add(HoleSquare(0.4, 0.4, 0.6, 0.6))
+        return contours
+    end
+
+    // A plain 20 mm square with no hole. Its centre is a Voronoi vertex where the diagonals meet.
+    private action BigSquareContours returns Array<Contour>
+        Array<Contour> contours
+        contours:Add(Square(0, 0, 20, 20))
+        return contours
+    end
+
+    // An L-shape: its reflex corner at (1, 1) gives parabolic edges.
+    private action LShapeContours returns Array<Contour>
+        Array<Contour> contours
+        Contour c
+        c:AddPoint(0, 0)
+        c:AddPoint(2, 0)
+        c:AddPoint(2, 1)
+        c:AddPoint(1, 1)
+        c:AddPoint(1, 2)
+        c:AddPoint(0, 2)
+        c:closed = true
+        contours:Add(c)
+        return contours
+    end
+
+    // Builds the skeletal trapezoidation of a set of contours into st.
+    private action BuildFor(SkeletalTrapezoidation st, Array<Contour> contours)
+        OutlineEdges edges
+        edges:BuildEdges(contours)
+
+        VoronoiDiagram diagram
+        diagram:SetWorkPath("Outputs/voronoi_test")
+        diagram:Generate(edges)
+
+        st:Build(contours, edges, diagram)
+    end
+
+    // ------------------------------------------------------------ helpers
+
+    // Index of the node at (x, y), or -1 if there is none.
+    private action FindNode(SkeletalTrapezoidation st, number x, number y) returns integer
+        integer v = 0
+        repeat while v < st:xs:GetSize()
+            if Near(st:xs:Get(v), x) and Near(st:ys:Get(v), y)
+                return v
+            end
+            v = v + 1
+        end
+        return -1
+    end
+
+    // True when the node at (x, y) exists and its bead count is expected, to one micrometre.
+    private action BeadIs(SkeletalTrapezoidation st, CenterMarking cm, number x, number y, number expected) returns boolean
+        integer v = FindNode(st, x, y)
+        if v < 0
+            return false
+        end
+        return Near(cm:beadCount:Get(v), expected)
+    end
+
+    private action Near(number a, number b) returns boolean
+        return a - b < 0.000001 and b - a < 0.000001
+    end
+
+    // Length of kept edge e, in mm.
+    private action SegmentLength(SkeletalTrapezoidation st, integer e) returns number
+        integer a = st:cleanStart:Get(e)
+        integer b = st:cleanEnd:Get(e)
+        number dx = st:xs:Get(b) - st:xs:Get(a)
+        number dy = st:ys:Get(b) - st:ys:Get(a)
+        return math:SquareRoot(dx * dx + dy * dy)
+    end
+
+    // ------------------------------------------------------------ tests
+
+    // One bead count per node, one central flag per node, one per edge.
+    action TestArraySizesMatchTheSkeleton()
+        SkeletalTrapezoidation st
+        BuildFor(st, ReferenceContours())
+        CenterMarking cm
+        cm:Build(st)
+
+        Check(cm:beadCount:GetSize() = st:xs:GetSize(), "one bead count per node")
+        Check(cm:nodeCentral:GetSize() = st:xs:GetSize(), "one central flag per node")
+        Check(cm:edgeCentral:GetSize() = st:cleanStart:GetSize(), "one central flag per edge")
+    end
+
+    // Bead count is 2 * R / w*, with w* = 0.4 mm.
+    // (0, 0) lies on the outline: radius 0, so 0 beads.
+    // (0.2, 0.4) has radius 0.2: 2 * 0.2 / 0.4 = 1 bead.
+    // The diagonal node has radius 0.234314575: about 1.1715729 beads.
+    action TestBeadCountKnownValues()
+        SkeletalTrapezoidation st
+        BuildFor(st, ReferenceContours())
+        CenterMarking cm
+        cm:Build(st)
+
+        Check(BeadIs(st, cm, 0.0, 0.0, 0.0), "outer corner has 0 beads")
+        Check(BeadIs(st, cm, 0.2, 0.4, 1.0), "(0.2, 0.4) has 1 bead")
+        Check(BeadIs(st, cm, 0.234314575, 0.234314575, 1.1715729), "diagonal node has about 1.1716 beads")
+    end
+
+    // The hole centre is not on any edge and not on the outline, so it has no radius and no bead count.
+    action TestUntouchedNodeHasNoBeadCount()
+        SkeletalTrapezoidation st
+        BuildFor(st, ReferenceContours())
+        CenterMarking cm
+        cm:Build(st)
+
+        Check(BeadIs(st, cm, 0.5, 0.5, -1.0), "hole centre has no bead count (-1)")
+    end
+
+    // No outline foot is ever marked central. Feet have radius 0, and an unset node has -1.
+    action TestFeetAreNeverCentral()
+        SkeletalTrapezoidation st
+        BuildFor(st, ReferenceContours())
+        CenterMarking cm
+        cm:Build(st)
+
+        boolean ok = true
+        integer v = 0
+        repeat while v < st:xs:GetSize()
+            if cm:nodeCentral:Get(v) = 1 and st:rad:Get(v) <= 0.0
+                ok = false
+            end
+            v = v + 1
+        end
+        Check(ok, "no outline foot or unset node is marked central")
+    end
+
+    // The centre of a square is a local maximum of the radius, so it must be central.
+    action TestCentreOfSquareIsCentral()
+        SkeletalTrapezoidation st
+        BuildFor(st, BigSquareContours())
+        CenterMarking cm
+        cm:Build(st)
+
+        integer v = FindNode(st, 10.0, 10.0)
+        Check(v >= 0, "the square has a node at its centre")
+
+        boolean central = false
+        if v >= 0
+            central = cm:nodeCentral:Get(v) = 1
+        end
+        Check(central, "the centre of the square is central")
+    end
+
+    // Marking an edge marks its interior ends, so a central edge never has an unmarked interior end.
+    action TestCentralEdgesHaveCentralInteriorEnds()
+        SkeletalTrapezoidation st
+        BuildFor(st, ReferenceContours())
+        CenterMarking cm
+        cm:Build(st)
+
+        boolean ok = true
+        integer e = 0
+        repeat while e < st:cleanStart:GetSize()
+            if cm:edgeCentral:Get(e) = 1
+                integer a = st:cleanStart:Get(e)
+                integer b = st:cleanEnd:Get(e)
+                if st:rad:Get(a) > 0.0 and cm:nodeCentral:Get(a) = 0
+                    ok = false
+                end
+                if st:rad:Get(b) > 0.0 and cm:nodeCentral:Get(b) = 0
+                    ok = false
+                end
+            end
+            e = e + 1
+        end
+        Check(ok, "every central edge has its interior ends central")
+    end
+
+    // After filtering, an unmarked edge that joins two central nodes must be at least
+    // filterDistance long. Edges between nodes of equal radius are skipped, since the
+    // uphill walk cannot start across them.
+    action TestShortGapsBetweenCentralNodesAreFilled()
+        SkeletalTrapezoidation st
+        BuildFor(st, LShapeContours())
+        CenterMarking cm
+        cm:Build(st)
+
+        boolean ok = true
+        integer e = 0
+        repeat while e < st:cleanStart:GetSize()
+            integer a = st:cleanStart:Get(e)
+            integer b = st:cleanEnd:Get(e)
+            if cm:edgeCentral:Get(e) = 0
+                if cm:nodeCentral:Get(a) = 1 and cm:nodeCentral:Get(b) = 1
+                    if st:rad:Get(a) not= st:rad:Get(b)
+                        if SegmentLength(st, e) < cm:filterDistance
+                            ok = false
+                        end
+                    end
+                end
+            end
+            e = e + 1
+        end
+        Check(ok, "no short unmarked edge joins two central nodes")
+    end
+
+        // The spine of a thin wedge, away from the apex and the wide end, is significant: its
+    // radius slope is about 0.259, below the threshold. Every such node must be central.
+    action TestWedgeSpineIsCentral()
+        SkeletalTrapezoidation st
+        BuildFor(st, WedgeContours())
+        CenterMarking cm
+        cm:Build(st)
+
+        integer spineNodes = 0
+        integer centralSpine = 0
+        integer v = 0
+        repeat while v < st:xs:GetSize()
+            number x = st:xs:Get(v)
+            number y = st:ys:Get(v)
+            if util:AbsNum(y) < 0.01 and x > 1.0 and x < 8.0 and st:rad:Get(v) > 0.0
+                spineNodes = spineNodes + 1
+                if cm:nodeCentral:Get(v) = 1
+                    centralSpine = centralSpine + 1
+                end
+            end
+            v = v + 1
+        end
+        Check(spineNodes > 0, "the wedge has spine nodes between the apex and the wide end")
+        Check(centralSpine = spineNodes, "every spine node of the wedge is central")
+    end
+
+    // A thin isosceles wedge: apex at the origin, opening to the right, apex angle 30 degrees.
+    // Its spine (y = 0) has radius slope sin(15 degrees) = 0.259, below cos(67.5 degrees) = 0.383,
+    // so the paper calls it significant (bisector angle 150 degrees).
+    private action WedgeContours returns Array<Contour>
+        Array<Contour> contours
+        Contour c
+        c:AddPoint(0, 0)
+        c:AddPoint(10, -2.67949)
+        c:AddPoint(10, 2.67949)
+        c:closed = true
+        contours:Add(c)
+        return contours
+    end
+
+    // Under the significance rule, an edge whose ends have equal radius has slope 0 and is always
+    // marked. So the gap filter never meets a flat stretch it would have to cross.
+    action TestEqualRadiusEdgesAreMarked()
+        SkeletalTrapezoidation st
+        BuildFor(st, ReferenceContours())
+        CenterMarking cm
+        cm:Build(st)
+
+        boolean ok = true
+        integer e = 0
+        repeat while e < st:cleanStart:GetSize()
+            integer a = st:cleanStart:Get(e)
+            integer b = st:cleanEnd:Get(e)
+            if st:rad:Get(a) > 0.0 and st:rad:Get(a) = st:rad:Get(b)
+                if cm:edgeCentral:Get(e) = 0
+                    ok = false
+                end
+            end
+            e = e + 1
+        end
+        Check(ok, "every interior edge with equal end radii is marked")
+    end
+
+    // The significance rule by itself: a flat spine and a sharp wedge spine are significant,
+    // a steep ridge is not. This does not depend on the local-maximum or gap-filter rules.
+    action TestSignificanceRuleDirection()
+        CenterMarking cm
+
+        Check(cm:IsSignificant(0.0), "a flat spine (slope 0) is significant")
+        Check(cm:IsSignificant(0.259), "a sharp wedge spine (slope 0.259) is significant")
+        Check(not cm:IsSignificant(0.5), "a steep ridge (slope 0.5) is not significant")
+    end
+
+    private action MarkingIsSymmetric(Array<Contour> contours) returns boolean
+        SkeletalTrapezoidation st
+        BuildFor(st, contours)
+        CenterMarking cm
+        cm:Build(st)
+        integer e = 0
+        repeat while e < st:cleanStart:GetSize()
+            integer t = st:cleanOpposite:Get(e)
+            if t >= 0 and cm:edgeCentral:Get(e) not= cm:edgeCentral:Get(t)
+                return false
+            end
+            e = e + 1
+        end
+        return true
+    end
+
+    action TestMarkingIsSymmetric()
+        Check(MarkingIsSymmetric(WedgeContours()), "the wedge's edges and their twins are marked alike")
+        Check(MarkingIsSymmetric(LShapeContours()), "the L's edges and their twins are marked alike")
+        Check(MarkingIsSymmetric(ReferenceContours()), "the holed square's edges and their twins are marked alike")
+    end
+end

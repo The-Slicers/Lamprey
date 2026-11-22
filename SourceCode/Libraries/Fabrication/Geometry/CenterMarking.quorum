@@ -1,0 +1,219 @@
+package Libraries.Fabrication.Geometry
+
+use Libraries.Containers.Array
+use Libraries.Fabrication.Geometry.GeometryUtilities
+use Libraries.Fabrication.Geometry.SkeletalTrapezoidation
+use Libraries.Compute.Math
+
+class CenterMarking
+    public Array<number> beadCount
+    public Array<integer> nodeCentral
+    public Array<integer> edgeCentral
+
+    public number significanceThreshold = 0.3826834     // cos(135 / 2) for alpha_max = 135 degrees
+    public number nozzleWidth = 0.4                     // w*
+    public number filterDistance = 0.4                  // distance for marking filtering
+
+    GeometryUtilities util
+    Math math
+
+    // marking the parts of the skeleton that are central (i.e. finding the spines of features)
+    action Build(SkeletalTrapezoidation st)
+        // reset
+        beadCount:Empty()
+        nodeCentral:Empty()
+        edgeCentral:Empty()
+
+        // adding in every node's beadcount
+        // i.e. how many beads fit across the feature at the node, assuming each bead is a nozzle width
+        integer v = 0
+        repeat while v < st:xs:GetSize()
+            nodeCentral:Add(0)
+            if st:rad:Get(v) >= 0.0
+                beadCount:Add(2.0 * st:rad:Get(v) / nozzleWidth)        // bead count is 2R/w* (diameter measured in nozzle widths)
+            else
+                beadCount:Add(-1.0)                                     // defaults to -1
+            end
+            v = v + 1
+        end
+
+        // every edge defaults to 0 (not central)
+        integer e = 0
+        repeat while e < st:cleanStart:GetSize()
+            edgeCentral:Add(0)
+            e = e + 1
+        end
+
+        // a node that is a local maxima is central
+        // i.e. every neighbour's radius is smaller
+        integer n = 0
+        repeat while n < st:xs:GetSize()
+
+            // check nodes with a radius
+            if st:rad:Get(n) >= 0.0
+                boolean hasNeighbour = false
+                boolean isMax = true
+
+                // go through all edges
+                integer ne = 0
+                repeat while ne < st:cleanStart:GetSize()
+
+                    // find edges that touch the node
+                    if TouchesNode(st, ne, n)
+                        hasNeighbour = true
+
+                        // compare to neighbor's radius
+                        if st:rad:Get(OtherEnd(st, ne, n)) >= st:rad:Get(n)
+                            isMax = false
+                        end
+                    end
+                    ne = ne + 1
+                end
+
+                // mark node as central
+                if hasNeighbour and isMax
+                    nodeCentral:Set(n, 1)
+                end
+            end
+            n = n + 1
+        end
+
+        // finding edges that are central
+        // edges are central when its radius changes slowly
+        // if its endpoints are inside the outline, they are marked as central too (endpoints outside the outline are left unmarked)
+        integer se = 0
+        repeat while se < st:cleanStart:GetSize()
+            // edge ends and length
+            integer a = st:cleanStart:Get(se)
+            integer b = st:cleanEnd:Get(se)
+            number len = EdgeLength(st, se)
+
+            // calculate the slope of the edge (this is the change in radius per mm)
+            // edge slope: |R(a) -R(b)| / length
+            if len > 0.0 and st:rad:Get(a) >= 0.0 and st:rad:Get(b) >= 0.0
+                number slope = util:AbsNum(st:rad:Get(b) - st:rad:Get(a)) / len
+
+                // check if slope is significant
+                if IsSignificant(slope)
+                    edgeCentral:Set(se, 1)
+
+                    // check if ends are within outline (radius > 0) before marking as central
+                    if st:rad:Get(a) > 0.0
+                        nodeCentral:Set(a, 1)
+                    end
+                    if st:rad:Get(b) > 0.0
+                        nodeCentral:Set(b, 1)
+                    end
+                end
+            end
+            se = se + 1
+        end
+
+        // marking filtering: after initializing marking at all edges and nodes, filter high frequency changes in markings for smoother ToolpathExtraction
+        // i.e. filtering high-frequency oscillation in order of magnitude of the nozzle size
+        // for each marked node with an upward unmarked edge attached, walk along the upward edge until we reach another marked node
+        // if distance traveled is within d_unmarked_max, mark all edges encountered as central
+
+        // going through all central nodes
+        integer w = 0
+        repeat while w < st:xs:GetSize()
+            if nodeCentral:Get(w) = 1
+
+                // collect edges taken on walk
+                Array<integer> walked
+                number length = 0.0         // walk distance
+                integer current = w         // node currently at, start at w
+                boolean done = false
+                boolean success = false
+
+                // walking uphill (moving to node with higher radius)
+                repeat while not done
+                    integer best = -1
+                    number bestRadius = -1.0
+
+                    // going through all edges
+                    integer be = 0
+                    repeat while be < st:cleanStart:GetSize()
+
+                        // check if edge is not central and touches current node
+                        if edgeCentral:Get(be) = 0 and TouchesNode(st, be, current)
+                            integer o = OtherEnd(st, be, current)
+
+                            // if edge leads to node with higher radius
+                            if st:rad:Get(o) > st:rad:Get(current) and st:rad:Get(o) > bestRadius
+                                best = be                   // edge
+                                bestRadius = st:rad:Get(o)
+                            end
+                        end
+                        be = be + 1
+                    end
+
+                    // could not go upward
+                    if best < 0
+                        done = true
+                    else
+                        // success if: walk was within d_unmarked_max distance and new node is central
+                        walked:Add(best)
+                        length = length + EdgeLength(st, best)
+                        current = OtherEnd(st, best, current)
+                        if length >= filterDistance
+                            done = true
+                        elseif nodeCentral:Get(current) = 1
+                            success = true
+                            done = true
+                        end
+                    end
+                end
+
+                // mark every edge of the walk, their twin edges, and both ends of each walked edge
+                if success
+                    integer k = 0
+                    repeat while k < walked:GetSize()
+                        integer we = walked:Get(k)
+                        edgeCentral:Set(we, 1)
+                        integer twin = st:cleanOpposite:Get(we)
+                        if twin >= 0
+                            edgeCentral:Set(twin, 1)
+                        end
+                        nodeCentral:Set(st:cleanStart:Get(we), 1)
+                        nodeCentral:Set(st:cleanEnd:Get(we), 1)
+                        k = k + 1
+                    end
+                end
+            end
+            w = w + 1
+        end
+    end
+
+    // check if an edge is significant
+    // edge is significant when its bisector angle is greater than alpha_max (equation 3)
+    // i.e. edge is significant when its radius slope is below cos(alpha_max / 2) (figure 5b)
+    public action IsSignificant(number slope) returns boolean
+        return slope < significanceThreshold
+    end
+
+    //  returns true if an edge starts or ends at the point passed in
+    private action TouchesNode(SkeletalTrapezoidation st, integer e, integer v) returns boolean
+        return st:cleanStart:Get(e) = v or st:cleanEnd:Get(e) = v
+    end
+
+    // given an edge e with and its endpoint v, returns the other endpoint of the edge
+    private action OtherEnd(SkeletalTrapezoidation st, integer e, integer v) returns integer
+        if st:cleanStart:Get(e) = v
+            return st:cleanEnd:Get(e)
+        end
+        return st:cleanStart:Get(e)
+    end
+
+    // calculates length of an edge (i.e. distance between endpoints a and b)
+    private action EdgeLength(SkeletalTrapezoidation st, integer e) returns number
+        integer a = st:cleanStart:Get(e)
+        integer b = st:cleanEnd:Get(e)
+
+        // distance between both of ends
+        number dx = st:xs:Get(b) - st:xs:Get(a)
+        number dy = st:ys:Get(b) - st:ys:Get(a)
+
+        return math:SquareRoot(dx * dx + dy * dy)
+    end
+end

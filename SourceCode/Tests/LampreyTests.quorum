@@ -43,8 +43,8 @@ class LampreyTests
         SkeletalTrapezoidationTests skeleton
         failed = failed + skeleton:Run()
 
-//        CenterMarkingTests centre
-//        failed = failed + centre:Run()
+        CenterMarkingTests centre
+        failed = failed + centre:Run()
 
 //        BeadTransitionsTests transitions
 //        failed = failed + transitions:Run()
