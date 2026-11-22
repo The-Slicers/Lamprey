@@ -1,0 +1,256 @@
+package Tests
+
+use Libraries.Containers.Array
+use Libraries.System.File
+use Libraries.Language.Errors.InvalidArgumentError
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Geometry.OutlineEdges
+use Libraries.Fabrication.Geometry.VoronoiDiagram
+
+class VoronoiDiagramTests
+    integer passed = 0
+    integer failed = 0
+
+    action Run returns integer
+        TestSquareWithHoleCounts()
+        TestFirstEdgeFields()
+        TestVertexScaledToMillimetres()
+        TestEveryEdgeHasTwin()
+        TestCategoriesAreKnown()
+        TestIndicesAreInRange()
+        TestRebuildReplacesResults()
+        TestEmptyInputGivesNothing()
+        TestBoostOffFails()
+        TestWorkFolderCreated()
+
+        output "VoronoiDiagram tests: passed " + passed + ", failed " + failed
+        return failed
+    end
+
+    action Check(boolean condition, text name)
+        if condition
+            passed = passed + 1
+        else
+            failed = failed + 1
+            output "FAIL: " + name
+        end
+    end
+
+    // ------------------------------------------------------------ helpers
+
+    // Counter-clockwise square from (x0, y0) to (x1, y1), in millimetres.
+    action Square(number x0, number y0, number x1, number y1) returns Contour
+        Contour c
+        c:AddPoint(x0, y0)
+        c:AddPoint(x1, y0)
+        c:AddPoint(x1, y1)
+        c:AddPoint(x0, y1)
+        c:closed = true
+        return c
+    end
+
+    // Clockwise square, as ContourGenerator orients a hole.
+    action HoleSquare(number x0, number y0, number x1, number y1) returns Contour
+        Contour c
+        c:AddPoint(x0, y0)
+        c:AddPoint(x0, y1)
+        c:AddPoint(x1, y1)
+        c:AddPoint(x1, y0)
+        c:closed = true
+        return c
+    end
+
+    // Builds the edges of the reference shape: outer 0..1 mm, hole 0.4..0.6 mm.
+    action BuildReferenceEdges returns OutlineEdges
+        Array<Contour> outline
+        outline:Add(Square(0, 0, 1, 1))
+        outline:Add(HoleSquare(0.4, 0.4, 0.6, 0.6))
+
+        OutlineEdges edges
+        edges:BuildEdges(outline)
+        return edges
+    end
+
+    // A diagram with the output folder set to one used only by tests.
+    action NewDiagram(text folder) returns VoronoiDiagram
+        VoronoiDiagram diagram
+        diagram:SetWorkPath(folder)
+        return diagram
+    end
+
+    // Generates the diagram of the reference shape.
+    action GenerateReference(VoronoiDiagram diagram)
+        OutlineEdges edges = BuildReferenceEdges()
+        diagram:Generate(edges)
+    end
+
+    // True when directed edge j is the twin of directed edge k: cells, categories
+    // and vertices swapped, with the same linear flag.
+    action IsTwin(VoronoiDiagram diagram, integer j, integer k) returns boolean
+        boolean cellsSwap = diagram:cell0:Get(j) = diagram:cell1:Get(k) and diagram:cell1:Get(j) = diagram:cell0:Get(k)
+        boolean categoriesSwap = diagram:category0:Get(j) = diagram:category1:Get(k) and diagram:category1:Get(j) = diagram:category0:Get(k)
+        boolean verticesSwap = diagram:vertex0:Get(j) = diagram:vertex1:Get(k) and diagram:vertex1:Get(j) = diagram:vertex0:Get(k)
+        boolean sameLinear = diagram:linear:Get(j) = diagram:linear:Get(k)
+        return cellsSwap and categoriesSwap and verticesSwap and sameLinear
+    end
+
+    // True when some directed edge is the twin of edge k.
+    action HasTwin(VoronoiDiagram diagram, integer k) returns boolean
+        integer j = 0
+        repeat while j < diagram:cell0:GetSize()
+            if IsTwin(diagram, j, k)
+                return true
+            end
+            j = j + 1
+        end
+        return false
+    end
+
+    // The categories Boost defines (voronoi_geometry_type.hpp).
+    action IsKnownCategory(integer c) returns boolean
+        return c = 0 or c = 1 or c = 2 or c = 8 or c = 9
+    end
+
+    // ------------------------------------------------------------ tests
+
+    // The reference shape: 21 vertices, 40 directed edges.
+    action TestSquareWithHoleCounts
+        VoronoiDiagram diagram = NewDiagram("Outputs/voronoi_test")
+        GenerateReference(diagram)
+
+        Check(diagram:vertX:GetSize() = 21, "square with hole has 21 vertices")
+        Check(diagram:cell0:GetSize() = 40, "square with hole has 40 directed edges")
+    end
+
+    // The first edge of the reference output: e 0 8 3 9 6 0 1.
+    action TestFirstEdgeFields
+        VoronoiDiagram diagram = NewDiagram("Outputs/voronoi_test")
+        GenerateReference(diagram)
+
+        Check(diagram:cell0:Get(0) = 0, "edge 0 cell0 is segment 0")
+        Check(diagram:category0:Get(0) = 8, "edge 0 cell0 is a segment cell (initial)")
+        Check(diagram:cell1:Get(0) = 3, "edge 0 cell1 is segment 3")
+        Check(diagram:category1:Get(0) = 9, "edge 0 cell1 is a segment cell (reverse)")
+        Check(diagram:vertex0:Get(0) = 6, "edge 0 starts at vertex 6")
+        Check(diagram:vertex1:Get(0) = 0, "edge 0 ends at vertex 0")
+        Check(diagram:linear:Get(0) = 1, "edge 0 is straight")
+    end
+
+    // Vertex 0 is the origin, and vertex 1 is (0, 1) mm.
+    action TestVertexScaledToMillimetres
+        VoronoiDiagram diagram = NewDiagram("Outputs/voronoi_test")
+        GenerateReference(diagram)
+
+        Check(diagram:vertX:Get(0) = 0.0 and diagram:vertY:Get(0) = 0.0, "vertex 0 is at the origin")
+        Check(diagram:vertX:Get(1) = 0.0 and diagram:vertY:Get(1) = 1.0, "vertex 1 is at (0, 1) mm")
+    end
+
+    // Every directed edge has a partner that swaps its cells, categories and vertices.
+    action TestEveryEdgeHasTwin
+        VoronoiDiagram diagram = NewDiagram("Outputs/voronoi_test")
+        GenerateReference(diagram)
+
+        boolean allPaired = true
+        integer k = 0
+        repeat while k < diagram:cell0:GetSize()
+            if not HasTwin(diagram, k)
+                allPaired = false
+                output "  no twin for edge " + k
+            end
+            k = k + 1
+        end
+        Check(allPaired, "every directed edge has a twin")
+    end
+
+    // Every category is one of the values Boost defines.
+    action TestCategoriesAreKnown
+        VoronoiDiagram diagram = NewDiagram("Outputs/voronoi_test")
+        GenerateReference(diagram)
+
+        boolean allKnown = true
+        integer k = 0
+        repeat while k < diagram:cell0:GetSize()
+            if not IsKnownCategory(diagram:category0:Get(k))
+                allKnown = false
+            end
+            if not IsKnownCategory(diagram:category1:Get(k))
+                allKnown = false
+            end
+            k = k + 1
+        end
+        Check(allKnown, "every category is one of 0, 1, 2, 8, 9")
+    end
+
+    // Cells are segments 0-7, vertices are -1 or valid, linear is 0 or 1.
+    action TestIndicesAreInRange
+        VoronoiDiagram diagram = NewDiagram("Outputs/voronoi_test")
+        GenerateReference(diagram)
+
+        integer vertexCount = diagram:vertX:GetSize()
+        boolean inRange = true
+        integer k = 0
+        repeat while k < diagram:cell0:GetSize()
+            if diagram:cell0:Get(k) < 0 or diagram:cell0:Get(k) > 7
+                inRange = false
+            end
+            if diagram:cell1:Get(k) < 0 or diagram:cell1:Get(k) > 7
+                inRange = false
+            end
+            if diagram:vertex0:Get(k) < -1 or diagram:vertex0:Get(k) >= vertexCount
+                inRange = false
+            end
+            if diagram:vertex1:Get(k) < -1 or diagram:vertex1:Get(k) >= vertexCount
+                inRange = false
+            end
+            if diagram:linear:Get(k) < 0 or diagram:linear:Get(k) > 1
+                inRange = false
+            end
+            k = k + 1
+        end
+        Check(inRange, "cells are segments 0-7, vertices are -1 or valid, linear is 0 or 1")
+    end
+
+    // A second Generate replaces the first, so the counts stay at 21 and 40.
+    action TestRebuildReplacesResults
+        VoronoiDiagram diagram = NewDiagram("Outputs/voronoi_test")
+        GenerateReference(diagram)
+        GenerateReference(diagram)
+
+        Check(diagram:vertX:GetSize() = 21, "second Generate leaves 21 vertices, not 42")
+        Check(diagram:cell0:GetSize() = 40, "second Generate leaves 40 edges, not 80")
+    end
+
+    // No edges means no bridge call and no results.
+    action TestEmptyInputGivesNothing
+        VoronoiDiagram diagram = NewDiagram("Outputs/voronoi_test")
+        OutlineEdges edges
+        diagram:Generate(edges)
+
+        Check(diagram:vertX:GetSize() = 0, "empty input gives no vertices")
+        Check(diagram:cell0:GetSize() = 0, "empty input gives no edges")
+    end
+
+    // With Boost off, the Quorum stub is reached and reports it isn't written.
+    action TestBoostOffFails
+        VoronoiDiagram diagram = NewDiagram("Outputs/voronoi_test")
+        diagram:SetBoost(false)
+
+        boolean caught = false
+        check
+            GenerateReference(diagram)
+        detect e is InvalidArgumentError
+            caught = true
+        end
+        Check(caught, "SetBoost(false) reaches the Quorum stub and fails")
+    end
+
+    // The work folder is created on demand.
+    action TestWorkFolderCreated
+        VoronoiDiagram diagram = NewDiagram("Outputs/voronoi_test_folder")
+        GenerateReference(diagram)
+
+        File folder
+        folder:SetPath("Outputs/voronoi_test_folder")
+        Check(folder:Exists(), "the work folder is created on demand")
+    end
+end

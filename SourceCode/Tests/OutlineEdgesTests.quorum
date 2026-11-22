@@ -1,0 +1,241 @@
+package Tests
+
+use Libraries.Containers.Array
+use Libraries.Language.Errors.InvalidArgumentError
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Geometry.OutlineEdges
+
+class OutlineEdgesTests
+    integer passed = 0
+    integer failed = 0
+
+    action Run returns integer
+        TestSquareWithHole()
+        TestHoleEdgesHaveBackReferences()
+        TestStraightVertexIsCounted()
+        TestSmallLoopKept()
+        TestOpenAndShortLoopsDropped()
+        TestZeroLengthEdgeDropped()
+        TestRoundingIsSymmetric()
+        TestRangeCheckFailsOutOfRange()
+        TestRangeCheckPassesInRange()
+        TestBuildTwiceResets()
+
+        output "OutlineEdges tests: passed " + passed + ", failed " + failed
+        return failed
+    end
+
+    action Check(boolean condition, text name)
+        if condition
+            passed = passed + 1
+        else
+            failed = failed + 1
+            output "FAIL: " + name
+        end
+    end
+
+    // Counter-clockwise square from (x0, y0) to (x1, y1), in millimetres.
+    action Square(number x0, number y0, number x1, number y1) returns Contour
+        Contour c
+        c:AddPoint(x0, y0)
+        c:AddPoint(x1, y0)
+        c:AddPoint(x1, y1)
+        c:AddPoint(x0, y1)
+        c:closed = true
+        return c
+    end
+
+    // Clockwise square, as ContourGenerator orients a hole.
+    action HoleSquare(number x0, number y0, number x1, number y1) returns Contour
+        Contour c
+        c:AddPoint(x0, y0)
+        c:AddPoint(x0, y1)
+        c:AddPoint(x1, y1)
+        c:AddPoint(x1, y0)
+        c:closed = true
+        return c
+    end
+
+    // Checks edge k against expected scaled endpoints.
+    action CheckEdge(OutlineEdges edges, integer k, integer ax, integer ay, integer bx, integer by, text name)
+        Check(edges:x0:Get(k) = ax and edges:y0:Get(k) = ay and edges:x1:Get(k) = bx and edges:y1:Get(k) = by, name)
+    end
+
+    // ------------------------------------------------------------ the reference shape
+
+    // Outer square 0..1 mm (counter-clockwise), clockwise hole 0.4..0.6 mm.
+    // Expected: 8 edges, outer first, then the hole.
+    action TestSquareWithHole
+        Array<Contour> outline
+        outline:Add(Square(0, 0, 1, 1))
+        outline:Add(HoleSquare(0.4, 0.4, 0.6, 0.6))
+
+        OutlineEdges edges
+        edges:BuildEdges(outline)
+
+        Check(edges:x0:GetSize() = 8, "square with hole gives 8 edges")
+        CheckEdge(edges, 0, 0, 0, 1000, 0, "outer edge 0")
+        CheckEdge(edges, 1, 1000, 0, 1000, 1000, "outer edge 1")
+        CheckEdge(edges, 2, 1000, 1000, 0, 1000, "outer edge 2")
+        CheckEdge(edges, 3, 0, 1000, 0, 0, "outer edge 3")
+        CheckEdge(edges, 4, 400, 400, 400, 600, "hole edge 4")
+        CheckEdge(edges, 5, 400, 600, 600, 600, "hole edge 5")
+        CheckEdge(edges, 6, 600, 600, 600, 400, "hole edge 6")
+        CheckEdge(edges, 7, 600, 400, 400, 400, "hole edge 7")
+        Check(edges:false_vertices = 0, "square with hole has no straight vertices")
+    end
+
+    // Each edge records its loop and the vertex it starts at.
+    action TestHoleEdgesHaveBackReferences
+        Array<Contour> outline
+        outline:Add(Square(0, 0, 1, 1))
+        outline:Add(HoleSquare(0.4, 0.4, 0.6, 0.6))
+
+        OutlineEdges edges
+        edges:BuildEdges(outline)
+
+        Check(edges:fromContour(0) = 0 and edges:fromContour(3) = 0, "outer edges come from loop 0")
+        Check(edges:fromContour(4) = 1 and edges:fromContour(7) = 1, "hole edges come from loop 1")
+        Check(edges:EdgeStartsAt(0) = 0 and edges:EdgeStartsAt(3) = 3, "outer edges start at vertices 0 to 3")
+        Check(edges:EdgeStartsAt(4) = 0 and edges:EdgeStartsAt(7) = 3, "hole edges start at vertices 0 to 3")
+    end
+
+    // A vertex on a straight run is counted; the corners are not.
+    action TestStraightVertexIsCounted
+        Contour c
+        c:AddPoint(0, 0)
+        c:AddPoint(0.5, 0)
+        c:AddPoint(1, 0)
+        c:AddPoint(1, 1)
+        c:AddPoint(0, 1)
+        c:closed = true
+
+        Array<Contour> outline
+        outline:Add(c)
+
+        OutlineEdges edges
+        edges:BuildEdges(outline)
+
+        Check(edges:x0:GetSize() = 5, "five vertices give five edges")
+        Check(edges:false_vertices = 1, "the midpoint of the bottom edge is the one straight vertex")
+    end
+
+    // A triangle is the smallest usable loop, so it is kept.
+    action TestSmallLoopKept
+        Contour tri
+        tri:AddPoint(0, 0)
+        tri:AddPoint(1, 0)
+        tri:AddPoint(0, 1)
+        tri:closed = true
+
+        Array<Contour> outline
+        outline:Add(tri)
+
+        OutlineEdges edges
+        edges:BuildEdges(outline)
+
+        Check(edges:x0:GetSize() = 3, "triangle gives 3 edges")
+        Check(edges:contour_drops = 0, "triangle is not dropped")
+    end
+
+    // An open path and a two-point loop are both dropped and counted.
+    action TestOpenAndShortLoopsDropped
+        Contour open
+        open:AddPoint(0, 0)
+        open:AddPoint(1, 0)
+        open:AddPoint(1, 1)
+        open:closed = false
+
+        Contour pair
+        pair:AddPoint(0, 0)
+        pair:AddPoint(1, 0)
+        pair:closed = true
+
+        Array<Contour> outline
+        outline:Add(open)
+        outline:Add(pair)
+
+        OutlineEdges edges
+        edges:BuildEdges(outline)
+
+        Check(edges:x0:GetSize() = 0, "no edges from open or short loops")
+        Check(edges:contour_drops = 2, "both loops are counted as dropped")
+    end
+
+    // 0.0001 mm rounds to 0 along with vertex 0, so the edge between them has no
+    // length and is dropped. The other four edges are kept, and their start
+    // vertices still refer to the original loop.
+    action TestZeroLengthEdgeDropped
+        Contour c
+        c:AddPoint(0, 0)
+        c:AddPoint(0.0001, 0)
+        c:AddPoint(1, 0)
+        c:AddPoint(1, 1)
+        c:AddPoint(0, 1)
+        c:closed = true
+
+        Array<Contour> outline
+        outline:Add(c)
+
+        OutlineEdges edges
+        edges:BuildEdges(outline)
+
+        Check(edges:x0:GetSize() = 4, "the zero-length edge is dropped, leaving 4")
+        Check(edges:EdgeStartsAt(0) = 1, "the first kept edge starts at vertex 1")
+        Check(edges:EdgeStartsAt(3) = 4, "the last kept edge starts at vertex 4")
+    end
+
+    // Rounding is half away from zero. Values chosen away from .5 so floating
+    // point cannot push them across the boundary.
+    action TestRoundingIsSymmetric
+        OutlineEdges edges
+        Check(edges:ScaleUp(0.0007) = 1, "0.7 units rounds up to 1")
+        Check(edges:ScaleUp(-0.0007) = -1, "-0.7 units rounds to -1")
+        Check(edges:ScaleUp(0.0003) = 0, "0.3 units rounds down to 0")
+        Check(edges:ScaleUp(-0.0003) = 0, "-0.3 units rounds to 0")
+        Check(edges:ScaleUp(2.5) = 2500, "whole millimetres scale exactly")
+    end
+
+    // A coordinate far outside the integer range must fail, not wrap silently.
+    action TestRangeCheckFailsOutOfRange
+        Array<Contour> outline
+        outline:Add(Square(0, 0, 600000, 600000))
+
+        OutlineEdges edges
+        boolean caught = false
+        check
+            edges:BuildEdges(outline)
+        detect e is InvalidArgumentError
+            caught = true
+        end
+        Check(caught, "an out-of-range vertex fails the build")
+    end
+
+    // A coordinate inside the range builds without error.
+    action TestRangeCheckPassesInRange
+        Array<Contour> outline
+        outline:Add(Square(0, 0, 400000, 400000))
+
+        OutlineEdges edges
+        boolean caught = false
+        check
+            edges:BuildEdges(outline)
+        detect e is InvalidArgumentError
+            caught = true
+        end
+        Check(not caught, "an in-range vertex builds without error")
+        Check(edges:x0:GetSize() = 4, "the large square gives 4 edges")
+    end
+
+    // A second build replaces the first build's edges.
+    action TestBuildTwiceResets
+        Array<Contour> outline
+        outline:Add(Square(0, 0, 1, 1))
+
+        OutlineEdges edges
+        edges:BuildEdges(outline)
+        edges:BuildEdges(outline)
+
+        Check(edges:x0:GetSize() = 4, "second build replaces the first, leaving 4 edges")
+    end
+end

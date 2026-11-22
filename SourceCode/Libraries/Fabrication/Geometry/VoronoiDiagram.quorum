@@ -1,0 +1,183 @@
+package Libraries.Fabrication.Geometry
+
+use Libraries.Containers.Array
+use Libraries.System.File
+use Libraries.System.FileWriter
+use Libraries.Fabrication.ArgumentChecker
+use Libraries.Fabrication.Geometry.OutlineEdges
+use Libraries.Fabrication.Geometry.VoronoiNative
+
+class VoronoiDiagram
+    boolean boost = true                // use boost c++ library to generate VD
+    text workPath = "Outputs/voronoi"
+    text inFile = "voronoi_in.txt"
+    text outFile = "voronoi_out.txt"
+    number scale = 1000.0
+
+    FileWriter writer
+    ArgumentChecker checker
+
+    // storing vertices (x,y) from boost
+    public Array<number> vertX
+    public Array<number> vertY
+
+    // storing edges from boost
+    public Array<integer> cell0
+    public Array<integer> category0
+    public Array<integer> cell1
+    public Array<integer> category1
+    public Array<integer> vertex0          // vertex where edge starts
+    public Array<integer> vertex1          // vertex were edge ends
+    public Array<integer> linear
+
+    action Generate(OutlineEdges edges)
+        scale = edges:scale
+
+        // reset arrays
+        vertX:Empty()
+        vertY:Empty()   
+        cell0:Empty() 
+        cell1:Empty() 
+        category0:Empty() 
+        category1:Empty() 
+        vertex0:Empty() 
+        vertex1:Empty() 
+        linear:Empty() 
+
+        if edges:x0:GetSize() = 0
+            return now
+        end
+
+        if boost
+            RunBoost(edges)
+        else
+            RunQuorum(edges)
+        end
+    end
+
+    action RunBoost(OutlineEdges edges)
+        // make directory for voroni operations
+        File folder
+        folder:SetPath(workPath)
+        if not folder:Exists()
+            folder:CreateDirectories()
+        end
+
+        // paths to input and output files
+        text PathIn = workPath + "/" + inFile
+        text PathOut = workPath + "/" + outFile
+
+        // write input file for boost
+        File inputF
+        inputF:SetPath(PathIn)
+        writer:OpenForWrite(inputF)
+
+        writer:WriteLine("" + edges:x0:GetSize())   // write number of edges
+
+        integer i = 0
+        repeat while i < edges:x0:GetSize()
+            // writes values a b c d s.t. segment is (a,b) to (c,d)
+            writer:WriteLine("" + edges:x0:Get(i) + " " + edges:y0:Get(i) + " " + edges:x1:Get(i) + " " + edges:y1:Get(i))
+            i = i + 1
+        end
+        writer:Close()
+
+        // call boost library for voronoi diagram
+        VoronoiNative boostVD
+        integer status = boostVD:Build(PathIn, PathOut)
+        if status not= 0
+            checker:Fail("boost library failed to generate voronoi diagram successfully")
+        end
+
+        // read output written by boost
+        ParseOutput(PathOut)
+    end
+
+    action ParseOutput(text path)
+        File outputF
+        outputF:SetPath(path)
+        text content = outputF:Read()
+
+        text lineFeed = ""
+        lineFeed = lineFeed:GetLineFeed()
+        text carriageReturn = ""
+        carriageReturn = carriageReturn:GetCarriageReturn()
+
+        // go through each line in output
+        Array<text> lines = content:Split(lineFeed)
+        integer expectedVertices = 0
+        integer expectedEdges = 0
+
+        integer i = 0
+        repeat while i < lines:GetSize()
+            // windows-specific : remove \r before reading
+            // make less fixed? depedent on var?
+            text line = lines:Get(i):Replace(carriageReturn, "")
+
+            if line:StartsWith("V ")
+                // set expected verticies    
+                expectedVertices = ParseInteger(line:GetSubtext(2))
+
+            elseif line:StartsWith("E ")
+                // set expected edges
+                expectedEdges = ParseInteger(line:GetSubtext(2))
+
+            elseif line:StartsWith("v ")
+                // read in a vertex
+                Array<text> vertex = line:Split(" ")
+                vertX:Add(cast(number, vertex:Get(1)) / scale)
+                vertY:Add(cast(number, vertex:Get(2)) / scale)
+
+            elseif line:StartsWith("e ")
+                // read in an edge
+                Array<text> edge = line:Split(" ")
+                
+                if edge:GetSize() not= 8
+                    checker:Fail("incorrect edge format from boost")
+                end
+
+                cell0:Add(ParseInteger(edge:Get(1)))
+                cell1:Add(ParseInteger(edge:Get(3)))
+                category0:Add(ParseInteger(edge:Get(2)))
+                category1:Add(ParseInteger(edge:Get(4)))
+                vertex0:Add(ParseInteger(edge:Get(5)))
+                vertex1:Add(ParseInteger(edge:Get(6)))
+                linear:Add(ParseInteger(edge:Get(7)))
+            end
+            i = i + 1
+        end
+
+        if expectedVertices not= vertX:GetSize()
+            checker:Fail("issue with reading in vertices")
+        end
+
+        if expectedEdges not= cell0:GetSize()
+            checker:Fail("issue with reading in edges")
+        end
+
+    end
+
+    action ParseNumber(text t) returns number
+        return cast(number, t)
+    end
+
+    action ParseInteger(text t) returns integer
+        return cast(integer, t)
+    end
+
+    action RunQuorum(OutlineEdges edges)
+        checker:Fail("Quorum implementation of voronoi diagram not finished. Try: SetBoost(true)")
+    end
+
+    // true to use boost, false to use quorum
+    action SetBoost(boolean useB)
+        boost = useB
+    end
+
+    action SetWorkPath(text path)
+        if path = ""
+            checker:Fail("invalid path, is empty")
+        end
+        workPath = path
+    end
+end

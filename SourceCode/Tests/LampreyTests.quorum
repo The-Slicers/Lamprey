@@ -34,14 +34,11 @@ class LampreyTests
 //        AdaptiveFillTests adaptFill
 //        failed = failed + adaptFill:Run()
 
-//        ShapeTests shapes
-//        failed = failed + shapes:Run()
+        OutlineEdgesTests outlineEdges
+        failed = failed + outlineEdges:Run()
 
-//        OutlineEdgesTests outlineEdges
-//        failed = failed + outlineEdges:Run()
-
-//        VoronoiDiagramTests voronoiDiagram
-//        failed = failed + voronoiDiagram:Run()
+        VoronoiDiagramTests voronoiDiagram
+        failed = failed + voronoiDiagram:Run()
 
 //        SkeletalTrapezoidationTests skeleton
 //        failed = failed + skeleton:Run()

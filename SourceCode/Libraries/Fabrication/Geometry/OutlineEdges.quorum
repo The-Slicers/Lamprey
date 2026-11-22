@@ -1,0 +1,191 @@
+package Libraries.Fabrication.Geometry
+
+use Libraries.Containers.Array
+use Libraries.Fabrication.ArgumentChecker
+
+class OutlineEdges
+    public number scale = 1000.0
+    number max_int = 500000000.0    // biggest a scaled coord can be
+                                    // 2^31-1 is actual limit, quorum limit is 5 * 10^8
+
+
+    ArgumentChecker checker
+
+    // scaled coordinates for start of a segment (edge)
+    public Array<integer> x0
+    public Array<integer> y0
+
+    // scaled coordinates for end of a segment
+    public Array<integer> x1
+    public Array<integer> y1
+
+    Array<integer> fromCont     // tracks which contour an edge is from (for reading boost output)
+    Array<integer> startsAt     // tracks vertex an edge starts at (for reading boost output)
+
+    // tracking purposefully dropped stuff
+    public integer contour_drops = 0
+    public integer false_vertices = 0
+
+    action BuildEdges(Array<Contour> outline)
+        // reset for every outline
+        x0:Empty()
+        y0:Empty()
+        x1:Empty()
+        y1:Empty()
+        fromCont:Empty()
+        startsAt:Empty()
+        contour_drops = 0
+        false_vertices = 0
+
+        // checking if scaled coords are out of range
+        integer i = 0
+        repeat while i < outline:GetSize()
+            Contour c = outline:Get(i)
+            integer size = c:GetSize()
+
+            if c:closed and size >= 3
+                integer j = 0
+                repeat while j < size
+                    number scaledX = c:xs:Get(j) * scale
+                    number scaledY = c:ys:Get(j) * scale
+
+                    if scaledX > max_int or scaledX < 0 - max_int
+                        checker:Fail("OutlineEdges: contour " + i + " vertex " + j + "scaled x out of range")
+                    end
+                    if scaledY > max_int or scaledY < 0 - max_int
+                        checker:Fail("OutlineEdges: contour " + i + " vertex " + j + "scaled y out of range")
+                    end
+                    j = j + 1
+                end    
+            end
+            i = i + 1
+        end
+
+        // build segments for contours that have 3+ points
+        integer k = 0
+        repeat while k < outline:GetSize()
+            Contour c = outline:Get(k)
+            if c:closed and c:GetSize() >= 3
+                GetEdges(c, k)
+            else
+                contour_drops = contour_drops + 1
+            end
+            k = k + 1
+        end
+    end
+
+    // scale number to integer for integer arithmetic
+    // round to nearest integer; 0.5 to avoid issues with truncation
+    public action ScaleUp(number val) returns integer
+        number bigger = val * scale
+
+        if bigger < 0
+            return cast(integer, bigger - 0.5)
+        end
+        return cast(integer, bigger + 0.5)
+    end
+
+    // revert integer to number
+    public action ScaleDown(integer val) returns number
+        return cast(number, val) / scale
+    end
+
+    // checks if the point is not a vertex (i.e. in/out edges are in same direction)
+    // using integer arithmetic for precision here
+    action NotVertex(Contour c, integer curr_index) returns boolean
+        integer size = c:GetSize()
+
+        // prev is 'end' of contour if curr is index 0 (start of loop)
+        integer prev_index = curr_index - 1
+        if prev_index < 0
+            prev_index = size - 1
+        end
+
+        // next is 'start' of contour if curr is index = n-1 (end of loop)
+        integer next_index = curr_index + 1
+        if next_index = size
+            next_index = 0
+        end
+
+        // scaling coordinates of 3 consecutive points (middle is being questioned)
+        integer prevX = ScaleUp(c:xs:Get(prev_index))
+        integer prevY = ScaleUp(c:ys:Get(prev_index))
+        integer currX = ScaleUp(c:xs:Get(curr_index))
+        integer currY = ScaleUp(c:ys:Get(curr_index))
+        integer nextX = ScaleUp(c:xs:Get(next_index))
+        integer nextY = ScaleUp(c:ys:Get(next_index))
+
+        // edge from prev to curr point; incoming vector
+        integer inX = currX - prevX
+        integer inY = currY - prevY
+
+        // edge from curr to next point; outgoing vector
+        integer outX = nextX - currX
+        integer outY = nextY - currY
+
+        integer cross_product = inX * outY - inY * outX     // 0 -> vectors are parallel
+        integer dot_product = inX * outX + inY * outY       // positive -> vectors go same direction
+
+        return cross_product = 0 and dot_product > 0
+    end
+
+    // go through each segment in a closed contour (loop)
+    action GetEdges(Contour c, integer index)
+        integer points = c:GetSize()
+        
+        integer curr = 0
+        repeat while curr < points
+            // find index of next point; is 0 if curr is last since contour is loop
+            integer next = curr + 1
+            if next = points
+                next = 0
+            end
+
+            // scaled coordinates of segment/edge i to j
+            integer currX = ScaleUp(c:xs:Get(curr))
+            integer currY = ScaleUp(c:ys:Get(curr))
+            integer nextX = ScaleUp(c:xs:Get(next))
+            integer nextY = ScaleUp(c:ys:Get(next))
+
+            // process segment curr and next are different points
+            if currX not= nextX or currY not= nextY
+                x0:Add(currX)
+                y0:Add(currY)
+                x1:Add(nextX)
+                y1:Add(nextY)
+                fromCont:Add(index)
+                startsAt:Add(curr)
+            end
+
+            if NotVertex(c, curr)
+                false_vertices = false_vertices + 1
+            end
+
+            curr = curr + 1
+        end
+    end
+
+//    action StartXArr() returns Array<integer>
+//        return x0
+//    end
+//
+//    action StartYArr() returns Array<integer>
+//        return y0
+//    end
+//
+//    action EndXArr() returns Array<integer>
+//        return x1
+//    end
+//
+//    action EndYArr() returns Array<integer>
+//        return y1
+//    end
+
+    action fromContour(integer index) returns integer
+        return fromCont:Get(index)
+    end
+    action EdgeStartsAt(integer index) returns integer
+        return startsAt:Get(index)
+    end
+
+end

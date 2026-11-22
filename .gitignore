@@ -9,3 +9,8 @@ assets/*.stl
 Outputs/*.gcode
 *.3mf
 Tests/Baselines/*.txt
+
+# voronoi diagram plugin outputs
+Plugins/native/
+Plugins/voronoi.dll
+Outputs/voronoi*
