@@ -2,6 +2,7 @@ package Libraries.Fabrication.Geometry
 
 use Libraries.Containers.Array
 use Libraries.Data.Containers.NumberBuffer
+use Libraries.Fabrication.ArgumentChecker
 
 /*
 The Contour class is a 2D path on one slice plane: a closed loop (an outline,
@@ -37,6 +38,7 @@ class Contour
     public boolean closed = false
     public NumberBuffer xs
     public NumberBuffer ys
+    public NumberBuffer ws      // a width per point; empty for uniform contours
 
     /* How many loops of the same plane surround this one (ContourGenerator). */
     public integer depth = 0
@@ -153,6 +155,12 @@ class Contour
         return ys:Get(ys:GetSize() - 1)
     end
 
+    // each point has its own width; not uniform width
+    // empty contours uniform by default
+    public action IsAdaptive returns boolean
+        return xs:GetSize() > 0 and xs:GetSize() = ws:GetSize()
+    end
+
     /*
     Adds a point at the end, unless it is exactly the same as the last one.
 
@@ -170,6 +178,18 @@ class Contour
         output path:GetSize()     // 2
     */
     action AddPoint(number x, number y)
+        ArgumentChecker argCheck
+
+//        // path must be uniform OR adaptive (all points must have a width)
+//        if ws:GetSize() > 0
+//            // output "Contour: path contains widths, cannot add point without a width"
+//            return now
+//        end
+
+        if IsAdaptive()
+            argCheck:Fail("Contour: path contains widths, cannot add point without a width")
+        end
+
         integer n = xs:GetSize()
         if n > 0
             if xs:Get(n - 1) = x and ys:Get(n - 1) = y
@@ -178,6 +198,31 @@ class Contour
         end
         xs:Add(x)
         ys:Add(y)
+    end
+
+    action AddPoint(number x, number y, number w)
+        ArgumentChecker argCheck
+
+        integer n = xs:GetSize()
+        if n > 0
+            // return error for uniform paths
+//            if ws:GetSize() = 0
+//                output "Contour: path is uniform, cannot add with width"
+//                return now
+//            end
+
+            if not IsAdaptive()
+                argCheck:Fail("Contour: path is uniform, cannot add with width")
+            end
+
+            if xs:Get(n - 1) = x and ys:Get(n - 1) = y
+                ws:Set(n-1, w)      // keep later width if point same
+                return now
+            end
+        end
+        xs:Add(x)
+        ys:Add(y)
+        ws:Add(w)
     end
 
     /*
@@ -201,7 +246,11 @@ class Contour
     action AppendAll(Contour other)
         integer i = 0
         repeat while i < other:GetSize()
-            AddPoint(other:xs:Get(i), other:ys:Get(i))
+            if other:IsAdaptive()
+                AddPoint(other:xs:Get(i), other:ys:Get(i), other:ws:Get(i))
+            else
+                AddPoint(other:xs:Get(i), other:ys:Get(i))
+            end
             i = i + 1
         end
     end
@@ -258,6 +307,9 @@ class Contour
         integer n = xs:GetSize()
         if n > 1
             if xs:Get(n - 1) = xs:Get(0) and ys:Get(n - 1) = ys:Get(0)
+                if IsAdaptive()
+                    ws:RemoveAt(n - 1)
+                end
                 xs:RemoveAt(n - 1)
                 ys:RemoveAt(n - 1)
             end
@@ -321,7 +373,7 @@ class Contour
         return area
     end
 
-    /*
+  /*
     Reverses the order of the points (and so the direction of a loop).
 
     Attribute: Example
@@ -337,9 +389,42 @@ class Contour
         square:Reverse()
         output square:SignedArea2() < 0     // true: now clockwise, like a hole
     */
+//    action Reverse
+//        integer i = 0
+//        integer j = xs:GetSize() - 1
+//        repeat while i < j
+//            number tx = xs:Get(i)
+//            number ty = ys:Get(i)
+//            xs:Set(i, xs:Get(j))
+//            xs:Set(j, tx)
+//            ys:Set(i, ys:Get(j))
+//            ys:Set(j, ty)
+//            i = i + 1
+//            j = j - 1
+//        end
+//    end
     action Reverse
+        integer size = xs:GetSize()
+
+        // consider widths when reversing: one width per point, moved with its point
+        if IsAdaptive()
+            NumberBuffer original
+
+            integer k = 0
+            repeat while k < size
+                original:Add(ws:Get(k))
+                k = k + 1
+            end
+
+            k = 0
+            repeat while k < size
+                ws:Set(k, original:Get(size - 1 - k))
+                k = k + 1
+            end
+        end
+
         integer i = 0
-        integer j = xs:GetSize() - 1
+        integer j = size - 1
         repeat while i < j
             number tx = xs:Get(i)
             number ty = ys:Get(i)

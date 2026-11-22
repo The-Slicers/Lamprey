@@ -1696,7 +1696,7 @@ class GcodeWriter
             return now
         end
 
-        number speed = utils:Max2(SpeedFor(path, layer) * LayerFactor(layer), minPrintSpeed)
+//        number speed = utils:Max2(SpeedFor(path, layer) * LayerFactor(layer), minPrintSpeed)
         writer:Write(";TYPE:")
         writer:WriteLine(roles:GetFeatureName(path:role))
         text feature = BambuFeature(path, layer)
@@ -1718,10 +1718,10 @@ class GcodeWriter
         Unretract()
         SetAccel(AccelFor(path, layer))
 
-        number e = lineWidth * layerHeight / filamentArea * flow * RoleFlow(path)
-        if layer = 0
-            e = e * firstLayerFlow
-        end
+//        number e = lineWidth * layerHeight / filamentArea * flow * RoleFlow(path)
+//        if layer = 0
+//            e = e * firstLayerFlow
+//        end
         integer segments = n - 1
         if path:closed
             segments = n
@@ -1747,9 +1747,14 @@ class GcodeWriter
                 len = len - seamGap
             end
             if len > 0.0001
+                number e = SegmentWidth(path, i) * layerHeight / filamentArea * flow * RoleFlow(path)
+                if layer = 0
+                    e = e * firstLayerFlow
+                end
                 number amount = len * e
+
                 // an overhanging stretch of wall goes slower
-                number segmentSpeed = speed
+                number segmentSpeed = SegmentPrintSpeed(path, layer, i, LayerFactor(layer), true)
                 number cap = SegmentCap(index, i)
                 if cap > 0 and cap < segmentSpeed
                     segmentSpeed = cap
@@ -1886,7 +1891,8 @@ class GcodeWriter
                     end
                     number mx = (path:xs:Get(s) + path:xs:Get(k)) / 2.0
                     number my = (path:ys:Get(s) + path:ys:Get(k)) / 2.0
-                    segmentCap:Add(OverhangCap(Unsupported(mx, my)))
+//                    segmentCap:Add(OverhangCap(Unsupported(mx, my)))
+                    segmentCap:Add(OverhangCap(Unsupported(mx, my, SegmentWidth(path, s))))
                     s = s + 1
                 end
             else
@@ -1969,10 +1975,11 @@ class GcodeWriter
     // of the line width (0 to 1), measured against the outlines loaded by
     // PrepareBelow. A line whose centre sits on the edge below is half
     // unsupported; one a half line width or more inside is fully supported.
-    private action Unsupported(number x, number y) returns number
+    // private action Unsupported(number x, number y) returns number
+    private action Unsupported(number x, number y, number width) returns number
         // only edges within a line width matter: further in is fully
         // supported, further out fully in the air
-        number reach = lineWidth
+        number reach = width
         number nearest2 = reach * reach
         boolean inside = false
         integer c = 0
@@ -2015,9 +2022,9 @@ class GcodeWriter
         number d = math:SquareRoot(nearest2)
         number share = 0.0
         if inside
-            share = (lineWidth / 2.0 - d) / lineWidth
+            share = (width / 2.0 - d) / width
         else
-            share = (lineWidth / 2.0 + d) / lineWidth
+            share = (width / 2.0 + d) / width
         end
         if share < 0
             return 0.0
@@ -2029,7 +2036,8 @@ class GcodeWriter
     end
 
     // Seconds the overhang slowdown adds to a path printed at `speed`.
-    private action OverhangSeconds(integer index, Contour path, number speed) returns number
+//    private action OverhangSeconds(integer index, Contour path, number speed) returns number
+    private action OverhangSeconds(integer index, Contour path, integer layer, number factor, boolean floored) returns number
         if index < 0 or index >= capStart:GetSize()
             return 0.0
         end
@@ -2049,24 +2057,82 @@ class GcodeWriter
                 k = 0
             end
             number cap = SegmentCap(index, s)
-            if cap > 0 and cap < speed
-                number dx = path:xs:Get(k) - path:xs:Get(s)
-                number dy = path:ys:Get(k) - path:ys:Get(s)
-                number len = math:SquareRoot(dx * dx + dy * dy)
-                extra = extra + len / cap - len / speed
+            if cap > 0
+                number speed = SegmentPrintSpeed(path, layer, s, factor, floored)
+                if cap < speed
+                    number dx = path:xs:Get(k) - path:xs:Get(s)
+                    number dy = path:ys:Get(k) - path:ys:Get(s)
+                    number len = math:SquareRoot(dx * dx + dy * dy)
+                    extra = extra + len / cap - len / speed
+                end
             end
             s = s + 1
         end
         return extra
     end
 
-    // The speed for a path, capped by the hotend's melt limit.
-    private action SpeedFor(Contour path, integer layer) returns number
+//    // The speed for a path, capped by the hotend's melt limit.
+//    private action SpeedFor(Contour path, integer layer) returns number
+//        number speed = BaseSpeed(path, layer)
+//        if maxFlow > 0
+//            speed = utils:Min2(speed, maxFlow / (lineWidth * layerHeight * flow * RoleFlow(path)))
+//        end
+//        return speed
+//    end
+
+    // calculates the width of a segment
+    // adative path: the mean of both end points
+    // uniform path: default line width
+    private action SegmentWidth(Contour path, integer s) returns number
+        if path:IsAdaptive()
+            integer k = (s + 1) mod path:GetSize()
+            return (path:ws:Get(s) + path:ws:Get(k)) / 2.0
+        end
+        return lineWidth
+    end
+
+    // speed for a segment
+    private action SegmentSpeed(Contour path, integer layer, integer s) returns number
         number speed = BaseSpeed(path, layer)
+        // capped by the hotend's melt limit at that segment's own width
         if maxFlow > 0
-            speed = utils:Min2(speed, maxFlow / (lineWidth * layerHeight * flow * RoleFlow(path)))
+            speed = utils:Min2(speed, maxFlow / (SegmentWidth(path, s) * layerHeight * flow * RoleFlow(path)))
         end
         return speed
+    end
+
+    // printing speed for a segment
+    // includes slow-down for cooling and uses minPrintSpeed when floored
+    private action SegmentPrintSpeed(Contour path, integer layer, integer s, number factor, boolean floored) returns number
+        number speed = SegmentSpeed(path, layer, s) * factor
+        if floored
+            speed = utils:Max2(speed, minPrintSpeed)
+        end
+        return speed
+    end
+
+    // adaptive path time segment by segment
+    private action PathSeconds(Contour path, integer layer, number factor, boolean floored) returns number
+        if not path:IsAdaptive()
+            return utils:PathLength(path) / SegmentPrintSpeed(path, layer, 0, factor, floored)
+        end
+
+        number time = 0.0
+        integer size = path:GetSize()
+        integer segments = size - 1
+        if path:closed
+            segments = size
+        end
+
+        integer s = 0
+        repeat while s < segments
+            integer k = (s + 1) mod size
+            number dx = path:xs:Get(k) - path:xs:Get(s)
+            number dy = path:ys:Get(k) - path:ys:Get(s)
+            time = time + math:SquareRoot(dx * dx + dy * dy) / SegmentPrintSpeed(path, layer, s, factor, floored)
+            s = s + 1
+        end
+        return time
     end
 
     // The name Bambu Studio's preview gives a path (see PathRole:GetBambuFeatureName):
@@ -2190,10 +2256,10 @@ class GcodeWriter
             Contour path2 = paths:Get(i)
             integer pl = path2:planeIndex
             if pl >= 0 and path2:GetSize() >= 2
-                number t = seconds:Get(pl) + utils:PathLength(path2) / SpeedFor(path2, pl)
+                number t = seconds:Get(pl) + PathSeconds(path2, pl, 1.0, false)
                 seconds:Set(pl, t)
-                overhangTime:Set(pl, overhangTime:Get(pl) + OverhangSeconds(i, path2, SpeedFor(path2, pl)))
-
+                overhangTime:Set(pl, overhangTime:Get(pl) + OverhangSeconds(i, path2, pl, 1.0, false))
+                
                 number extra = 0.0
                 if pl not= lastPlane
                     // layer change: always retracts, Z moves at 10 mm/s (F600)
@@ -2256,8 +2322,9 @@ class GcodeWriter
             Contour path3 = paths:Get(i)
             integer pl3 = path3:planeIndex
             if pl3 >= 0 and path3:GetSize() >= 2
-                number slowed = utils:Max2(SpeedFor(path3, pl3) * layerFactor:Get(pl3), minPrintSpeed)
-                actual:Set(pl3, actual:Get(pl3) + utils:PathLength(path3) / slowed + OverhangSeconds(i, path3, slowed))
+//                number slowed = utils:Max2(SpeedFor(path3, pl3) * layerFactor:Get(pl3), minPrintSpeed)
+//                actual:Set(pl3, actual:Get(pl3) + utils:PathLength(path3) / slowed + OverhangSeconds(i, path3, slowed))
+                actual:Set(pl3, actual:Get(pl3) + PathSeconds(path3, pl3, layerFactor:Get(pl3), true) + OverhangSeconds(i, path3, pl3, layerFactor:Get(pl3), true))
             end
             i = i + 1
         end

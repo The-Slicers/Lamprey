@@ -169,6 +169,32 @@ class GeometryUtilities
         end
     end
 
+    // find where point (px, py) is on a segment (x0, y0) to (x1, y1) in terms of a fraction in range [0,1]
+    // a + t * (b-a)
+    // need for adaptive path (arachne); footpoint for skeleton
+    action SegmentFraction(number px, number py, number x0, number y0, number x1, number y1) returns number
+        number directionX = x1 - x0
+        number directionY = y1 - y0
+
+        number distanceX = px - x0
+        number distanceY = py - y0
+
+        number length = directionX * directionX + directionY * directionY
+
+        if length <= 0
+            return 0.0
+        end
+
+        number fraction = (distanceX * directionX + distanceY * directionY) / length
+
+        if fraction < 0
+            return 0.0
+        elseif fraction > 1
+            return 1.0
+        end
+        return fraction
+    end
+
     /*
     The squared distance from point p to the segment from a to b.
 
@@ -188,22 +214,28 @@ class GeometryUtilities
         output util:SegmentDistance2(5, 3, 0, 0, 10, 0)       // 9: 3 mm from the segment
     */
     action SegmentDistance2(number px, number py, number ax, number ay, number bx, number by) returns number
-        number vx = bx - ax
-        number vy = by - ay
-        number wx = px - ax
-        number wy = py - ay
-        number len2 = vx * vx + vy * vy
-        number t = 0.0
-        if len2 > 0.0
-            t = (wx * vx + wy * vy) / len2
-            if t < 0
-                t = 0.0
-            elseif t > 1
-                t = 1.0
-            end
-        end
-        number dx = wx - t * vx
-        number dy = wy - t * vy
+//        number vx = bx - ax
+//        number vy = by - ay
+//        number wx = px - ax
+//        number wy = py - ay
+//        number len2 = vx * vx + vy * vy
+//        number t = 0.0
+//        if len2 > 0.0
+//            t = (wx * vx + wy * vy) / len2
+//            if t < 0
+//                t = 0.0
+//            elseif t > 1
+//                t = 1.0
+//            end
+//        end
+
+        number t = SegmentFraction(px, py, ax, ay, bx, by)
+        number dx = px - (ax + t * (bx - ax))
+        number dy = py - (ay + t * (by - ay))
+
+//        number dx = wx - t * vx
+//        number dy = wy - t * vy
+
         return dx * dx + dy * dy
     end
 
@@ -362,4 +394,77 @@ class GeometryUtilities
             i = i + 1
         end
     end
+
+    // check if (currX, currY) is at (vertX, vertY); material on the left (b/c counter clockwise loop)
+    // true if inside
+    // updated to match arachne implementation on corner output
+    action InCorner (number vertX, number vertY, number prevX, number prevY, number nextX, number nextY, number currX, number currY) returns boolean
+        // vector from vertex to previous point; incoming edge
+        number inX = prevX - vertX
+        number inY = prevY - vertY
+
+        // vector from vertex to next point; outgoing edge
+        number outX = nextX - vertX
+        number outY = nextY - vertY
+
+        // check for zero-length edges (no corner)
+        number inLength = math:SquareRoot(inX * inX + inY * inY)
+        number outLength = math:SquareRoot(outX * outX + outY * outY)
+
+        if inLength <= 0 or outLength <= 0
+            return false
+        end
+
+        // normalizing edges (same as arachne)
+        inX = inX / inLength * 10000
+        inY = inY / inLength * 10000
+        outX = outX / outLength * 10000
+        outY = outY / outLength * 10000
+
+        // vector from vertex to current point
+        number distX = currX - vertX
+        number distY = currY - vertY
+
+        // vector normal to dist vector (90deg counter-clockwise to dist vec)
+        number normX = 0 - distY
+        number normY = distX
+
+        // signed distances of edges to dist vec
+        number inSide = inX * normX + inY * normY
+        number outSide = outX * normX + outY * normY
+
+        // check side curr is on of in and out edges
+        // pos: edge is left of vec; neg: edge is right of vec
+        boolean inLeft = inSide > 0
+        boolean outLeft = outSide > 0
+
+        // edges are on opposite sides of vec -> vec passes between -> point is inside
+        if inLeft not= outLeft
+            return inLeft
+        end
+
+        // both edges are on same side (both left or both right) of vec
+        // check how far In and Out vec reach along dist vec
+        number inEdge = inX * distX + inY * distY
+        number outEdge = outX * distX + outY * distY
+        boolean outNear = outEdge < inEdge
+        return outNear = inLeft     // true if nearer edge has point
+    end
+
+//        // check if q is inside wedge (pos cross) or outside
+//        if CrossProduct(outX, outY, inX, inY) >= 0 
+//            // convex corner; being inside means left of both edges
+//            // if (q left of a) and (q left of b) -> q inside corner
+//            return CrossProduct(outX, outY, distX, distY) >= 0 and CrossProduct(distX, distY, inX, inY) >= 0
+//        end
+//        // q outside both edges
+//        // reflex edge; outside means outside both edges
+//        return not (CrossProduct(distX, distY, inX, inY) <= 0 and CrossProduct(outX, outY, distX, distY) <= 0)
+//    end
+
+    // calculates cross product of two vectors
+    // positive return value is counterclockwise; neg is clockwise
+    // action CrossProduct (number x0, number y0, number x1, number y1) returns number
+    //     return x0 * y1 - y0 * x1
+    // end
 end

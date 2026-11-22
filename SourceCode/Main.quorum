@@ -22,7 +22,7 @@ use Tests.LampreyTests
         profile:SetNumber("layerHeight", 0.16)
 */
 class Main
-    boolean runTests = false
+    boolean runTests = true
     text modelPath = "assets/werewolf_75mm.stl"
     text profilesPath = "Profiles/profiles.json"
     text profileName = "bambu-a1" // or "bambu-a1", "bambu-p2s", "ender3-v2", "ender3-v2-fine", "bambu-p2s-petg"

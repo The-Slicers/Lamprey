@@ -1,0 +1,122 @@
+package Tests
+
+use Libraries.Containers.Array
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Geometry.ContourSimplifier
+
+/*
+Tests that a width-carrying Contour keeps its widths aligned with its points
+through the operations that move or remove points.
+*/
+class ContourWidthTests
+    integer passed = 0
+    integer failed = 0
+
+    action Run returns integer
+        TestAddWidthStoresWidth()
+        TestRepeatedPointUpdatesWidth()
+        TestReverseKeepsWidthsAligned()
+        TestDropClosingDuplicateRemovesWidth()
+        TestCopyKeepsWidths()
+        TestSimplifyKeepsWidthsAligned()
+        TestUniformContourStaysUniform()
+
+        output "ContourWidth tests: passed " + passed + ", failed " + failed
+        return failed
+    end
+
+    action Check(boolean condition, text name)
+        if condition
+            passed = passed + 1
+        else
+            failed = failed + 1
+            output "FAIL: " + name
+        end
+    end
+
+    // a point added with a width stores that width beside it
+    action TestAddWidthStoresWidth()
+        Contour c
+        c:AddPoint(1.0, 2.0, 0.4)
+        Check(c:GetSize() = 1, "one added point gives a size of 1")
+        Check(c:ws:Get(0) = 0.4, "the width is stored with its point")
+        Check(c:IsAdaptive(), "a contour with widths is adaptive")
+    end
+
+    // a repeated last point updates its width instead of adding a point
+    action TestRepeatedPointUpdatesWidth()
+        Contour c
+        c:AddPoint(1.0, 2.0, 0.4)
+        c:AddPoint(1.0, 2.0, 0.9)
+        Check(c:GetSize() = 1, "a repeated point is not stored twice")
+        Check(c:ws:GetSize() = 1, "a repeated point leaves one width")
+        Check(c:ws:Get(0) = 0.9, "the repeated point keeps the later width")
+    end
+
+    // Reverse moves each width with its point
+    action TestReverseKeepsWidthsAligned()
+        Contour c
+        c:AddPoint(0.0, 0.0, 0.1)
+        c:AddPoint(10.0, 0.0, 0.2)
+        c:AddPoint(10.0, 10.0, 0.3)
+        c:AddPoint(0.0, 10.0, 0.4)
+        c:Reverse()
+        Check(c:xs:Get(0) = 0.0 and c:ys:Get(0) = 10.0, "reverse puts the last point first")
+        Check(c:ws:GetSize() = c:xs:GetSize(), "reverse keeps one width per point")
+        Check(c:ws:Get(0) = 0.4, "the width moved with its point after reverse")
+        Check(c:ws:Get(3) = 0.1, "the first width moved to the last point after reverse")
+    end
+
+    // DropClosingDuplicate removes the width of the point it drops
+    action TestDropClosingDuplicateRemovesWidth()
+        Contour c
+        c:AddPoint(0.0, 0.0, 0.1)
+        c:AddPoint(10.0, 0.0, 0.2)
+        c:AddPoint(10.0, 10.0, 0.3)
+        c:AddPoint(0.0, 0.0, 0.4)
+        c:DropClosingDuplicate()
+        Check(c:GetSize() = 3, "the closing duplicate is dropped")
+        Check(c:ws:GetSize() = 3, "the closing duplicate's width is dropped")
+        Check(c:IsAdaptive(), "widths still match points after the drop")
+    end
+
+    // Copy keeps every width, and the copy is independent of the original
+    action TestCopyKeepsWidths()
+        Contour c
+        c:AddPoint(0.0, 0.0, 0.1)
+        c:AddPoint(10.0, 0.0, 0.2)
+        c:AddPoint(10.0, 10.0, 0.3)
+        Contour d = c:Copy()
+        Check(d:ws:GetSize() = 3, "the copy has a width per point")
+        Check(d:ws:Get(1) = 0.2, "the copy keeps each width with its point")
+        d:Reverse()
+        Check(c:ws:Get(0) = 0.1, "reversing the copy leaves the original's widths alone")
+    end
+
+    // Simplify removes points and their widths together
+    action TestSimplifyKeepsWidthsAligned()
+        Contour c
+        c:AddPoint(0.0, 0.0, 0.1)
+        c:AddPoint(5.0, 0.001, 0.2)
+        c:AddPoint(10.0, 0.0, 0.3)
+        c:AddPoint(10.0, 10.0, 0.4)
+        ContourSimplifier simplifier
+        simplifier:Simplify(c, 0.01)
+        Check(c:GetSize() = 3, "the nearly straight point is removed")
+        Check(c:ws:GetSize() = c:GetSize(), "simplify keeps one width per remaining point")
+        Check(c:ws:Get(1) = 0.3, "the width of the kept point after the removed one is unchanged")
+    end
+
+    // A uniform contour stays uniform through the same operations
+    action TestUniformContourStaysUniform()
+        Contour c
+        c:AddPoint(0.0, 0.0)
+        c:AddPoint(5.0, 0.001)
+        c:AddPoint(10.0, 0.0)
+        c:AddPoint(10.0, 10.0)
+        ContourSimplifier simplifier
+        simplifier:Simplify(c, 0.01)
+        Check(not c:IsAdaptive(), "a uniform contour has no widths after simplifying")
+        Check(c:ws:GetSize() = 0, "a uniform contour gets no width buffer")
+    end
+end

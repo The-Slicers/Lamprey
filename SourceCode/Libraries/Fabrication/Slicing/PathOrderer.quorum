@@ -57,6 +57,8 @@ class PathOrderer
     number minLoopLength = 1.0
     number minLineLength = 0.4
     number minSegmentLength = 0.05
+    // adaptive walls corner test reaches this far
+    number adaptiveCornerReach = 2.0
     integer droppedPaths = 0
     Array<Contour> skirt
     Array<Contour> support
@@ -404,12 +406,19 @@ class PathOrderer
 
         integer w = maxWall
         repeat while w >= 0
+            // 3.6: closed walls are loops
+            // open walls are polylines printed from nearest end
             Array<Contour> loops
+            Array<Contour> lines
             i = 0
             repeat while i < layerWalls:GetSize()
                 Contour wall2 = layerWalls:Get(i)
                 if wallIsland:Get(i) = island and WallIndexOf(wall2) = w
-                    loops:Add(wall2)
+                    if wall2:closed
+                        loops:Add(wall2)
+                    else
+                        lines:Add(wall2)
+                    end
                 end
                 i = i + 1
             end
@@ -418,8 +427,10 @@ class PathOrderer
                 role = roles:OUTER_WALL
             end
             OrderLoops(loops, role, true)
+            OrderLines(lines, role)
             w = w - 1
         end
+
         OrderLines(OfIsland(layerSkin, skinIsland, island), roles:SKIN)
         OrderLines(OfIsland(layerInfill, infillIsland, island), roles:INFILL)
         OrderSweep(OfIsland(layerTop, topIsland, island), roles:TOP_SURFACE)
@@ -496,6 +507,10 @@ class PathOrderer
                 if cx * cx + cy * cy < minSegmentLength * minSegmentLength
                     path:xs:RemoveAt(path:xs:GetSize() - 1)
                     path:ys:RemoveAt(path:ys:GetSize() - 1)
+                    // check if has width(s) to remove
+                    if path:IsAdaptive()
+                        path:ws:RemoveAt(path:ws:GetSize() - 1)
+                    end
                 end
             end
 
@@ -520,18 +535,26 @@ class PathOrderer
     // Measured over a millimetre either side, the vertices just beside a
     // corner turn nearly as much as the corner itself, so only the sharpest
     // vertex of each corner counts: one that turns at least as much as every
-    // vertex within seamCornerReach of it along the loop.
+    // vertex within the reach of it along the loop. 
+
+    // Modified to include adaptive walls using adaptiveCornerReach
+    // uniform walls still uses seamCornerReach
     private action SeamVertex(Contour loop) returns integer
         integer nearest = loop:NearestVertexIndex(seamX, seamY)
         integer n = loop:GetSize()
         if not seamCorners or n < 3
             return nearest
         end
+        // reach of vertex for either toolpath
+        number reach = seamCornerReach
+        if loop:IsAdaptive()
+            reach = adaptiveCornerReach
+        end
         // the cosine of each vertex's turn (smaller = sharper)
         NumberBuffer turn
         integer t = 0
         repeat while t < n
-            turn:Add(TurnCosine(loop, t))
+            turn:Add(TurnCosine(loop, t, reach))
             t = t + 1
         end
         integer best = -1
@@ -539,7 +562,7 @@ class PathOrderer
         integer v = 0
         repeat while v < n
             number here = turn:Get(v)
-            if here <= seamCornerCos and SharpestNearby(loop, turn, v)
+            if here <= seamCornerCos and SharpestNearby(loop, turn, v, reach)
                 number dx = loop:xs:Get(v) - seamX
                 number dy = loop:ys:Get(v) - seamY
                 number d2 = dx * dx + dy * dy
@@ -558,7 +581,8 @@ class PathOrderer
 
     // Does vertex v turn at least as sharply as every vertex within
     // seamCornerReach of it along the loop, both ways?
-    private action SharpestNearby(Contour loop, NumberBuffer turn, integer v) returns boolean
+//    private action SharpestNearby(Contour loop, NumberBuffer turn, integer v) returns boolean
+    private action SharpestNearby(Contour loop, NumberBuffer turn, integer v, number reach) returns boolean
         integer n = loop:GetSize()
         number here = turn:Get(v)
         integer direction = -1
@@ -572,7 +596,7 @@ class PathOrderer
                 number dx = loop:xs:Get(other) - loop:xs:Get(at)
                 number dy = loop:ys:Get(other) - loop:ys:Get(at)
                 walked = walked + math:SquareRoot(dx * dx + dy * dy)
-                if walked > seamCornerReach
+                if walked > reach
                     going = false
                 else
                     if turn:Get(other) < here
@@ -593,7 +617,8 @@ class PathOrderer
     // along the loop, so a corner rounded off over a few short edges (as
     // tessellated models have) still counts, and the slight bend at each
     // vertex of a smooth curve doesn't.
-    private action TurnCosine(Contour loop, integer v) returns number
+//    private action TurnCosine(Contour loop, integer v) returns number
+    private action TurnCosine(Contour loop, integer v, number reach) returns number
         integer n = loop:GetSize()
         number vx = loop:xs:Get(v)
         number vy = loop:ys:Get(v)
@@ -601,7 +626,7 @@ class PathOrderer
         integer back = v
         number walked = 0.0
         integer steps = 0
-        repeat while walked < seamCornerReach and steps < n - 1
+        repeat while walked < reach and steps < n - 1
             integer before = (back + n - 1) mod n
             number px = loop:xs:Get(before) - loop:xs:Get(back)
             number py = loop:ys:Get(before) - loop:ys:Get(back)
@@ -612,7 +637,7 @@ class PathOrderer
         integer ahead = v
         walked = 0.0
         steps = 0
-        repeat while walked < seamCornerReach and steps < n - 1
+        repeat while walked < reach and steps < n - 1
             integer following = (ahead + 1) mod n
             number qx = loop:xs:Get(following) - loop:xs:Get(ahead)
             number qy = loop:ys:Get(following) - loop:ys:Get(ahead)
@@ -645,7 +670,8 @@ class PathOrderer
         integer i = 0
         repeat while i < n
             integer v = (start + i) mod n
-            AddSpaced(path, src:xs:Get(v), src:ys:Get(v), false)
+//            AddSpaced(path, src:xs:Get(v), src:ys:Get(v), false)
+        AddSpaced(path, src:xs:Get(v), src:ys:Get(v), WidthAt(src, v), src:IsAdaptive(), false)
             i = i + 1
         end
         path:closed = true
@@ -693,7 +719,8 @@ class PathOrderer
             if i = n - 1
                 isLast = true
             end
-            AddSpaced(path, src:xs:Get(v), src:ys:Get(v), isLast)
+//            AddSpaced(path, src:xs:Get(v), src:ys:Get(v), isLast)
+            AddSpaced(path, src:xs:Get(v), src:ys:Get(v), WidthAt(src, v), src:IsAdaptive(), isLast)
             i = i + 1
         end
         path:closed = false
@@ -756,7 +783,8 @@ class PathOrderer
                 if i = n - 1
                     isLast = true
                 end
-                AddSpaced(path, src:xs:Get(v), src:ys:Get(v), isLast)
+//                AddSpaced(path, src:xs:Get(v), src:ys:Get(v), isLast)
+                AddSpaced(path, src:xs:Get(v), src:ys:Get(v), WidthAt(src, v), src:IsAdaptive(), isLast)
                 i = i + 1
             end
             path:closed = false
@@ -846,21 +874,42 @@ class PathOrderer
         return tines:Get(index - islands:GetSize())
     end
 
-    private action AddSpaced(Contour path, number x, number y, boolean isLast)
+    // the width of point v from contour src
+    // 0 for uniform
+    private action WidthAt(Contour src, integer v) returns number
+        if src:IsAdaptive()
+            return src:ws:Get(v)
+        end
+        return 0.0
+    end
+
+    // puts/adds a point (with width if path is adaptive)
+    private action Put(Contour path, number x, number y, number w, boolean adaptive)
+        if adaptive
+            path:AddPoint(x, y, w)
+        else
+            path:AddPoint(x, y)
+        end
+    end
+
+    private action AddSpaced(Contour path, number x, number y, number w, boolean adaptive, boolean isLast)
         integer n = path:GetSize()
         if n = 0
-            path:AddPoint(x, y)
+            Put(path, x, y, w, adaptive)
             return now
         end
         number dx = x - path:TailX()
         number dy = y - path:TailY()
         if dx * dx + dy * dy >= minSegmentLength * minSegmentLength
-            path:AddPoint(x, y)
+            Put(path, x, y, w, adaptive)
         elseif isLast and n > 1
             path:xs:Set(n - 1, x)
             path:ys:Set(n - 1, y)
+            if adaptive
+                path:ws:Set(n - 1, w)
+            end
         elseif isLast
-            path:AddPoint(x, y)
+            Put(path, x, y, w, adaptive)
         end
     end
 

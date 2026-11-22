@@ -1,0 +1,130 @@
+package Tests
+
+use Libraries.Containers.Array
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Geometry.PathRole
+use Libraries.Fabrication.Slicing.PathOrderer
+
+/*
+Tests that PathOrderer keeps each point's width with it when it rebuilds a
+wall, and leaves uniform walls uniform.
+*/
+class PathOrdererWidthTests
+    integer passed = 0
+    integer failed = 0
+
+    action Run returns integer
+        TestAdaptiveWallKeepsWidths()
+        TestUniformWallStaysUniform()
+
+        output "PathOrderer width tests: passed " + passed + ", failed " + failed
+        return failed
+    end
+
+    action Check(boolean condition, text name)
+        if condition
+            passed = passed + 1
+        else
+            failed = failed + 1
+            output "FAIL: " + name
+        end
+    end
+
+    // a 10 mm square; adaptive gives each corner its own width
+    private action Square(boolean adaptive) returns Contour
+        Contour c
+        if adaptive
+            c:AddPoint(0.0, 0.0, 0.1)
+            c:AddPoint(10.0, 0.0, 0.2)
+            c:AddPoint(10.0, 10.0, 0.3)
+            c:AddPoint(0.0, 10.0, 0.4)
+        else
+            c:AddPoint(0.0, 0.0)
+            c:AddPoint(10.0, 0.0)
+            c:AddPoint(10.0, 10.0)
+            c:AddPoint(0.0, 10.0)
+        end
+        c:closed = true
+        c:planeIndex = 0
+        return c
+    end
+
+    // the width each corner was given in Square(true)
+    private action WidthFor(number x, number y) returns number
+        if x = 0.0 and y = 0.0
+            return 0.1
+        elseif x = 10.0 and y = 0.0
+            return 0.2
+        elseif x = 10.0 and y = 10.0
+            return 0.3
+        end
+        return 0.4
+    end
+
+    // the first outer wall in the ordered output, or an empty contour
+    private action FindOuterWall(Array<Contour> ordered) returns Contour
+        PathRole roles
+        Contour found
+        integer i = 0
+        repeat while i < ordered:GetSize()
+            Contour p = ordered:Get(i)
+            if p:role = roles:OUTER_WALL and found:GetSize() = 0
+                found = p
+            end
+            i = i + 1
+        end
+        return found
+    end
+
+    // an adaptive wall comes out of Order with one correct width per point
+    action TestAdaptiveWallKeepsWidths()
+        Array<Contour> islands
+        islands:Add(Square(false))
+
+        Array<Contour> walls
+        Contour wall = Square(true)
+        wall:wallIndex = 0
+        walls:Add(wall)
+
+        Array<Contour> none
+        PathOrderer orderer
+        Array<Contour> ordered = orderer:Order(islands, walls, none, none, 1)
+
+        Contour outer = FindOuterWall(ordered)
+        Check(outer:GetSize() > 0, "the adaptive wall is printed as an outer wall")
+        Check(outer:IsAdaptive(), "the printed wall still carries widths")
+        Check(outer:ws:GetSize() = outer:GetSize(), "the printed wall has one width per point")
+
+        boolean matches = true
+        integer j = 0
+        repeat while j < outer:GetSize()
+            number expected = WidthFor(outer:xs:Get(j), outer:ys:Get(j))
+            number difference = outer:ws:Get(j) - expected
+            if difference > 0.000001 or difference < -0.000001
+                matches = false
+            end
+            j = j + 1
+        end
+        Check(matches, "each printed point keeps the width it was given")
+    end
+
+    // a uniform wall stays uniform through Order
+    action TestUniformWallStaysUniform()
+        Array<Contour> islands
+        islands:Add(Square(false))
+
+        Array<Contour> walls
+        Contour wall = Square(false)
+        wall:wallIndex = 0
+        walls:Add(wall)
+
+        Array<Contour> none
+        PathOrderer orderer
+        Array<Contour> ordered = orderer:Order(islands, walls, none, none, 1)
+
+        Contour outer = FindOuterWall(ordered)
+        Check(outer:GetSize() > 0, "the uniform wall is printed as an outer wall")
+        Check(not outer:IsAdaptive(), "a uniform wall is not given widths")
+        Check(outer:ws:GetSize() = 0, "a uniform wall gets no width buffer")
+    end
+end

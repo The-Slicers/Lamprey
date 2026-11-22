@@ -75,16 +75,22 @@ class ContourSimplifier
 
         NumberBuffer newXs
         NumberBuffer newYs
+        NumberBuffer newWs
+        boolean adaptive = contour:IsAdaptive()
         i = 0
         repeat while i < n
             if keep:Get(i) = 1
                 newXs:Add(contour:xs:Get(i))
                 newYs:Add(contour:ys:Get(i))
+                if adaptive
+                    newWs:Add(contour:ws:Get(i))
+                end
             end
             i = i + 1
         end
         contour:xs = newXs
         contour:ys = newYs
+        contour:ws = newWs
     end
 
     /*
@@ -121,7 +127,11 @@ class ContourSimplifier
         integer i = 0
         repeat while i < n
             if keep:Get(i) = 1
-                out:AddPoint(loop:xs:Get(i), loop:ys:Get(i))
+                if loop:IsAdaptive()
+                    out:AddPoint(loop:xs:Get(i), loop:ys:Get(i), loop:ws:Get(i))
+                else
+                    out:AddPoint(loop:xs:Get(i), loop:ys:Get(i))
+                end
             end
             i = i + 1
         end
