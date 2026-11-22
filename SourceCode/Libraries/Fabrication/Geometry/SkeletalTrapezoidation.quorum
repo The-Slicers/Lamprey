@@ -1,0 +1,671 @@
+package Libraries.Fabrication.Geometry
+
+use Libraries.Containers.Array
+use Libraries.Containers.HashTable
+use Libraries.Compute.Math
+use Libraries.Fabrication.Geometry.GeometryUtilities
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Geometry.OutlineEdges
+use Libraries.Fabrication.Geometry.VoronoiDiagram
+
+class SkeletalTrapezoidation
+    Math math
+    GeometryUtilities util
+
+    // nodes
+    public Array<number> xs
+    public Array<number> ys
+    public Array<number> rad                // is distance to the outline (-1 by default, 0 if on the outline)
+    HashTable<text, integer> pointsHash
+
+    // edges (directed)
+    public Array<integer> cleanStart        // end nodes
+    public Array<integer> cleanEnd
+    public Array<integer> cleanOpposite     // twin
+    public Array<integer> cleanCell0
+    public Array<integer> cleanCell1
+    public Array<integer> cleanCategory0
+    public Array<integer> cleanCategory1
+    public Array<integer> cleanLinear       // if curved, is 0; if straight, is 1
+
+    // node supports (ribs)
+    public Array<integer> ribNode
+    public Array<integer> ribFoot           // nearest point of a cell beside it
+    public Array<integer> ribCell
+    public Array<integer> ribCategory
+    HashTable<text, integer> ribbed
+    OutlineEdges supportEdges               // ribs point at this outline
+    boolean hasSupports = false
+
+    public number scale = 1000000.0
+    public number splitLength = 0.2         // the longest a piece of a split curve can be
+    public number MaxDeviation = 0.01       // furthest piece can be from parabola
+    public number min_PLDist = 0.000001
+
+    // frame for bisector (point-to-point edge)
+    number originX_line = 0.0
+    number originY_line = 0.0
+    number axisX_line = 0.0
+    number axisY_line = 0.0
+    number dist_line = 0.0
+
+    // frame for parabola (point-to-segment edge)
+    number dist_par = 0.0
+    number axisX_par = 0.0
+    number axisY_par = 0.0
+    number originX_par = 0.0
+    number originY_par = 0.0
+    number offset_par = 0.0
+    number normalX_par = 0.0
+    number normalY_par = 0.0
+
+    // builds skeleton that the adaptive walls are placed onto
+    action Build(Array<Contour> contours, OutlineEdges edges, VoronoiDiagram voronoi)
+        // reset
+        rad:Empty()
+        cleanStart:Empty()
+        cleanEnd:Empty()
+        cleanOpposite:Empty()
+        cleanCell0:Empty()
+        cleanCell1:Empty()
+        cleanCategory0:Empty()
+        cleanCategory1:Empty()
+        cleanLinear:Empty()
+        ribNode:Empty()
+        ribFoot:Empty()
+        ribCell:Empty()
+        ribCategory:Empty()
+
+        HashTable<text, integer> points
+        pointsHash = points
+
+        HashTable<text, integer> ribs
+        ribbed = ribs
+        supportEdges = edges
+        hasSupports = true
+
+        // get nodes (boost's vertices), track if unique using hash table
+        xs = voronoi:vertX:CopyToArray()
+        ys = voronoi:vertY:CopyToArray()
+        integer p = 0
+        repeat while p < xs:GetSize()
+            rad:Add(-1.0)
+            text key = PointKey(xs:Get(p), ys:Get(p))
+            if not pointsHash:HasKey(key)
+                pointsHash:Add(key, p)
+            end
+            p = p + 1
+        end
+
+        // find voronoi edges inside the outline
+        integer i = 0
+        repeat while i < voronoi:vertex0:GetSize()
+            integer startP = voronoi:vertex0:Get(i)
+            integer endP = voronoi:vertex1:Get(i)
+            if startP >= 0 and endP >= 0
+
+                // find midpoint of edge
+                // (only finite edges can have midpoints)
+                number midX = (xs:Get(startP) + xs:Get(endP)) / 2.0
+                number midY = (ys:Get(startP) + ys:Get(endP)) / 2.0
+                boolean inside = false
+
+                // check if inside or outside shape (holes are outside)
+                integer c = 0
+                repeat while c < contours:GetSize()
+                    Contour loop = contours:Get(c)
+                    if loop:ContainsPoint(midX, midY)
+                        inside = not inside
+                    end
+                    c = c + 1
+                end
+
+                // split edges inside the outline if curved
+                if inside
+                    boolean split = false
+
+                    integer ce0 = voronoi:cell0:Get(i)
+                    integer ce1 = voronoi:cell1:Get(i)
+                    integer ca0 = voronoi:category0:Get(i)
+                    integer ca1 = voronoi:category1:Get(i)
+
+                    // segment endpoints indicated by 1 or 2 for boost
+                    // segments indicated by 8 or 9 for boost
+                    boolean point0 = (ca0 = 1) or (ca0 = 2)
+                    boolean point1 = (ca1 = 1) or (ca1 = 2)
+                    boolean seg0 = (ca0 = 8) or (ca0 = 9)
+                    boolean seg1 = (ca1 = 8) or (ca1 = 9)
+                    
+                    // is a point-to-segment (parabola or curved edge); make the frame
+                    if (point0 and seg1) or (point1 and seg0)
+                        integer pointCell = ce0
+                        integer pointCat = ca0
+                        integer segCell = ce1
+
+                        // switch point and segment
+                        if ca0 >= 8
+                            pointCell = ce1
+                            pointCat = ca1
+                            segCell = ce0
+                        end
+
+                        // point coordinates
+                        number px = edges:ScaleDown(edges:x0:Get(pointCell))
+                        number py = edges:ScaleDown(edges:y0:Get(pointCell))
+                        if pointCat = 2
+                            px = edges:ScaleDown(edges:x1:Get(pointCell))
+                            py = edges:ScaleDown(edges:y1:Get(pointCell))
+                        end
+
+                        // segment end point coordinates
+                        number sx0 = edges:ScaleDown(edges:x0:Get(segCell))
+                        number sy0 = edges:ScaleDown(edges:y0:Get(segCell))
+                        number sx1 = edges:ScaleDown(edges:x1:Get(segCell))
+                        number sy1 = edges:ScaleDown(edges:y1:Get(segCell))
+
+                        // save to frame
+                        originX_par = sx0
+                        originY_par = sy0
+                        dist_par = 0.0
+
+                        number segLength = math:SquareRoot((sx1 - sx0) * (sx1 - sx0) + (sy1 - sy0) * (sy1 - sy0))
+                        if segLength > 0.0
+                            axisX_par = (sx1 - sx0) / segLength
+                            axisY_par = (sy1 - sy0) / segLength
+
+                            // projecting point's foot onto the segment's line
+                            offset_par = (px - sx0) * axisX_par + (py - sy0) * axisY_par
+                            number fx = sx0 + axisX_par * offset_par
+                            number fy = sy0 + axisY_par * offset_par
+
+                            // calculating how far above segment is the point
+                            dist_par = math:SquareRoot((px - fx) * (px - fx) + (py - fy) * (py - fy))
+                            if dist_par > 0.0
+                                normalX_par = (px - fx) / dist_par
+                                normalY_par = (py - fy) / dist_par
+                            end
+                        end
+
+                        // point is NOT on the segment line (is a curve)
+                        if dist_par > min_PLDist
+                            SplitEdge(edges, startP, endP, true, ce0, ca0, ce1, ca1)
+                            split = true
+                        end
+
+                    // is a point-to-point (straight bisector); split to give its nodes ribs
+                    elseif point0 and point1
+                        // first point is segment start point
+                        number qx0 = edges:ScaleDown(edges:x0:Get(ce0))
+                        number qy0 = edges:ScaleDown(edges:y0:Get(ce0))
+                        // is segment end point
+                        if ca0 = 2
+                            qx0 = edges:ScaleDown(edges:x1:Get(ce0))
+                            qy0 = edges:ScaleDown(edges:y1:Get(ce0))
+                        end
+
+                        // get second point 
+                        number qx1 = edges:ScaleDown(edges:x0:Get(ce1))
+                        number qy1 = edges:ScaleDown(edges:y0:Get(ce1))
+                        if ca1 = 2
+                            qx1 = edges:ScaleDown(edges:x1:Get(ce1))
+                            qy1 = edges:ScaleDown(edges:y1:Get(ce1))
+                        end
+
+                        // find vector between points (its length is their distance)
+                        number qdx = qx1 - qx0
+                        number qdy = qy1 - qy0
+                        number spacing = math:SquareRoot(qdx * qdx + qdy * qdy)
+
+                        // spacing = 0 -> same point, no bisector
+                        // has bisector: setup bisector frame
+                        if spacing > min_PLDist
+                            // get midpoint (equal distance from both points so is on bisector)
+                            originX_line = (qx0 + qx1) / 2.0
+                            originY_line = (qy0 + qy1) / 2.0
+
+                            // rotating vector between points by 90 deg to get line perpendicular to line between them
+                            // i.e. getting the bisector direction
+                            axisX_line = (0.0 - qdy) / spacing
+                            axisY_line = qdx / spacing
+
+                            dist_line = spacing / 2.0
+
+                            SplitEdge(edges, startP, endP, false, ce0, ca0, ce1, ca1)
+                            split = true
+                        end
+                    end
+
+                    // is segment-to-segment
+                    // store as single straight edge, add ribs to both ends
+                    if not split
+                        AddEdge(startP, endP, -1, ce0, ca0, ce1, ca1, voronoi:linear:Get(i))
+                        CreateSupports(edges, startP, ce0, ca0)
+                        CreateSupports(edges, startP, ce1, ca1)
+                        CreateSupports(edges, endP, ce0, ca0)
+                        CreateSupports(edges, endP, ce1, ca1)
+                    end
+                end
+            end
+            i = i + 1
+        end
+
+        // calculate each node's radius
+        // radius is distance to nearest point of the outline (i.e. distance to its cells)
+        integer e = 0
+        repeat while e < cleanStart:GetSize()
+            integer a = cleanStart:Get(e)
+            integer b = cleanEnd:Get(e)
+            if rad:Get(a) < 0.0
+                rad:Set(a, PointToOutline(edges, xs:Get(a), ys:Get(a), cleanCell0:Get(e), cleanCategory0:Get(e)))
+            end
+            if rad:Get(b) < 0.0
+                rad:Set(b, PointToOutline(edges, xs:Get(b), ys:Get(b), cleanCell0:Get(e), cleanCategory0:Get(e)))
+            end
+            e = e + 1
+        end
+
+        // pair up same edges (they only differ in direction)
+        RepairTwins()
+    end
+
+    // point coordinate turned into key for hash
+    private action PointKey(number x, number y) returns text
+        return "" + util:FloorToInt(x * scale + 0.5) + "_" + util:FloorToInt(y * scale + 0.5)
+    end
+
+    // check if there is (x,y) point, return it if exists, make it if otherwise
+    private action FindPoint(number x, number y) returns integer
+        text key = PointKey(x, y)
+        if pointsHash:HasKey(key)
+            return pointsHash:GetValue(key)
+        end
+
+        xs:Add(x)
+        ys:Add(y)
+        rad:Add(-1.0)
+        integer index = xs:GetSize() - 1
+        pointsHash:Add(key, index)
+        return index
+    end
+
+    // check is edges i and j are same edge
+    public action AreTwins(integer i, integer j) returns boolean
+        if cleanCell0:Get(i) not= cleanCell1:Get(j) or cleanCell1:Get(i) not= cleanCell0:Get(j)
+            return false
+        end
+        if cleanCategory0:Get(i) not= cleanCategory1:Get(j) or cleanCategory1:Get(i) not= cleanCategory0:Get(j)
+            return false
+        end
+        return cleanStart:Get(i) = cleanEnd:Get(j) and cleanEnd:Get(i) = cleanStart:Get(j)
+    end
+
+    // node on voronoi edge are equadistant from cells on both sides and they are the nearest outline features (so distance to either is radius)
+    // calculates distance from point (x,y) to a cell (nearest place on outline)
+    // cell can be a segment's end points or the segment itself 
+    public action PointToOutline(OutlineEdges edges, number x, number y, integer segment, integer category) returns number
+        number x0 = edges:ScaleDown(edges:x0:Get(segment))
+        number y0 = edges:ScaleDown(edges:y0:Get(segment))
+        number x1 = edges:ScaleDown(edges:x1:Get(segment))
+        number y1 = edges:ScaleDown(edges:y1:Get(segment))
+
+        number d2 = 0.0
+        // is segment's starting end point
+        if category = 1
+            d2 = util:SegmentDistance2(x, y, x0, y0, x0, y0)
+
+        // is segment's ending end point
+        elseif category = 2
+            d2 = util:SegmentDistance2(x, y, x1, y1, x1, y1)
+
+        // is the segment itself
+        else
+            d2 = util:SegmentDistance2(x, y, x0, y0, x1, y1)
+        end
+        return math:SquareRoot(d2)
+    end
+
+    // add edge to skeleton
+    private action AddEdge(integer startP, integer endP, integer twin, integer cell0, integer cat0,
+                           integer cell1, integer cat1, integer linear)
+        cleanStart:Add(startP)
+        cleanEnd:Add(endP)
+        cleanOpposite:Add(twin)
+        cleanCell0:Add(cell0)
+        cleanCategory0:Add(cat0)
+        cleanCell1:Add(cell1)
+        cleanCategory1:Add(cat1)
+        cleanLinear:Add(linear)
+    end
+
+    // descretizes a curve or bisector into small pieces
+    // new nodes get ribs
+    private action SplitEdge(OutlineEdges edges, integer startP, integer endP, boolean isParabola,
+                             integer cell0, integer cat0, integer cell1, integer cat1)
+        // find both end node's x-position within the frame (projecting)
+        number param = dist_line
+        number xa = 0.0
+        number xb = 0.0
+        if isParabola
+            param = dist_par
+            xa = (xs:Get(startP) - originX_par) * axisX_par + (ys:Get(startP) - originY_par) * axisY_par - offset_par
+            xb = (xs:Get(endP) - originX_par) * axisX_par + (ys:Get(endP) - originY_par) * axisY_par - offset_par
+        else
+            xa = (xs:Get(startP) - originX_line) * axisX_line + (ys:Get(startP) - originY_line) * axisY_line
+            xb = (xs:Get(endP) - originX_line) * axisX_line + (ys:Get(endP) - originY_line) * axisY_line
+        end
+
+        // order ends
+        boolean isForward = xa <= xb
+
+        number lo = xa              // x vals
+        number hi = xb
+        integer lowNode = startP    // nodes for the x vals
+        integer highNode = endP
+
+        if not isForward
+            lo = xb
+            hi = xa
+            lowNode = endP
+            highNode = startP
+        end
+
+        // add nodes/cuts/breaks on the curve radius changes enough for edge to be significant
+        // radius change is significant at x = +/- d(sqrt(2)-1) (appendix A)
+        // is least significant at x= 0 (parabola's apex) because radius is smallest
+        number cut = param * (math:SquareRoot(2.0) - 1.0)
+        Array<number> breaks
+
+        // add edge's start
+        breaks:Add(lo)  
+
+        // breaks are between ends (neg to add in increasing order)
+        if -cut > lo and -cut < hi
+            breaks:Add(-cut)
+        end
+
+        // the apex of a parabola, x = 0
+        if isParabola and 0.0 > lo and 0.0 < hi
+            breaks:Add(0.0)
+        end
+
+        // mirrors the case before it
+        // is on the other side of the apex, so uses +cut
+        if cut > lo and cut < hi
+            breaks:Add(cut)
+        end
+
+        // add edge's end
+        breaks:Add(hi)
+
+        // continue breaking until each piece is short and close to curve
+        Array<number> frameX
+        frameX:Add(breaks:Get(0))
+        integer last = breaks:GetSize() - 1
+
+        // go through gap between breakpoints
+        // adds gap's ends (breakpoints) to frame
+        integer s = 0
+        repeat while s < last
+            // add x vals needed for inside the gap (in order)
+            Subdivide(isParabola, breaks:Get(s), breaks:Get(s + 1), frameX)
+            frameX:Add(breaks:Get(s + 1))
+            s = s + 1
+        end
+
+        // add nodes for each s, ribs for each s too
+        // i.e. turn each x val in frameX into a node and collect nodes using a chain
+        Array<integer> chain
+        integer nodeCount = frameX:GetSize()
+
+        integer k = 0                   // start at lowest node on an edge (an end)
+        repeat while k < nodeCount
+            integer node = lowNode
+            if k = nodeCount - 1        // highest node on edge (other end)
+                node = highNode
+
+            // create new points along curve
+            // do this by turning x vals into point coords
+            elseif k > 0
+
+                // for bisector, the frame's x-axis is the curve
+                number x = frameX:Get(k)
+                number px = originX_line + axisX_line * x
+                number py = originY_line + axisY_line * x
+
+                // for parabola, (px, py) is at the height
+                if isParabola
+                    // a voronoi edge (is equally far from point and segment)
+                    number h = (x * x + dist_par * dist_par) / (2.0 * dist_par)
+
+                    // start at origin (segment start end), go along the foot, go up from line by h to get coords
+                    px = originX_par + axisX_par * (offset_par + x) + normalX_par * h
+                    py = originY_par + axisY_par * (offset_par + x) + normalY_par * h
+                end
+
+                // returns coords as new node if doesn't already exist
+                node = FindPoint(px, py)
+            end
+
+            // add supports/ribs for new nodes
+            chain:Add(node)
+            CreateSupports(edges, node, cell0, cat0)
+            CreateSupports(edges, node, cell1, cat1)
+            k = k + 1
+        end
+
+        // turn every pair of neighboring nodes from the chain into a straight edge
+        integer linear = 0  // parabola
+        if not isParabola   // bisector
+            linear = 1
+        end
+
+        integer pc = 0
+        repeat while pc < chain:GetSize() - 1
+            integer pieceFrom = chain:Get(pc)
+            integer pieceTo = chain:Get(pc + 1)
+
+            if not isForward
+                pieceFrom = chain:Get(pc + 1)
+                pieceTo = chain:Get(pc)
+            end
+
+            // add edge if two positions don't round to same node
+            if pieceFrom not= pieceTo
+                AddEdge(pieceFrom, pieceTo, -1, cell0, cat0, cell1, cat1, linear)
+            end
+            pc = pc + 1
+        end
+    end
+
+    // recursively decides where to put extra nodes between two breakpoints on a curve
+    // needs straight pieces replacing the curve to be short enough to be close to the curve
+    // for long or too curved pieces, cuts in half until each work
+    private action Subdivide(boolean isParabola, number x1, number x2, Array<number> frameX)
+        // make sure is enough to split
+        number dx = x2 - x1
+        if dx < 0.000001
+            return now
+        end
+
+        number param = dist_line    // bisector d
+        if isParabola
+            param = dist_par        // parabola d
+        end
+
+        // finding straight line from curve at point x1 to curve at point x2 (i.e. a chord)
+        number y1 = 0.0
+        number y2 = 0.0
+        if isParabola
+            y1 = (x1 * x1 + param * param) / (2.0 * param)
+            y2 = (x2 * x2 + param * param) / (2.0 * param)
+        end
+        number dy = y2 - y1
+        number chord = math:SquareRoot(dx * dx + dy * dy)
+
+        // split the parabola at its point that it furthest from the chord
+        // when point is close enough, it all is
+        number xm = (x1 + x2) / 2.0
+        number xStar = (dy / dx) * param
+        if isParabola and xStar > x1 and xStar < x2
+            xm = xStar
+        end
+
+        // calculate distance between the curve and the chord
+        number error = 0.0  // perpendicular
+        if isParabola
+            number ym = (xm * xm + param * param) / (2.0 * param)
+            error = util:AbsNum((xm - x1) * dy - (ym - y1) * dx) / chord
+        end
+
+        // stop if pieces are at most 0.2mm and close enough to curve
+        if chord <= splitLength and error <= MaxDeviation
+            return now
+        end
+
+        // recurse by spliting at xm (add xm too)
+        Subdivide(isParabola, x1, xm, frameX)
+        frameX:Add(xm)
+        Subdivide(isParabola, xm, x2, frameX)
+    end
+
+    // adds ribs/supports for nodes
+    // ribs are lines from a node to its nearest point (foot) of a cell; can be end point of point cell or nearest point of a segment for segment cell
+    // none needed when node is on outline
+    // rib length = node's radius (dist to outline)
+    private action CreateSupports(OutlineEdges edges, integer node, integer segment, integer category)
+        // key + hash to make each rib only once
+        integer sideKey = category
+        if category = 9
+            sideKey = 8
+        end
+        text key = "" + node + "_" + segment + "_" + sideKey
+        if ribbed:HasKey(key)
+            return now
+        end
+        ribbed:Add(key, 1)
+
+        // (vx,vy) is the node's coords
+        number vx = xs:Get(node)
+        number vy = ys:Get(node)
+
+        // [(x0,y0), (x1,y1)] is the outline edge
+        number x0 = edges:ScaleDown(edges:x0:Get(segment))
+        number y0 = edges:ScaleDown(edges:y0:Get(segment))
+        number x1 = edges:ScaleDown(edges:x1:Get(segment))
+        number y1 = edges:ScaleDown(edges:y1:Get(segment))
+
+        // finding nearest point of a cell (foot)
+        number fx = x0          // foot is segment's start point (by default)
+        number fy = y0
+        if category = 2         // foot is segment's end point
+            fx = x1
+            fy = y1
+        elseif category >= 8    // foot is on segment, have to find nearest point on segment
+            number t = util:SegmentFraction(vx, vy, x0, y0, x1, y1)
+            fx = x0 + (x1 - x0) * t
+            fy = y0 + (y1 - y0) * t
+        end
+
+        // check if point is on the outline (don't add ribs, just return)
+        number gx = fx - vx
+        number gy = fy - vy
+        if gx * gx + gy * gy < 0.000000000001
+            return now
+        end
+
+        // store supports/ribs
+        integer foot = FindPoint(fx, fy)    // turn foot into skeleton node
+        rad:Set(foot, 0.0)                  // indicate foot is on outline
+
+        ribNode:Add(node)
+        ribFoot:Add(foot)
+        ribCell:Add(segment)
+        ribCategory:Add(category)
+    end
+
+    // splits edge (and its twin) into 2 pieces at a fraction of the edge (t) and adds node inbetween
+    // The new node's radius is interpolated, and it gets the edge's ribs (paper 3.4).
+    public action SplitAt(integer e, number t) returns integer
+        // since every edge exists twice, to split an edge, must find the edges twin and split it too
+        integer twin = cleanOpposite:Get(e)
+        integer a = cleanStart:Get(e)
+        integer b = cleanEnd:Get(e)
+
+        // calculate coordinates of new node using fraction t
+        // fraction t is fraction from a to b (i.e. 0.5 is halfway)
+        number px = xs:Get(a) + (xs:Get(b) - xs:Get(a)) * t
+        number py = ys:Get(a) + (ys:Get(b) - ys:Get(a)) * t
+
+        // turn coords into new node (or reuse prev one)
+        integer mid = FindPoint(px, py)
+
+        // setting new node's radius (interpolated same way was prev calc)
+        rad:Set(mid, rad:Get(a) + (rad:Get(b) - rad:Get(a)) * t)
+
+        // store current edge
+        integer c0 = cleanCell0:Get(e)
+        integer k0 = cleanCategory0:Get(e)
+        integer c1 = cleanCell1:Get(e)
+        integer k1 = cleanCategory1:Get(e)
+        integer linear = cleanLinear:Get(e)
+        integer firstNew = cleanStart:GetSize() // index of new edge
+
+        // edge WAS: [a, b]
+        // edge NOW: [a, mid] 
+        // edge twin WAS: [b, a]
+        // edge twin NOW: [b, mid]
+        cleanEnd:Set(e, mid)
+        cleanEnd:Set(twin, mid)
+        cleanOpposite:Set(e, firstNew + 1)
+        cleanOpposite:Set(twin, firstNew)
+
+        // making the new twins for edge and edge twin
+        // [mid, b] for twin
+        // [mid, a] for edge
+        AddEdge(mid, b, twin, c0, k0, c1, k1, linear)
+        AddEdge(mid, a, e, c1, k1, c0, k0, linear)
+
+        if hasSupports
+            CreateSupports(supportEdges, mid, c0, k0)
+            CreateSupports(supportEdges, mid, c1, k1)
+        end
+
+        // return new node
+        return mid
+    end
+
+    // finds the twin of each edge and pairs them up again
+    // stores twin's index is stored in cleanOpposite (no twin is indicated by storing -1)
+    public action RepairTwins()
+        // tracking every edge using its end points [a,b]
+        HashTable<text, integer> twins
+        integer j = 0
+        repeat while j < cleanStart:GetSize()
+            twins:Add("" + cleanStart:Get(j) + "_" + cleanEnd:Get(j), j)
+            j = j + 1
+        end
+
+        // lookup reverse of edge in same hash table [b,a] to find twins
+        j = 0
+        repeat while j < cleanStart:GetSize()
+            cleanOpposite:Set(j, -1)
+            text reverseKey = "" + cleanEnd:Get(j) + "_" + cleanStart:Get(j)
+            if twins:HasKey(reverseKey)
+                integer k = twins:GetValue(reverseKey)
+                if AreTwins(j, k)
+                    cleanOpposite:Set(j, k)
+                end
+            end
+            j = j + 1
+        end
+    end
+
+    // returns node at coordinates or -1 if it there isn't one there
+    public action NodeIndexAt(number x, number y) returns integer
+        text key = PointKey(x, y)
+        if pointsHash:HasKey(key)
+            return pointsHash:GetValue(key)
+        end
+        return -1
+    end
+end

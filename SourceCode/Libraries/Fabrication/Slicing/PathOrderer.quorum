@@ -505,10 +505,11 @@ class PathOrderer
                 number cx = path:TailX() - path:HeadX()
                 number cy = path:TailY() - path:HeadY()
                 if cx * cx + cy * cy < minSegmentLength * minSegmentLength
+                    // check before removing point
+                    boolean carries = path:IsAdaptive()
                     path:xs:RemoveAt(path:xs:GetSize() - 1)
                     path:ys:RemoveAt(path:ys:GetSize() - 1)
-                    // check if has width(s) to remove
-                    if path:IsAdaptive()
+                    if carries
                         path:ws:RemoveAt(path:ws:GetSize() - 1)
                     end
                 end

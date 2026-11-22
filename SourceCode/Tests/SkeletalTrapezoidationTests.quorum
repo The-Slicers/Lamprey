@@ -1,0 +1,645 @@
+package Tests
+
+use Libraries.Containers.Array
+use Libraries.Compute.Math
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Geometry.OutlineEdges
+use Libraries.Fabrication.Geometry.VoronoiDiagram
+use Libraries.Fabrication.Geometry.GeometryUtilities
+use Libraries.Fabrication.Geometry.SkeletalTrapezoidation
+
+class SkeletalTrapezoidationTests
+    Math math
+    GeometryUtilities util
+
+    integer passed = 0
+    integer failed = 0
+
+    action Run returns integer
+        TestVoronoiEdgesHaveTwins()
+        TestRibLengthMatchesRadius()
+        TestEveryTouchedNodeHasRadius()
+        TestUntouchedNodesAreHoleCornersAndCentre()
+        TestRadiiKnownValues()
+        TestLShapeParabolasAreMixed()
+        TestLShapePiecesAreShort()
+        TestParabolaNodesLieOnCurve()
+        TestBisectorPiecesAreStraight()
+        TestBisectorNodesAreEquidistant()
+        TestBisectorPiecesAreShort()
+        TestParabolaCutMatchesSignificanceAngle()
+        TestSplitAtOnRealSkeleton()
+        TestInteriorEndsHaveRibs()
+        TestEdgesLieInsideTheShape()
+
+        output "SkeletalTrapezoidation tests: passed " + passed + ", failed " + failed
+        return failed
+    end
+
+    action Check(boolean condition, text name)
+        if condition
+            passed = passed + 1
+        else
+            failed = failed + 1
+            output "FAIL: " + name
+        end
+    end
+
+    // ------------------------------------------------------------ fixtures
+
+    // Counter-clockwise square from (x0, y0) to (x1, y1), in millimetres.
+    private action Square(number x0, number y0, number x1, number y1) returns Contour
+        Contour c
+        c:AddPoint(x0, y0)
+        c:AddPoint(x1, y0)
+        c:AddPoint(x1, y1)
+        c:AddPoint(x0, y1)
+        c:closed = true
+        return c
+    end
+
+    // Clockwise square, as ContourGenerator orients a hole.
+    private action HoleSquare(number x0, number y0, number x1, number y1) returns Contour
+        Contour c
+        c:AddPoint(x0, y0)
+        c:AddPoint(x0, y1)
+        c:AddPoint(x1, y1)
+        c:AddPoint(x1, y0)
+        c:closed = true
+        return c
+    end
+
+    // The reference shape: outer 0..1 mm, hole 0.4..0.6 mm.
+    private action ReferenceContours returns Array<Contour>
+        Array<Contour> contours
+        contours:Add(Square(0, 0, 1, 1))
+        contours:Add(HoleSquare(0.4, 0.4, 0.6, 0.6))
+        return contours
+    end
+
+    // An L-shape: its reflex corner at (1, 1) gives parabolic edges.
+    private action LShapeContours returns Array<Contour>
+        Array<Contour> contours
+        Contour c
+        c:AddPoint(0, 0)
+        c:AddPoint(2, 0)
+        c:AddPoint(2, 1)
+        c:AddPoint(1, 1)
+        c:AddPoint(1, 2)
+        c:AddPoint(0, 2)
+        c:closed = true
+        contours:Add(c)
+        return contours
+    end
+
+    // Two 2 mm by 4 mm blocks joined by a 0.4 mm neck at y = 1.8 to 2.2. The neck's corners
+    // on each side are 0.4 mm apart across solid material, so their bisector y = 2 runs
+    // through the neck and produces point-to-point edges.
+    private action DumbbellContours returns Array<Contour>
+        Array<Contour> contours
+        Contour c
+        c:AddPoint(0, 0)
+        c:AddPoint(2, 0)
+        c:AddPoint(2, 1.8)
+        c:AddPoint(3, 1.8)
+        c:AddPoint(3, 0)
+        c:AddPoint(5, 0)
+        c:AddPoint(5, 4)
+        c:AddPoint(3, 4)
+        c:AddPoint(3, 2.2)
+        c:AddPoint(2, 2.2)
+        c:AddPoint(2, 4)
+        c:AddPoint(0, 4)
+        c:closed = true
+        contours:Add(c)
+        return contours
+    end
+
+    // Builds the skeletal trapezoidation of a set of contours into st.
+    private action BuildFor(SkeletalTrapezoidation st, Array<Contour> contours)
+        OutlineEdges edges
+        edges:BuildEdges(contours)
+
+        VoronoiDiagram diagram
+        diagram:SetWorkPath("Outputs/voronoi_test")
+        diagram:Generate(edges)
+
+        st:Build(contours, edges, diagram)
+    end
+
+    // ------------------------------------------------------------ helpers
+
+    // Index of the node at (x, y), or -1 if there is none.
+    private action FindNode(SkeletalTrapezoidation st, number x, number y) returns integer
+        integer v = 0
+        repeat while v < st:xs:GetSize()
+            if Near(st:xs:Get(v), x) and Near(st:ys:Get(v), y)
+                return v
+            end
+            v = v + 1
+        end
+        return -1
+    end
+
+    // True when some Voronoi edge or split piece starts or ends at node v.
+    private action Touched(SkeletalTrapezoidation st, integer v) returns boolean
+        integer e = 0
+        repeat while e < st:cleanStart:GetSize()
+            if st:cleanStart:Get(e) = v or st:cleanEnd:Get(e) = v
+                return true
+            end
+            e = e + 1
+        end
+        return false
+    end
+
+    // True when any edge or rib starts or ends at node v.
+    private action TouchedByAny(SkeletalTrapezoidation st, integer v) returns boolean
+        if Touched(st, v)
+            return true
+        end
+        integer r = 0
+        repeat while r < st:ribNode:GetSize()
+            if st:ribNode:Get(r) = v or st:ribFoot:Get(r) = v
+                return true
+            end
+            r = r + 1
+        end
+        return false
+    end
+
+    // True when the node at (x, y) exists and no edge touches it.
+    private action UntouchedAt(SkeletalTrapezoidation st, number x, number y) returns boolean
+        integer v = FindNode(st, x, y)
+        if v < 0
+            return false
+        end
+        return not Touched(st, v)
+    end
+
+    // True when the node at (x, y) exists and its radius is expected, to one micrometre.
+    private action RadiusIs(SkeletalTrapezoidation st, number x, number y, number expected) returns boolean
+        integer v = FindNode(st, x, y)
+        if v < 0
+            return false
+        end
+        return Near(st:rad:Get(v), expected)
+    end
+
+    private action Near(number a, number b) returns boolean
+        return a - b < 0.000001 and b - a < 0.000001
+    end
+
+    // True when (px, py) is equidistant, to within 0.01 mm, from the focus (fx, fy)
+    // and from the infinite line through (ax, ay)-(bx, by).
+    private action OnCurve(number px, number py, number fx, number fy,
+                           number ax, number ay, number bx, number by) returns boolean
+        number dx = bx - ax
+        number dy = by - ay
+        number len = math:SquareRoot(dx * dx + dy * dy)
+        number lineDist = util:AbsNum(dx * (py - ay) - dy * (px - ax)) / len
+        number focusDist = math:SquareRoot((px - fx) * (px - fx) + (py - fy) * (py - fy))
+        return util:AbsNum(focusDist - lineDist) <= 0.01
+    end
+
+    // The point a point cell stands for, in mm: category 1 is the segment's start, 2 its end.
+    private action SourceX(OutlineEdges edges, integer segment, integer category) returns number
+        if category = 2
+            return edges:ScaleDown(edges:x1:Get(segment))
+        end
+        return edges:ScaleDown(edges:x0:Get(segment))
+    end
+
+    private action SourceY(OutlineEdges edges, integer segment, integer category) returns number
+        if category = 2
+            return edges:ScaleDown(edges:y1:Get(segment))
+        end
+        return edges:ScaleDown(edges:y0:Get(segment))
+    end
+
+    // True when node v has a rib to the support given by cell and category. Both sides of a segment
+    // (categories 8 and 9) count as the same support.
+    private action HasRibTo(SkeletalTrapezoidation st, integer v, integer cell, integer category) returns boolean
+        integer wantKind = category
+        if category = 9
+            wantKind = 8
+        end
+        integer r = 0
+        repeat while r < st:ribNode:GetSize()
+            if st:ribNode:Get(r) = v and st:ribCell:Get(r) = cell
+                integer gotKind = st:ribCategory:Get(r)
+                if gotKind = 9
+                    gotKind = 8
+                end
+                if gotKind = wantKind
+                    return true
+                end
+            end
+            r = r + 1
+        end
+        return false
+    end
+
+    // ------------------------------------------------------------ reference square
+
+    // Every edge has a twin that points back to it.
+    action TestVoronoiEdgesHaveTwins()
+        SkeletalTrapezoidation st
+        BuildFor(st, ReferenceContours())
+
+        boolean allPaired = true
+        integer i = 0
+        repeat while i < st:cleanStart:GetSize()
+            integer j = st:cleanOpposite:Get(i)
+            if j < 0
+                allPaired = false
+            elseif st:cleanOpposite:Get(j) not= i
+                allPaired = false
+            elseif not st:AreTwins(i, j)
+                allPaired = false
+            end
+            i = i + 1
+        end
+        Check(allPaired, "every edge has a twin that points back")
+    end
+
+    // Every rib's length equals the radius of the node it leaves.
+    action TestRibLengthMatchesRadius()
+        SkeletalTrapezoidation st
+        BuildFor(st, ReferenceContours())
+
+        boolean allMatch = true
+        integer r = 0
+        repeat while r < st:ribNode:GetSize()
+            integer v = st:ribNode:Get(r)
+            integer f = st:ribFoot:Get(r)
+            number dx = st:xs:Get(f) - st:xs:Get(v)
+            number dy = st:ys:Get(f) - st:ys:Get(v)
+            if util:AbsNum(math:SquareRoot(dx * dx + dy * dy) - st:rad:Get(v)) > 0.0001
+                allMatch = false
+            end
+            r = r + 1
+        end
+        Check(st:ribNode:GetSize() > 0, "the reference shape has ribs")
+        Check(allMatch, "every rib's length equals the radius of the node it leaves")
+    end
+
+    // Every node that an edge or rib touches has a radius.
+    action TestEveryTouchedNodeHasRadius()
+        SkeletalTrapezoidation st
+        BuildFor(st, ReferenceContours())
+
+        boolean allSet = true
+        integer v = 0
+        repeat while v < st:xs:GetSize()
+            if TouchedByAny(st, v) and st:rad:Get(v) < 0.0
+                allSet = false
+            end
+            v = v + 1
+        end
+        Check(allSet, "every node touched by an edge or rib has a radius")
+    end
+
+    // The only nodes no edge touches are the hole corners and the hole centre.
+    action TestUntouchedNodesAreHoleCornersAndCentre()
+        SkeletalTrapezoidation st
+        BuildFor(st, ReferenceContours())
+
+        Check(UntouchedAt(st, 0.4, 0.4), "hole corner (0.4, 0.4) is untouched")
+        Check(UntouchedAt(st, 0.4, 0.6), "hole corner (0.4, 0.6) is untouched")
+        Check(UntouchedAt(st, 0.6, 0.4), "hole corner (0.6, 0.4) is untouched")
+        Check(UntouchedAt(st, 0.6, 0.6), "hole corner (0.6, 0.6) is untouched")
+        Check(UntouchedAt(st, 0.5, 0.5), "hole centre (0.5, 0.5) is untouched")
+    end
+
+    // Radii of interior nodes match values worked out by hand.
+    action TestRadiiKnownValues()
+        SkeletalTrapezoidation st
+        BuildFor(st, ReferenceContours())
+
+        Check(RadiusIs(st, 0.0, 0.0, 0.0), "outer corner has radius 0")
+        Check(RadiusIs(st, 0.2, 0.4, 0.2), "(0.2, 0.4) has radius 0.2")
+        Check(RadiusIs(st, 0.234314575, 0.234314575, 0.234314575), "diagonal node has radius 0.2343")
+    end
+
+    // Every interior end of an edge (radius above 0) has a rib to the edge's side (cell0), so toolpath
+    // extraction finds a leg for each trapezoid. An end on the outline (radius 0) is its own support.
+    action TestInteriorEndsHaveRibs()
+        SkeletalTrapezoidation st
+        BuildFor(st, ReferenceContours())
+
+        boolean ok = true
+        integer e = 0
+        repeat while e < st:cleanStart:GetSize()
+            integer endpoint = 0
+            repeat while endpoint < 2
+                integer v = st:cleanStart:Get(e)
+                if endpoint = 1
+                    v = st:cleanEnd:Get(e)
+                end
+                if st:rad:Get(v) > 0.0
+                    if not HasRibTo(st, v, st:cleanCell0:Get(e), st:cleanCategory0:Get(e))
+                        ok = false
+                    end
+                end
+                endpoint = endpoint + 1
+            end
+            e = e + 1
+        end
+        Check(ok, "every interior end of an edge has a rib to its side; outline ends need none")
+    end
+
+    // ------------------------------------------------------------ L-shape (parabolas)
+
+    // Every parabolic piece (linear = 0) has one point side and one segment side.
+    action TestLShapeParabolasAreMixed()
+        SkeletalTrapezoidation st
+        BuildFor(st, LShapeContours())
+
+        boolean allMixed = true
+        integer curved = 0
+        integer e = 0
+        repeat while e < st:cleanStart:GetSize()
+            if st:cleanLinear:Get(e) = 0
+                curved = curved + 1
+                integer c0 = st:cleanCategory0:Get(e)
+                integer c1 = st:cleanCategory1:Get(e)
+                boolean point0 = c0 = 1 or c0 = 2
+                boolean point1 = c1 = 1 or c1 = 2
+                if point0 = point1
+                    allMixed = false
+                end
+            end
+            e = e + 1
+        end
+        Check(curved > 0, "the L-shape has parabolic pieces")
+        Check(allMixed, "every parabolic piece is point to segment")
+    end
+
+    // Every parabolic piece is no longer than splitLength.
+    action TestLShapePiecesAreShort()
+        SkeletalTrapezoidation st
+        BuildFor(st, LShapeContours())
+
+        boolean allShort = true
+        integer e = 0
+        repeat while e < st:cleanStart:GetSize()
+            if st:cleanLinear:Get(e) = 0
+                integer a = st:cleanStart:Get(e)
+                integer b = st:cleanEnd:Get(e)
+                number dx = st:xs:Get(b) - st:xs:Get(a)
+                number dy = st:ys:Get(b) - st:ys:Get(a)
+                if math:SquareRoot(dx * dx + dy * dy) > st:splitLength + 0.000001
+                    allShort = false
+                end
+            end
+            e = e + 1
+        end
+        Check(allShort, "every parabolic piece is at most splitLength long")
+    end
+
+    // Every node on a parabolic piece is equidistant, to within 0.01 mm, from its focus and
+    // its line. The focus is the endpoint of the point cell; the line is the segment cell's.
+    action TestParabolaNodesLieOnCurve()
+        SkeletalTrapezoidation st
+        Array<Contour> contours = LShapeContours()
+        BuildFor(st, contours)
+
+        OutlineEdges edges
+        edges:BuildEdges(contours)
+
+        boolean allOnCurve = true
+        boolean anyChecked = false
+        integer e = 0
+        repeat while e < st:cleanStart:GetSize()
+            if st:cleanLinear:Get(e) = 0
+                anyChecked = true
+                integer c0 = st:cleanCategory0:Get(e)
+                integer c1 = st:cleanCategory1:Get(e)
+                integer pointCell = st:cleanCell0:Get(e)
+                integer pointCat = c0
+                integer segment = st:cleanCell1:Get(e)
+                if c0 >= 8
+                    pointCell = st:cleanCell1:Get(e)
+                    pointCat = c1
+                    segment = st:cleanCell0:Get(e)
+                end
+
+                number fx = SourceX(edges, pointCell, pointCat)
+                number fy = SourceY(edges, pointCell, pointCat)
+                number ax = edges:ScaleDown(edges:x0:Get(segment))
+                number ay = edges:ScaleDown(edges:y0:Get(segment))
+                number bx = edges:ScaleDown(edges:x1:Get(segment))
+                number by = edges:ScaleDown(edges:y1:Get(segment))
+
+                integer ends = 0
+                repeat while ends < 2
+                    integer v = st:cleanStart:Get(e)
+                    if ends = 1
+                        v = st:cleanEnd:Get(e)
+                    end
+                    if not OnCurve(st:xs:Get(v), st:ys:Get(v), fx, fy, ax, ay, bx, by)
+                        allOnCurve = false
+                    end
+                    ends = ends + 1
+                end
+            end
+            e = e + 1
+        end
+
+        Check(anyChecked, "the L-shape has parabolic pieces to check")
+        Check(allOnCurve, "every parabolic node is equidistant from its focus and its line")
+    end
+
+    // ------------------------------------------------------------ dumbbell neck (bisectors)
+
+    // Every point-to-point piece is straight (linear = 1). The dumbbell neck produces them.
+    action TestBisectorPiecesAreStraight()
+        SkeletalTrapezoidation st
+        BuildFor(st, DumbbellContours())
+
+        boolean anyBisector = false
+        boolean allStraight = true
+        integer e = 0
+        repeat while e < st:cleanStart:GetSize()
+            integer c0 = st:cleanCategory0:Get(e)
+            integer c1 = st:cleanCategory1:Get(e)
+            if (c0 = 1 or c0 = 2) and (c1 = 1 or c1 = 2)
+                anyBisector = true
+                if st:cleanLinear:Get(e) not= 1
+                    allStraight = false
+                end
+            end
+            e = e + 1
+        end
+        Check(anyBisector, "the dumbbell neck produces point-to-point edges")
+        Check(allStraight, "every point-to-point piece is straight (linear = 1)")
+    end
+
+    // Every node on a point-to-point piece is equidistant from the two points it bisects.
+    action TestBisectorNodesAreEquidistant()
+        SkeletalTrapezoidation st
+        Array<Contour> contours = DumbbellContours()
+        BuildFor(st, contours)
+
+        OutlineEdges edges
+        edges:BuildEdges(contours)
+
+        boolean allEquidistant = true
+        integer e = 0
+        repeat while e < st:cleanStart:GetSize()
+            integer c0 = st:cleanCategory0:Get(e)
+            integer c1 = st:cleanCategory1:Get(e)
+            if (c0 = 1 or c0 = 2) and (c1 = 1 or c1 = 2)
+                number pax = SourceX(edges, st:cleanCell0:Get(e), c0)
+                number pay = SourceY(edges, st:cleanCell0:Get(e), c0)
+                number pbx = SourceX(edges, st:cleanCell1:Get(e), c1)
+                number pby = SourceY(edges, st:cleanCell1:Get(e), c1)
+
+                integer ends = 0
+                repeat while ends < 2
+                    integer v = st:cleanStart:Get(e)
+                    if ends = 1
+                        v = st:cleanEnd:Get(e)
+                    end
+                    number nx = st:xs:Get(v)
+                    number ny = st:ys:Get(v)
+                    number da = math:SquareRoot((nx - pax) * (nx - pax) + (ny - pay) * (ny - pay))
+                    number db = math:SquareRoot((nx - pbx) * (nx - pbx) + (ny - pby) * (ny - pby))
+                    if util:AbsNum(da - db) > 0.01
+                        allEquidistant = false
+                    end
+                    ends = ends + 1
+                end
+            end
+            e = e + 1
+        end
+        Check(allEquidistant, "every bisector node is equidistant from its two points")
+    end
+
+    // Every point-to-point piece is no longer than splitLength.
+    action TestBisectorPiecesAreShort()
+        SkeletalTrapezoidation st
+        BuildFor(st, DumbbellContours())
+
+        boolean allShort = true
+        integer e = 0
+        repeat while e < st:cleanStart:GetSize()
+            integer c0 = st:cleanCategory0:Get(e)
+            integer c1 = st:cleanCategory1:Get(e)
+            if (c0 = 1 or c0 = 2) and (c1 = 1 or c1 = 2)
+                integer a = st:cleanStart:Get(e)
+                integer b = st:cleanEnd:Get(e)
+                number dx = st:xs:Get(b) - st:xs:Get(a)
+                number dy = st:ys:Get(b) - st:ys:Get(a)
+                if math:SquareRoot(dx * dx + dy * dy) > st:splitLength + 0.000001
+                    allShort = false
+                end
+            end
+            e = e + 1
+        end
+        Check(allShort, "every point-to-point piece is at most splitLength long")
+    end
+
+    // ------------------------------------------------------------ significance cut and splitting
+
+    // The parabola cut used by SplitEdge, x = d * (sqrt(2) - 1), is the point where the arc-length
+    // slope of the radius equals cos(alphaMax / 2) with alphaMax = 135 degrees (paper Appendix A).
+    // Along a parabola dR/dx = x / d, and ds/dx = sqrt(1 + (dR/dx)^2), so the slope along the arc is
+    // (x / d) / sqrt(1 + (x / d)^2). cos(67.5 degrees) = sqrt(2 - sqrt(2)) / 2.
+    action TestParabolaCutMatchesSignificanceAngle()
+        number d = 1.0
+        number ratio = (math:SquareRoot(2.0) - 1.0)           // the cut, divided by d
+        number arcSlope = ratio / math:SquareRoot(1.0 + ratio * ratio)
+        number cosHalfAlpha = math:SquareRoot(2.0 - math:SquareRoot(2.0)) / 2.0
+
+        Check(util:AbsNum(arcSlope - cosHalfAlpha) < 0.000001,
+              "the parabola cut sits where the arc slope equals cos(alphaMax / 2)")
+    end
+
+    // An interior straight edge between two line-sided segments, with both ends above zero radius
+    // and a twin. Along such an edge the distance to each line is linear, so the radius is too.
+    private action FindSplittableEdge(SkeletalTrapezoidation st) returns integer
+        integer e = 0
+        repeat while e < st:cleanStart:GetSize()
+            integer twin = st:cleanOpposite:Get(e)
+            integer c0 = st:cleanCategory0:Get(e)
+            integer c1 = st:cleanCategory1:Get(e)
+            boolean lineSides = (c0 = 8 or c0 = 9) and (c1 = 8 or c1 = 9)
+            if twin >= 0 and lineSides and st:cleanLinear:Get(e) = 1
+                if st:rad:Get(st:cleanStart:Get(e)) > 0.0 and st:rad:Get(st:cleanEnd:Get(e)) > 0.0
+                    return e
+                end
+            end
+            e = e + 1
+        end
+        return -1
+    end
+
+    // Splitting an edge at its midpoint adds a node at the midpoint with the average radius, adds
+    // two pieces, and leaves every edge with a twin that points back after RepairTwins.
+    action TestSplitAtOnRealSkeleton()
+        SkeletalTrapezoidation st
+        BuildFor(st, ReferenceContours())
+
+        integer e = FindSplittableEdge(st)
+        Check(e >= 0, "the reference shape has a straight interior edge between line sides")
+        if e >= 0
+            integer a = st:cleanStart:Get(e)
+            integer b = st:cleanEnd:Get(e)
+            number expectedX = (st:xs:Get(a) + st:xs:Get(b)) / 2.0
+            number expectedY = (st:ys:Get(a) + st:ys:Get(b)) / 2.0
+            number expectedRadius = (st:rad:Get(a) + st:rad:Get(b)) / 2.0
+            integer edgesBefore = st:cleanStart:GetSize()
+
+            integer mid = st:SplitAt(e, 0.5)
+
+            Check(mid >= 0 and mid not= a and mid not= b, "the split creates a node distinct from its ends")
+            Check(Near(st:xs:Get(mid), expectedX) and Near(st:ys:Get(mid), expectedY),
+                  "the new node sits at the midpoint of the edge")
+            Check(Near(st:rad:Get(mid), expectedRadius), "the new node's radius is the average of the ends")
+            Check(st:cleanStart:GetSize() = edgesBefore + 2, "a split adds two pieces")
+
+            st:RepairTwins()
+            boolean allPaired = true
+            integer i = 0
+            repeat while i < st:cleanStart:GetSize()
+                integer j = st:cleanOpposite:Get(i)
+                if j < 0
+                    allPaired = false
+                elseif st:cleanOpposite:Get(j) not= i
+                    allPaired = false
+                elseif not st:AreTwins(i, j)
+                    allPaired = false
+                end
+                i = i + 1
+            end
+            Check(allPaired, "after RepairTwins every edge has a twin that points back")
+        end
+    end
+
+    // Build keeps only the Voronoi edges inside the outline: on the reference shape, no edge's midpoint
+    // lies inside the hole (0.4..0.6) or outside the square (0..1). Edges in the hole would get beads
+    // printed in empty space.
+    action TestEdgesLieInsideTheShape()
+        SkeletalTrapezoidation st
+        BuildFor(st, ReferenceContours())
+
+        boolean ok = true
+        integer e = 0
+        repeat while e < st:cleanStart:GetSize()
+            integer a = st:cleanStart:Get(e)
+            integer b = st:cleanEnd:Get(e)
+            number mx = (st:xs:Get(a) + st:xs:Get(b)) / 2.0
+            number my = (st:ys:Get(a) + st:ys:Get(b)) / 2.0
+            boolean inHole = mx > 0.4 and mx < 0.6 and my > 0.4 and my < 0.6
+            boolean outside = mx < 0.0 or mx > 1.0 or my < 0.0 or my > 1.0
+            if inHole or outside
+                ok = false
+            end
+            e = e + 1
+        end
+        Check(st:cleanStart:GetSize() > 0, "the reference shape keeps some edges")
+        Check(ok, "no kept edge lies in the hole or outside the shape")
+    end
+end

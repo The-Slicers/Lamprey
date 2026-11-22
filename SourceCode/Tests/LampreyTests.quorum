@@ -40,8 +40,8 @@ class LampreyTests
         VoronoiDiagramTests voronoiDiagram
         failed = failed + voronoiDiagram:Run()
 
-//        SkeletalTrapezoidationTests skeleton
-//        failed = failed + skeleton:Run()
+        SkeletalTrapezoidationTests skeleton
+        failed = failed + skeleton:Run()
 
 //        CenterMarkingTests centre
 //        failed = failed + centre:Run()
