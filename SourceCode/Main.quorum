@@ -22,10 +22,10 @@ use Tests.LampreyTests
         profile:SetNumber("layerHeight", 0.16)
 */
 class Main
-    boolean runTests = true
-    text modelPath = "assets/werewolf_75mm.stl"
+    boolean runTests = false
+    text modelPath = "assets/3dbenchy.stl"
     text profilesPath = "Profiles/profiles.json"
-    text profileName = "bambu-a1" // or "bambu-a1", "bambu-p2s", "ender3-v2", "ender3-v2-fine", "bambu-p2s-petg"
+    text profileName = "bambu-p2s" // or "bambu-a1", "bambu-p2s", "ender3-v2", "ender3-v2-fine", "bambu-p2s-petg"
     text outputFolder = "Outputs"
 
     action Main
@@ -46,6 +46,7 @@ class Main
             Profile profile = profiles:Require(profileName)
             profile:Set("supportsEnabled", "true")
             profile:Set("adhesionType", "none")
+            profile:Set("adaptive", "true")
     
             text gcodePath = outputFolder + "/" + BaseName(modelPath) + ".gcode"
             SliceJob job

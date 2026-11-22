@@ -65,6 +65,7 @@ class ProfileSchema
         AddBoolean("paths", "joinSkin", "false", "Chain solid fill on every layer into continuous zigzags (fewer starts and stops)")
         AddBoolean("paths", "joinInfill", "false", "Chain sparse infill into continuous zigzags, linked along the inner wall (fewer starts and stops)")
         AddBoolean("paths", "gapFill", "true", "Fill bands inside the innermost wall too narrow for fill lines (thin walls) with solid lines")
+        AddBoolean("paths", "adaptive", "false", "Build dense contours (walls) with the adaptive/variable-width toolpath, not uniform offsets")
 
         // ---- top surfaces and ironing ----
         AddInteger("top", "topSurfaceLayers", "0", 0, 100, "Layers under each top surface printed as top surface, with the settings below; 0 = off (ordinary skin)")

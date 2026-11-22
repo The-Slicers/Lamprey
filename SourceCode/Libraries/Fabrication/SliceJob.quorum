@@ -358,6 +358,7 @@ class SliceJob
         paths:SetTopSurfaceLayers(profile:GetInteger("topSurfaceLayers"))
         paths:SetGapFill(profile:GetBoolean("gapFill"))
         paths:SetIroning(profile:GetBoolean("ironing"), profile:GetNumber("ironingSpacing"), profile:GetNumber("ironingInset"))
+        paths:SetAdaptive(profile:GetBoolean("adaptive"))
     end
 
     private action ConfigureSupports(Profile profile, TreeSupport trees)

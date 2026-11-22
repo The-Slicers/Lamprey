@@ -10,6 +10,7 @@ use Libraries.Fabrication.Geometry.LineFill
 use Libraries.Fabrication.Geometry.PolygonOffsetter
 use Libraries.Fabrication.Geometry.PolygonOperations
 use Libraries.Fabrication.Geometry.PointIndex
+use Libraries.Fabrication.Slicing.AdaptivePath
 use Libraries.Data.Containers.NumberBuffer
 use Libraries.Data.Containers.IntegerBuffer
 
@@ -48,6 +49,9 @@ class PathGenerator
     integer wallCount = 2
     number infillDensity = 0.2
     number infillOverlap = 0.25
+    // adaptive planes only: how far fill reaches into the innermost adaptive wall, as a fraction of the
+    // line width. Negative leaves a gap. Uniform planes never read this.
+    number adaptiveFillOverlap = 0.25
     number minInfillLength = 0.4
     // shortest tip dot worth printing (mm); anything smaller is a speck
     number minDotLength = 0.1
@@ -71,6 +75,11 @@ class PathGenerator
     // gap fill: bands inside the innermost wall too narrow for fill lines
     // (thin walls a bit wider than the walls themselves) get solid lines
     boolean gapFill = true
+    boolean adaptive = false
+    AdaptivePath arachne
+    // 1 if adaptive wall, 0 when uniform
+    IntegerBuffer planeAdaptive
+    integer adaptiveFallbacks = 0
 
     Array<Contour> walls
     Array<Contour> skin
@@ -153,6 +162,103 @@ class PathGenerator
     GeometryUtilities util
     LineFill lineFill
     ArgumentChecker checker
+
+    action SetAdaptive(boolean bool)
+        adaptive = bool
+    end
+
+    // Diagnostic: the adaptive walls by kind, and for every open wall's end, the distance to the nearest end of
+    // another open adaptive wall with the same bead index on the same plane.
+    private action ReportAdaptiveWalls()
+        integer closedCount = 0
+        integer openCount = 0
+        integer shortOpen = 0
+        integer outerOpen = 0
+        integer nearlyClosed = 0
+        integer gapSnap = 0
+        integer gapSmall = 0
+        integer gapWidth = 0
+        integer gapFar = 0
+        integer i = 0
+        repeat while i < walls:GetSize()
+            Contour w = walls:Get(i)
+            if w:IsAdaptive() and w:GetSize() >= 2
+                if w:closed
+                    closedCount = closedCount + 1
+                else
+                    openCount = openCount + 1
+                    if util:PathLength(w) < 1.0
+                        shortOpen = shortOpen + 1
+                    end
+                    if w:wallIndex = 0
+                        outerOpen = outerOpen + 1
+                    end
+                    integer last = w:GetSize() - 1
+                    if Gap(w:xs:Get(0), w:ys:Get(0), w:xs:Get(last), w:ys:Get(last)) < 0.4
+                        nearlyClosed = nearlyClosed + 1
+                    end
+                    integer side = 0
+                    repeat while side < 2
+                        integer k = 0
+                        if side = 1
+                            k = last
+                        end
+                        number d = NearestOpenEnd(i, w:xs:Get(k), w:ys:Get(k))
+                        if d < 0.02
+                            gapSnap = gapSnap + 1
+                        elseif d < 0.1
+                            gapSmall = gapSmall + 1
+                        elseif d < 0.4
+                            gapWidth = gapWidth + 1
+                        else
+                            gapFar = gapFar + 1
+                        end
+                        side = side + 1
+                    end
+                end
+            end
+            i = i + 1
+        end
+        output "adaptive walls: closed " + closedCount + ", open " + openCount + " (outer " + outerOpen
+            + ", shorter than 1 mm " + shortOpen + ", own ends within 0.4 mm " + nearlyClosed + ")"
+        output "open ends to the nearest other open end of the same index: under 0.02 mm " + gapSnap
+            + ", 0.02-0.1 " + gapSmall + ", 0.1-0.4 " + gapWidth + ", farther " + gapFar
+    end
+
+    private action Gap(number ax, number ay, number bx, number by) returns number
+        return math:SquareRoot((ax - bx) * (ax - bx) + (ay - by) * (ay - by))
+    end
+
+    private action NearestOpenEnd(integer self, number x, number y) returns number
+        Contour mine = walls:Get(self)
+        number best = 1000000.0
+        integer j = 0
+        repeat while j < walls:GetSize()
+            if j not= self
+                Contour o = walls:Get(j)
+                if o:IsAdaptive() and not o:closed and o:GetSize() >= 2 and o:planeIndex = mine:planeIndex and o:wallIndex = mine:wallIndex
+                    number a = Gap(x, y, o:xs:Get(0), o:ys:Get(0))
+                    number b = Gap(x, y, o:xs:Get(o:GetSize() - 1), o:ys:Get(o:GetSize() - 1))
+                    if a < best
+                        best = a
+                    end
+                    if b < best
+                        best = b
+                    end
+                end
+            end
+            j = j + 1
+        end
+        return best
+    end
+
+    // fill overlap on adaptive planes as fraction of line width
+    // if pos, reaches into innermost adaptive wall, neg leaves a gap
+    // no change to uniform output (still uses infillOverlap and seperate inset)
+    action SetAdaptiveFillOverlap(number overlap)
+        checker:RequireRange("PathGenerator:SetAdaptiveFillOverlap overlap", overlap, -1, 1)
+        adaptiveFillOverlap = overlap
+    end
 
     /*
     The extrusion width, which is also the spacing of solid fill and the
@@ -654,6 +760,8 @@ class PathGenerator
         Array<Contour> walls = paths:GetWalls()
     */
     action Generate(Array<Contour> contours, integer planeCount)
+        planeAdaptive:Empty()
+        adaptiveFallbacks = 0
         walls:Empty()
         skin:Empty()
         infill:Empty()
@@ -677,43 +785,120 @@ class PathGenerator
             innerStart:Add(inner:GetSize())
             gapStart:Add(gapAreas:GetSize())
             Array<Contour> layer = modelLayers:GetLayer(p)
+//            Array<Contour> planeWalls
+            planeAdaptive:Add(0)
+            Array<Contour> planeWalls
             if layer:GetSize() > 0
-                // the center line of wall sits (w + 0.5)
-                // line widths inside the outline
-                integer w = 0
-                repeat while w < wallCount
-                    Array<Contour> ring
-                    Array<Contour> deeper
-                    if w = 0
-                        ring = Inset(layer, lineWidth * 0.5)
+//                if not adaptive
+//                    // the center line of wall sits (w + 0.5)
+//                    // line widths inside the outline
+//                    integer w = 0
+//                    repeat while w < wallCount
+//                        Array<Contour> ring
+//                        Array<Contour> deeper
+//                        if w = 0
+//                            ring = Inset(layer, lineWidth * 0.5)
+//                        else
+//                            // only where wall w fits from both sides: shrink past
+//                            // the far edge of this wall, then grow back to its centre
+//                            deeper = CachedFitInset(layer, lineWidth * cast(number, w + 1), false)
+//                            ring = ExactOutset(deeper, lineWidth * 0.5)
+//                        end
+//                        integer r = 0
+//                        repeat while r < ring:GetSize()
+//                            Contour wall = ring:Get(r)
+//                            wall:wallIndex = w
+//                            walls:Add(wall)
+//                            r = r + 1
+//                        end
+//                        if w = 0
+//                            ThinIslands(layer, ring, p)
+//                        else
+//                            WallGaps(layer, w, deeper, p)
+//                        end
+//                        w = w + 1
+//                    end
+//                else
+//                    arachne:SetWidth(lineWidth)
+//                    arachne:SetWallCount(wallCount)
+//                    Array<Contour> APwalls = arachne:Generate(layer)
+//
+//                    integer aw = 0
+//                    repeat while aw < APwalls:GetSize()
+//                        Contour APwall = APwalls:Get(aw)
+//                        APwall:planeIndex = p
+//                       walls:Add(APwall)
+//                        aw = aw + 1
+//                    end
+//                    planeWalls = APwalls
+//                end
+
+                boolean useArachne = false
+                if adaptive
+                    arachne:SetWidth(lineWidth)
+                    arachne:SetWallCount(wallCount)
+                    Array<Contour> APwalls = arachne:Generate(layer)
+                    if arachne:IsValid()
+                        useArachne = true
+                        planeAdaptive:Set(p, 1)
+                        planeWalls = APwalls
+                        integer aw = 0
+                        repeat while aw < APwalls:GetSize()
+                            Contour APwall = APwalls:Get(aw)
+                            APwall:planeIndex = p
+                            walls:Add(APwall)
+                            aw = aw + 1
+                        end
                     else
-                        // only where wall w fits from both sides: shrink past
-                        // the far edge of this wall, then grow back to its centre
-                        deeper = CachedFitInset(layer, lineWidth * cast(number, w + 1), false)
-                        ring = ExactOutset(deeper, lineWidth * 0.5)
+                        adaptiveFallbacks = adaptiveFallbacks + 1
+                        output "adaptive fallback plane " + p + ": " + arachne:Reason()
                     end
-                    integer r = 0
-                    repeat while r < ring:GetSize()
-                        Contour wall = ring:Get(r)
-                        wall:wallIndex = w
-                        walls:Add(wall)
-                        r = r + 1
-                    end
-                    if w = 0
-                        ThinIslands(layer, ring, p)
-                    else
-                        WallGaps(layer, w, deeper, p)
-                    end
-                    w = w + 1
+//                    output "plane " + p + " valid " + arachne:IsValid() + " walls " + APwalls:GetSize()
                 end
 
-                Array<Contour> area = Inset(layer, lineWidth * cast(number, wallCount))
+                if not useArachne
+                    integer w = 0
+                    repeat while w < wallCount
+                        Array<Contour> ring
+                        Array<Contour> deeper
+                        if w = 0
+                            ring = Inset(layer, lineWidth * 0.5)
+                        else
+                            // only where wall w fits from both sides: shrink past
+                            // the far edge of this wall, then grow back to its centre
+                            deeper = CachedFitInset(layer, lineWidth * cast(number, w + 1), false)
+                            ring = ExactOutset(deeper, lineWidth * 0.5)
+                        end
+                        integer r = 0
+                        repeat while r < ring:GetSize()
+                            Contour wall = ring:Get(r)
+                            wall:wallIndex = w
+                            walls:Add(wall)
+                            r = r + 1
+                        end
+                        if w = 0
+                            ThinIslands(layer, ring, p)
+                        else
+                            WallGaps(layer, w, deeper, p)
+                        end
+                        w = w + 1
+                    end
+                end
+
+//                Array<Contour> area = Inset(layer, lineWidth * cast(number, wallCount))
+                Array<Contour> area
+                if planeAdaptive:Get(p) = 1
+                    area = AdaptiveInner(layer, planeWalls)
+                else
+                    area = Inset(layer, lineWidth * cast(number, wallCount))
+                end
                 integer a = 0
                 repeat while a < area:GetSize()
                     inner:Add(area:Get(a))
                     a = a + 1
                 end
-                if gapFill and wallCount > 0 and area:GetSize() > 0
+//                if gapFill and wallCount > 0 and area:GetSize() > 0
+                if gapFill and planeAdaptive:Get(p) = 0 and wallCount > 0 and area:GetSize() > 0         
                     GapFill(layer, area, p)
                 end
             end
@@ -735,9 +920,16 @@ class PathGenerator
             Array<Contour> layer2 = modelLayers:GetLayer(p)
             Array<Contour> innerArea = InnerContours(p)
             if layer2:GetSize() > 0 and innerArea:GetSize() > 0
-                // fill area = inner area grown back into the last wall by the overlap
+                // fill area = inner area grown back into the last wall by the overlap is at wallCount * lineWidth
                 number inset = lineWidth * (cast(number, wallCount) + 0.5 - infillOverlap)
-                Array<Contour> fillArea = Inset(layer2, inset)
+//                Array<Contour> fillArea = Inset(layer2, inset)
+                Array<Contour> fillArea
+                if planeAdaptive:Get(p) = 1
+                    // adaptive planes: the fill reaches adaptiveFillOverlap line widths into the innermost wall
+                    fillArea = Inset(layer2, lineWidth * (cast(number, wallCount) - adaptiveFillOverlap))
+                else
+                    fillArea = Inset(layer2, inset)
+                end
                 Array<Contour> filledGaps = GapContours(p)
                 if fillArea:GetSize() > 0 and filledGaps:GetSize() > 0
                     // the gap fill already covers these bands
@@ -770,6 +962,11 @@ class PathGenerator
             end
             Progress("fill", p)
             p = p + 1
+        end
+        output "extruded mm2: walls " + ExtrudedArea(walls) + ", solid " + (ExtrudedArea(skin) + ExtrudedArea(topSurface)) + ", infill " + ExtrudedArea(infill) + ", region " + RegionArea(contours)
+        if adaptive
+            output "adaptive fallback planes " + adaptiveFallbacks + " of " + planeTotal
+//            ReportAdaptiveWalls()
         end
     end
 
@@ -2080,5 +2277,64 @@ class PathGenerator
             k = k + 1
         end
         return area
+    end
+
+    // area inside adative walls
+    // uses shell meta-scheme s.t. the walls are the preferred width if part is wide enough for infill
+    // infill area starts as on uniform planes
+    private action AdaptiveInner(Array<Contour> layer, Array<Contour> planeWalls) returns Array<Contour>
+        return Inset(layer, lineWidth * cast(number, wallCount))
+    end
+
+    // number of failed adaptive walls
+    // walls were uniform instead
+    action GetAdaptiveFallbackCount returns integer
+        return adaptiveFallbacks
+    end
+
+    // Extruded area of a set of paths: length times width, summed (mm^2). Uniform paths use lineWidth.
+    private action ExtrudedArea(Array<Contour> paths) returns number
+        number total = 0.0
+        integer c = 0
+        repeat while c < paths:GetSize()
+            Contour path = paths:Get(c)
+            integer n = path:GetSize()
+            integer segments = n - 1
+            if path:closed
+                segments = n
+            end
+            integer s = 0
+            repeat while s < segments
+                integer t = (s + 1) mod n
+                number dx = path:xs:Get(t) - path:xs:Get(s)
+                number dy = path:ys:Get(t) - path:ys:Get(s)
+                number width = lineWidth
+                if path:IsAdaptive()
+                    width = (path:ws:Get(s) + path:ws:Get(t)) / 2.0
+                end
+                total = total + math:SquareRoot(dx * dx + dy * dy) * width
+                s = s + 1
+            end
+            c = c + 1
+        end
+        return total
+    end
+
+    // Area of outline (include outer wall, exclude holes)
+    private action RegionArea(Array<Contour> loops) returns number
+        number total = 0.0
+        integer c = 0
+        repeat while c < loops:GetSize()
+            Contour loop = loops:Get(c)
+            if loop:closed and loop:GetSize() >= 3
+                if loop:isHole
+                    total = total - loop:Area()
+                else
+                    total = total + loop:Area()
+                end
+            end
+            c = c + 1
+        end
+        return total
     end
 end

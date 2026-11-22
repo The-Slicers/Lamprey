@@ -1,0 +1,513 @@
+package Libraries.Fabrication.Slicing
+
+use Libraries.Containers.Array
+use Libraries.Compute.Math
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Geometry.GeometryUtilities
+use Libraries.Fabrication.Geometry.OutlineEdges
+use Libraries.Fabrication.Geometry.VoronoiDiagram
+use Libraries.Fabrication.Geometry.SkeletalTrapezoidation
+use Libraries.Fabrication.Geometry.CenterMarking
+use Libraries.Fabrication.Geometry.BeadTransitions
+use Libraries.Fabrication.Geometry.BeadPlacement
+use Libraries.Fabrication.Geometry.InwardDistributed
+use Libraries.Fabrication.Geometry.ShellScheme
+use Libraries.Fabrication.Geometry.WideningScheme
+use Libraries.Fabrication.Geometry.ToolpathExtraction
+
+class AdaptivePath
+    boolean boost = true                // type of voronoi diagram generation to use
+    boolean valid = false
+    
+    integer WallCount = 2
+    number Width = 0.4
+
+
+    number lowShare = 0.75              // the share of a width the narrowest bead has
+    number highShare = 1.5              // share of a a widthe the widest bead has
+    number retreatShare = 0.75          // the amount an end is pulled back
+    number minFeatureShare = 0.25
+
+    number tolerance = 0.000001
+    number snapDistance = 0.02          // how close two line ends have to be to become a point/join
+    text reason = ""                    // reports issue if generation fails for a contour
+
+    Math math
+    GeometryUtilities util
+    InwardDistributed IDscheme
+    ShellScheme shell
+    WideningScheme widen
+
+    // generate toolpath lines w/ widths from contour lines
+    action Generate(Array<Contour> outline) returns Array<Contour>
+        valid = false
+        reason = ""
+        Array<Contour> walls
+
+        if outline:GetSize() = 0
+            reason = "no outline"
+            return walls
+        end
+
+        // build edges in format understood by boost's voronoi diagram program
+        OutlineEdges edges
+        edges:BuildEdges(outline)
+        if edges:x0:GetSize() < 3
+            reason = "outline has fewer than 3 segments"
+            return walls
+        end
+
+        // generating voronoi diagram + building skeletal trapezoidation
+        VoronoiDiagram voronoi
+        voronoi:SetBoost(boost)
+        voronoi:SetWorkPath("Outputs/voronoi_test")
+        voronoi:Generate(edges)
+        SkeletalTrapezoidation st
+        st:Build(outline, edges, voronoi)
+
+        // marking centeral edges
+        CenterMarking cm
+        cm:nozzleWidth = Width
+        cm:filterDistance = Width
+        cm:Build(st)
+
+        // setting up inward distributed beading scheme
+        // using shell meta-scheme and widening meta-scheme
+        shell:SetBase(IDscheme)
+        shell:maxBeads = 2 * WallCount                      // each side has 2 walls max
+        widen:SetBase(shell)
+        widen:minFeatureSize = minFeatureShare * Width      // widening thin stuff
+        widen:minBeadWidth = LowWidth()
+
+        // building transitions between bead counts
+        BeadTransitions bt
+        bt:SetScheme(widen)
+        bt:Build(st, cm)
+        bt:SplitRampEnds(st, cm)
+        st:RepairTwins()
+        bt:SetFractionalCounts(st)
+
+        // assigning beads to nodes
+        BeadPlacement bp
+        bp:Build(st, bt, widen)
+
+        // turning bead chains into polylines
+        ToolpathExtraction tx
+        tx:Build(st, bp, bt:edgeMarked)
+        if not tx:valid
+            reason = "bead placement refused"
+            return walls
+        end
+
+        // turning polylines into Contour objects
+        Array<Contour> runs
+        integer p = 0
+        repeat while p < tx:polyStart:GetSize()
+            integer from = tx:polyStart:Get(p)
+            integer to = tx:polySites:GetSize()
+
+            if p + 1 < tx:polyStart:GetSize()
+                to = tx:polyStart:Get(p + 1)
+            end
+
+            // keep polyline if has 2 sites and bead index is less than wallcount (isn't infill)
+            if to - from >= 2 and tx:polyIndex:Get(p) < WallCount
+                Contour run
+                integer k = from
+                repeat while k < to
+                    integer s = tx:polySites:Get(k)
+                    run:AddPoint(tx:siteX:Get(s), tx:siteY:Get(s), tx:siteWidth:Get(s))
+                    k = k + 1
+                end
+
+                // ends on site started from and has 4+ points (is a loop/closed)
+                run:closed = tx:polySites:Get(from) = tx:polySites:Get(to - 1) and to - from >= 4
+                if run:closed
+                    run:DropClosingDuplicate()  // end and start are same, leave one
+                end
+                run:wallIndex = tx:polyIndex:Get(p)
+                run:planeIndex = 0
+                run:keepShort = true
+
+                // run has atleast 2 points left
+                if run:GetSize() >= 2
+                    runs:Add(run)
+                end
+            end
+            p = p + 1
+        end
+
+        // check lines if they need to close (line whose ends meet) or join (seperate lines whose ends meet)
+        Array<boolean> gone                 // indicates removed line (no tracked w/ another not on its own)
+        integer i = 0
+        repeat while i < runs:GetSize()
+            gone:Add(false)
+            i = i + 1
+        end
+
+        // join + repeat if prev round had a join
+        boolean changed = true
+        repeat while changed
+            changed = false
+
+            // check lines that are NOT gone and NOT closed/loops
+            integer a = 0
+            repeat while a < runs:GetSize()
+                Contour wa = runs:Get(a)
+                if not gone:Get(a) and not wa:closed
+
+                    // last point is first, is closed
+                    if wa:GetSize() >= 4 and EndsMeet(wa, 0, wa, wa:GetSize() - 1)
+                        Contour closedLoop
+                        integer q = 0
+                        repeat while q < wa:GetSize() - 1
+                            closedLoop:AddPoint(wa:xs:Get(q), wa:ys:Get(q), wa:ws:Get(q))
+                            q = q + 1
+                        end
+                        CopyFlags(wa, closedLoop)
+                        closedLoop:closed = true
+                        runs:Set(a, closedLoop)
+                        changed = true
+
+                    // checking if lines can join
+                    else
+                        integer b = 0
+                        repeat while b < runs:GetSize()
+                            Contour wb = runs:Get(b)
+                            if b not= a and not gone:Get(b) and not wb:closed and wb:wallIndex = wa:wallIndex
+                                Contour joined = Join(wa, wb)
+                                if joined:GetSize() > 0
+                                    runs:Set(a, joined)
+                                    gone:Set(b, true)
+                                    wa = joined
+                                    changed = true
+                                end
+                            end
+                            b = b + 1
+                        end
+                    end
+                end
+                a = a + 1
+            end
+        end
+
+        // check open (unclosed) lines
+        i = 0
+        repeat while i < runs:GetSize()
+            if not gone:Get(i)
+                Contour path = runs:Get(i)
+
+                // check if end point is within snapDistance of another open/closed line end
+                if not path:closed and TouchesOther(runs, gone, i, path:xs:Get(0), path:ys:Get(0))
+                    path = Retreat(path, true)
+                end
+
+                // same check on other end
+                if not path:closed and path:GetSize() >= 2
+                    integer last = path:GetSize() - 1
+                    if TouchesOther(runs, gone, i, path:xs:Get(last), path:ys:Get(last))
+                        path = Retreat(path, false)
+                    end
+                end
+
+                // both ends checked (maybe shortened), keep path is has atleast 2pts left
+                if path:GetSize() >= 2
+                    walls:Add(path)
+                end
+            end
+            i = i + 1
+        end
+
+        // get the 'dots' (where a bead is single point)
+        // 6.3: an odd centre bead at a local maximum is a dot
+        integer d = 0
+        repeat while d < tx:dotX:GetSize()
+            // keep dots of wall beads, rest are up to infill
+            if tx:dotIndex:Get(d) < WallCount
+
+                // get half of line that can hold dot's area (pi w^2 / 4) 
+                number dotWidth = tx:dotWidth:Get(d)
+                number half = 3.141592653589793 * dotWidth / 8.0    // half of line
+                number limit = 0.95 * tx:dotRadius:Get(d)
+                if half > limit
+                    half = limit
+                end
+
+                // line goes through dot at bead width -> indicate to PathOrderer to keep it
+                Contour dot
+                dot:AddPoint(tx:dotX:Get(d) - half, tx:dotY:Get(d), dotWidth)
+                dot:AddPoint(tx:dotX:Get(d) + half, tx:dotY:Get(d), dotWidth)
+                dot:closed = false
+                dot:wallIndex = tx:dotIndex:Get(d)
+                dot:planeIndex = 0
+                dot:keepShort = true
+                walls:Add(dot)
+            end
+            d = d + 1
+        end
+
+        // check if there are walls lol
+        if walls:GetSize() = 0          
+            reason = "no walls"
+            return walls
+        end
+
+        // check if each wall we have is acceptable; return issues in console
+        boolean hasOuter = false
+        integer v = 0
+        repeat while v < walls:GetSize()
+            Contour wall = walls:Get(v)
+            if wall:wallIndex = 0
+                hasOuter = true
+            end
+            if wall:closed and wall:GetSize() < 3       // not a loop, can't be closed
+                reason = "closed wall with fewer than 3 points"
+                return walls
+            end
+            if not wall:closed and wall:GetSize() < 2   // not a line, can't be open
+                reason = "open wall with fewer than 2 points"
+                return walls
+            end
+            if not wall:IsAdaptive()                    // every point doesn't have a width
+                reason = "wall without one width per point"
+                return walls
+            end
+            if wall:closed and wall:Area() <= 0.0       // bad!
+                reason = "closed wall with no area"
+                return walls
+            end
+
+            
+            // check every point for each wall
+            integer pt = 0
+            repeat while pt < wall:GetSize()
+                // outerwall point wider than limit (HighWidth())
+                number pointWidth = wall:ws:Get(pt)
+                if wall:wallIndex = 0 and pointWidth > HighWidth() + tolerance
+                    reason = "outer width " + pointWidth + " above " + HighWidth()
+                    return walls
+                end
+
+                // check if every wall point is inside the polygon outline; flips between in/out per outline loop
+                // SLOW!!!!
+                boolean inside = false
+                integer c = 0
+                repeat while c < outline:GetSize()
+                    Contour shape = outline:Get(c)
+                    if shape:ContainsPoint(wall:xs:Get(pt), wall:ys:Get(pt))
+                        inside = not inside
+                    end
+                    c = c + 1
+                end
+                if not inside
+                    reason = "wall point outside the shape"
+                    return walls
+                end
+                pt = pt + 1
+            end
+            v = v + 1
+        end
+
+        if not hasOuter
+            reason = "no outer wall"
+            return walls
+        end
+
+        // checks if each island that is the min feature size wide has an outer wall
+        integer isl = 0
+        repeat while isl < outline:GetSize()
+            Contour island = outline:Get(isl)
+            
+            // is not a hole, has 3+ pts, and is large enough to have a wall
+            if not island:isHole and island:GetSize() >= 3 and IslandWidth(island) >= minFeatureShare * Width
+                boolean walled = false
+                integer ow = 0
+
+                // check if any outer wall starts in the island
+                repeat while ow < walls:GetSize() and not walled
+                    Contour outerWall = walls:Get(ow)
+                    if outerWall:wallIndex = 0 and outerWall:GetSize() > 0
+                        if island:ContainsPoint(outerWall:xs:Get(0), outerWall:ys:Get(0))
+                            walled = true
+                        end
+                    end
+                    ow = ow + 1
+                end
+
+                // reject layer, use uniform walls
+                if not walled
+                    reason = "an island " + IslandWidth(island) + " mm wide has no outer wall"
+                    return walls
+                end
+            end
+            isl = isl + 1
+        end
+
+        valid = true    // walls passed
+        return walls
+    end
+
+    // calculates width of a strip
+    private action IslandWidth(Contour island) returns number
+        number perimeter = util:PathLength(island)
+        if perimeter <= 0.0
+            return 0.0
+        end
+        return 2.0 * island:Area() / perimeter  // thin strips use: 2 * area / perimeter
+    end
+
+    // ends of contours a and b meet
+    private action EndsMeet(Contour a, integer i, Contour b, integer j) returns boolean
+        number dx = a:xs:Get(i) - b:xs:Get(j)
+        number dy = a:ys:Get(i) - b:ys:Get(j)
+        return dx * dx + dy * dy < snapDistance * snapDistance
+    end
+
+    // a and b joined where an end of one meets an end of the other
+    // empty contour when no ends meet
+    private action Join(Contour a, Contour b) returns Contour
+        Contour out
+        integer na = a:GetSize()
+        integer nb = b:GetSize()
+        if EndsMeet(a, na - 1, b, 0)
+            Append(out, a, false, false)
+            Append(out, b, false, true)
+        elseif EndsMeet(a, na - 1, b, nb - 1)
+            Append(out, a, false, false)
+            Append(out, b, true, true)
+        elseif EndsMeet(a, 0, b, nb - 1)
+            Append(out, b, false, false)
+            Append(out, a, false, true)
+        elseif EndsMeet(a, 0, b, 0)
+            Append(out, b, true, false)
+            Append(out, a, false, true)
+        else
+            return out
+        end
+        CopyFlags(a, out)
+        return out
+    end
+
+    // appends contour's points, can be reversed
+    private action Append(Contour out, Contour c, boolean reversed, boolean skipFirst)
+        integer n = c:GetSize()
+        integer k = 0
+        if skipFirst
+            k = 1
+        end
+        repeat while k < n
+            integer i = k
+            if reversed
+                i = n - 1 - k
+            end
+            out:AddPoint(c:xs:Get(i), c:ys:Get(i), c:ws:Get(i))
+            k = k + 1
+        end
+    end
+
+    private action CopyFlags(Contour from, Contour to)
+        to:closed = false
+        to:wallIndex = from:wallIndex
+        to:planeIndex = from:planeIndex
+        to:keepShort = from:keepShort
+    end
+
+    // true when (x, y) lies on another remaining toolpath
+    private action TouchesOther(Array<Contour> work, Array<boolean> gone, integer self, number x, number y) returns boolean
+        integer o = 0
+        repeat while o < work:GetSize()
+            if o not= self and not gone:Get(o)
+                Contour c = work:Get(o)
+                integer n = c:GetSize()
+                integer segments = n - 1
+                if c:closed
+                    segments = n
+                end
+                integer s = 0
+                repeat while s < segments
+                    integer t = (s + 1) mod n
+                    if util:SegmentDistance2(x, y, c:xs:Get(s), c:ys:Get(s), c:xs:Get(t), c:ys:Get(t)) < snapDistance * snapDistance
+                        return true
+                    end
+                    s = s + 1
+                end
+            end
+            o = o + 1
+        end
+        return false
+    end
+
+    // w shortened at one end by retreatShare of that end's width; empty when w is shorter than that
+    private action Retreat(Contour w, boolean atFront) returns Contour
+        Contour path = w:Copy()
+        if not atFront
+            path:Reverse()
+        end
+        number left = retreatShare * path:ws:Get(0)
+        Contour cut
+        integer n = path:GetSize()
+        integer i = 0
+        boolean done = false
+        repeat while i < n - 1 and not done
+            number dx = path:xs:Get(i + 1) - path:xs:Get(i)
+            number dy = path:ys:Get(i + 1) - path:ys:Get(i)
+            number len = math:SquareRoot(dx * dx + dy * dy)
+            if len >= left
+                // the cut point on this segment, then the rest of the path
+                number t = 0.0
+                if len > 0.0
+                    t = left / len
+                end
+                cut:AddPoint(path:xs:Get(i) + dx * t, path:ys:Get(i) + dy * t,
+                             path:ws:Get(i) + (path:ws:Get(i + 1) - path:ws:Get(i)) * t)
+                integer k = i + 1
+                repeat while k < n
+                    cut:AddPoint(path:xs:Get(k), path:ys:Get(k), path:ws:Get(k))
+                    k = k + 1
+                end
+                CopyFlags(path, cut)
+                done = true
+            else
+                left = left - len
+                i = i + 1
+            end
+        end
+        if not atFront and cut:GetSize() > 0
+            cut:Reverse()
+        end
+        cut:keepShort = w:keepShort
+        return cut
+    end
+
+    action SetWidth(number w)
+        Width = w
+        IDscheme:SetWidth(w)
+        shell:SetWidth(w)
+        widen:SetWidth(w)
+    end
+
+    action LowWidth returns number
+        return lowShare * Width
+    end
+
+    action HighWidth returns number
+        return highShare * Width
+    end
+
+    action SetWallCount(integer wc)
+        WallCount = wc
+    end
+
+    action UseBoost(boolean useBoost)
+        boost = useBoost
+    end
+
+    action IsValid returns boolean
+        return valid
+    end
+
+    // why the last Generate was not usable (empty when it was)
+    action Reason returns text
+        return reason
+    end
+end
