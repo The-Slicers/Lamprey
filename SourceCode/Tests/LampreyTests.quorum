@@ -52,8 +52,8 @@ class LampreyTests
 //        BeadPlacementTests placement
 //        failed = failed + placement:Run()
 
-//        InwardDistributedTests inward
-//        failed = failed + inward:Run()
+        InwardDistributedTests inward
+        failed = failed + inward:Run()
 
 //        AdaptivePathTests adaptivePath
 //        failed = failed + adaptivePath:Run()

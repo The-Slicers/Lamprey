@@ -1,0 +1,39 @@
+package Libraries.Fabrication.Geometry
+
+use Libraries.Containers.Array
+use Libraries.Fabrication.Geometry.Bead
+
+// general beading scheme for later beadings schemes
+class BeadingScheme
+    public number preferredWidth = 0.4
+
+    action SetWidth(number w)
+        preferredWidth = w
+    end
+
+    // bead count for diameter. replaced later by scheme
+    // q(d)
+    action QuantizeCount(number diameter) returns integer
+        return 0
+    end
+
+    // The diameter where q does from from n to n + 1 beads
+    // q^-1(n)
+    action TransitionDiameter(integer n) returns number
+        return (cast(number, n) + 0.5) * preferredWidth
+    end
+
+    // The n beads for a feature with radius
+    // B(n,r)
+    action Beads(integer n, number r) returns Array<Bead>
+        Array<Bead> none
+        return none
+    end
+
+    // Diameters where the beading changes non-linearly (skeleton needs a node here)
+    // unused for plain scheme
+    action NonlinearDiameters returns Array<number>
+        Array<number> none
+        return none
+    end
+end

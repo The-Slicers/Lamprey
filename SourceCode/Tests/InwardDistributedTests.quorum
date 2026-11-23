@@ -1,0 +1,239 @@
+package Tests
+
+use Libraries.Containers.Array
+use Libraries.Fabrication.Geometry.Bead
+use Libraries.Fabrication.Geometry.InwardDistributed
+use Libraries.Fabrication.Geometry.ShellScheme
+use Libraries.Fabrication.Geometry.WideningScheme
+
+class InwardDistributedTests
+    integer passed = 0
+    integer failed = 0
+
+    action Run returns integer
+        TestWidthsSumToDiameter()
+        TestSingleBeadFillsDiameter()
+        TestTwoBeadsAtPreferredWidth()
+        TestLocationsAreOutlineFirst()
+        TestQuantizeCount()
+        TestInwardWeightsMatchFormula()
+        TestShellScheme()
+        TestWideningScheme()
+        TestTransitionDiameters()
+        TestNonlinearDiameters()
+        output "InwardDistributed tests: passed " + passed + ", failed " + failed
+        return failed
+    end
+
+    action Check(boolean condition, text name)
+        if condition
+            passed = passed + 1
+        else
+            failed = failed + 1
+            output "FAIL: " + name
+        end
+    end
+
+    private action Near(number a, number b) returns boolean
+        return a - b < 0.000001 and b - a < 0.000001
+    end
+
+    // Sum of the widths of an array of beads.
+    private action SumWidths(Array<Bead> beads) returns number
+        number sum = 0.0
+        integer i = 0
+        repeat while i < beads:GetSize()
+            Bead b = beads:Get(i)
+            sum = sum + b:width
+            i = i + 1
+        end
+        return sum
+    end
+
+    // The paper's first property: for every n and r, the widths sum to the diameter 2r. This holds whatever
+    // the weights are, so it checks the sharing out, not the weight formula.
+    action TestWidthsSumToDiameter()
+        InwardDistributed scheme
+        boolean allSum = true
+        integer n = 1
+        repeat while n <= 5
+            number r = 0.3
+            integer k = 0
+            repeat while k < 3
+                if k = 1
+                    r = 0.5
+                elseif k = 2
+                    r = 1.0
+                end
+                Array<Bead> beads = scheme:Beads(n, r)
+                if not Near(SumWidths(beads), 2.0 * r)
+                    allSum = false
+                end
+                k = k + 1
+            end
+            n = n + 1
+        end
+        Check(allSum, "for n = 1 to 5 and r = 0.3, 0.5, 1.0, the widths sum to 2r")
+    end
+
+    // One bead fills the whole diameter: width 2r, centre at r from the outline.
+    action TestSingleBeadFillsDiameter()
+        InwardDistributed scheme
+        Array<Bead> beads = scheme:Beads(1, 0.5)
+        Check(beads:GetSize() = 1, "one bead for n = 1")
+
+        Bead only = beads:Get(0)
+        Check(Near(only:width, 1.0), "a single bead has width 2r")
+        Check(Near(only:location, 0.5), "a single bead's centre is r from the outline")
+    end
+
+    // With n = 2 at r = 0.4 and w* = 0.4 the discrepancy is zero, so both beads keep the preferred
+    // width. Their centres are then 0.2 and 0.6 mm from the outline. This needs no weight function.
+    action TestTwoBeadsAtPreferredWidth()
+        InwardDistributed scheme
+        Array<Bead> beads = scheme:Beads(2, 0.4)
+        Check(beads:GetSize() = 2, "two beads for n = 2")
+
+        Bead outer = beads:Get(0)
+        Bead inner = beads:Get(1)
+        Check(Near(outer:width, 0.4), "the outer bead keeps the preferred width")
+        Check(Near(inner:width, 0.4), "the inner bead keeps the preferred width")
+        Check(Near(outer:location, 0.2), "the outer bead's centre is 0.2 mm from the outline")
+        Check(Near(inner:location, 0.6), "the inner bead's centre is 0.6 mm from the outline")
+    end
+
+    // Locations are outline-first: the first centre sits half its width inside the outline, and each
+    // later centre sits half its own width past the edge of the bead before it (paper Table 1, L(n, r)).
+    action TestLocationsAreOutlineFirst()
+        InwardDistributed scheme
+        Array<Bead> beads = scheme:Beads(4, 0.9)
+
+        boolean ok = true
+        number edge = 0.0
+        integer i = 0
+        repeat while i < beads:GetSize()
+            Bead b = beads:Get(i)
+            number expected = edge + b:width / 2.0
+            if not Near(b:location, expected)
+                ok = false
+            end
+            edge = edge + b:width
+            i = i + 1
+        end
+        Check(ok, "each bead's centre sits half its width past the edge of the bead before it")
+    end
+
+    // floor(d / w* + 1/2) with w* = 0.4: d = 0.8 gives 2, d = 0.9 gives 2, d = 1.2 gives 3.
+    action TestQuantizeCount()
+        InwardDistributed scheme
+        Check(scheme:QuantizeCount(0.8) = 2, "d = 0.8 quantizes to 2 beads")
+        Check(scheme:QuantizeCount(0.9) = 2, "d = 0.9 quantizes to 2 beads")
+        Check(scheme:QuantizeCount(1.2) = 3, "d = 1.2 quantizes to 3 beads")
+    end
+
+    // Hand-computed from the weight formula: n = 3, r = 0.5, w* = 0.4, N = 2. The discrepancy is
+    // 2r - n*w* = -0.2 (the feature is narrower than three preferred beads). Weights are 0.75, 1, 0.75,
+    // total 2.5, so the shares are 0.3, 0.4, 0.3 and the widths are 0.34, 0.32, 0.34.
+    action TestInwardWeightsMatchFormula()
+        InwardDistributed scheme
+        Array<Bead> beads = scheme:Beads(3, 0.5)
+        Check(beads:GetSize() = 3, "three beads for n = 3")
+
+        Bead outer = beads:Get(0)
+        Bead middle = beads:Get(1)
+        Bead inner = beads:Get(2)
+        Check(Near(outer:width, 0.34), "outer bead width is 0.34")
+        Check(Near(middle:width, 0.32), "middle bead width is 0.32")
+        Check(Near(inner:width, 0.34), "inner bead width is 0.34")
+    end
+
+    // Shell meta-scheme (paper 4) around inward distributed, two walls, so at most four beads across.
+    action TestShellScheme()
+        InwardDistributed inward
+        ShellScheme shell
+        shell:SetBase(inward)
+        shell:maxBeads = 4
+
+        Check(shell:QuantizeCount(10.0) = 4, "the shell caps the count at four beads")
+        Check(shell:QuantizeCount(1.2) = 3, "below the cap the shell keeps the base count")
+
+        Array<Bead> below = shell:Beads(4, 0.8)
+        Array<Bead> plain = inward:Beads(4, 0.8)
+        Bead b0 = below:Get(0)
+        Bead p0 = plain:Get(0)
+        Check(Near(b0:width, p0:width) and Near(b0:location, p0:location), "below the switch the shell is the base scheme")
+
+        Array<Bead> wide = shell:Beads(4, 5.0)
+        Bead w0 = wide:Get(0)
+        Bead w1 = wide:Get(1)
+        Bead w2 = wide:Get(2)
+        Check(Near(w0:width, 0.4) and Near(w1:width, 0.4), "far above the switch the walls are the preferred width")
+        Check(Near(w0:location, 0.2) and Near(w1:location, 0.6), "the walls sit a half and one and a half widths in")
+        Check(w2:location > 5.0, "the far side's beads lie past the centre, so they never land on this side")
+
+        Array<Bead> atSwitch = shell:Beads(4, 0.9)
+        Array<Bead> baseSwitch = inward:Beads(4, 0.9)
+        Bead s0 = atSwitch:Get(0)
+        Bead t0 = baseSwitch:Get(0)
+        Check(Near(s0:width, t0:width), "at the switch diameter the shell joins the base scheme without a jump")
+    end
+
+    // Widening meta-scheme (paper 4): 2 r_min = 0.1, w_min = 0.3, on top of inward distributed.
+    action TestWideningScheme()
+        InwardDistributed inward
+        WideningScheme widen
+        widen:SetBase(inward)
+
+        Check(widen:QuantizeCount(0.05) = 0, "a feature narrower than the minimum feature size gets no bead")
+        Check(widen:QuantizeCount(0.15) = 1, "a feature from the minimum size up to w* gets one bead")
+        Check(widen:QuantizeCount(0.8) = 2, "a feature wider than w* keeps the base count")
+
+        Array<Bead> thin = widen:Beads(1, 0.1)
+        Bead t0 = thin:Get(0)
+        Check(Near(t0:width, 0.3), "a single bead in a 0.2 mm feature is widened to w_min")
+        Check(Near(t0:location, 0.1), "a widened bead stays on the centre line")
+
+        Array<Bead> mid = widen:Beads(1, 0.18)
+        Bead m0 = mid:Get(0)
+        Check(Near(m0:width, 0.36), "a single bead wider than w_min keeps 2r")
+    end
+
+    // q^-1 (paper Eq. 5): the base steps from n to n + 1 at (n + 1/2) w*; widening steps from 0 to 1 at its
+    // minimum feature size 2 r_min = 0.1 and uses the base above that; the shell passes the base's steps on.
+    action TestTransitionDiameters()
+        InwardDistributed inward
+        Check(Near(inward:TransitionDiameter(0), 0.2) and Near(inward:TransitionDiameter(2), 1.0),
+              "inward distributed steps from n to n + 1 at (n + 1/2) w*")
+
+        WideningScheme widen
+        widen:SetBase(inward)
+        Check(Near(widen:TransitionDiameter(0), 0.1), "widening steps from 0 to 1 beads at its minimum feature size")
+        Check(Near(widen:TransitionDiameter(1), 0.6), "above one bead, widening uses the base scheme's steps")
+
+        ShellScheme shell
+        shell:SetBase(inward)
+        shell:maxBeads = 4
+        Check(Near(shell:TransitionDiameter(3), 1.4), "the shell passes the base scheme's steps on")
+    end
+
+    // Paper 4: the diameters where the beading changes non-linearly. None for inward distributed; the shell
+    // (M = 4) adds M w*, (M + 1/2) w* and (M + 1) w* = 1.6, 1.8 and 2.0; widening around it adds its minimum
+    // feature size, 0.1.
+    action TestNonlinearDiameters()
+        InwardDistributed inward
+        Array<number> none = inward:NonlinearDiameters()
+        Check(none:GetSize() = 0, "inward distributed has no non-linear diameters")
+
+        ShellScheme shell
+        shell:SetBase(inward)
+        shell:maxBeads = 4
+        Array<number> shellDiameters = shell:NonlinearDiameters()
+        Check(shellDiameters:GetSize() = 3 and Near(shellDiameters:Get(0), 1.6) and Near(shellDiameters:Get(1), 1.8)
+              and Near(shellDiameters:Get(2), 2.0), "the shell's non-linear diameters are 1.6, 1.8 and 2.0")
+
+        WideningScheme widen
+        widen:SetBase(shell)
+        Array<number> all = widen:NonlinearDiameters()
+        Check(all:GetSize() = 4 and Near(all:Get(3), 0.1), "widening adds its minimum feature size to the shell's")
+    end
+end

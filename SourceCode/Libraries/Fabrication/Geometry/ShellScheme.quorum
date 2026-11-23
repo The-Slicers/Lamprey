@@ -1,0 +1,112 @@
+package Libraries.Fabrication.Geometry
+
+use Libraries.Containers.Array
+use Libraries.Fabrication.Geometry.Bead
+use Libraries.Fabrication.Geometry.BeadingScheme
+
+// the shell meta-scheme around a base scheme that limits how many walls a part gets
+// wider parts get nozzle width walls, narrower regions get variable-width beads
+// middle is left for infill
+
+class ShellScheme is BeadingScheme
+    // scheme being wrapped (e.g. inward distributed)
+    BeadingScheme base
+    // most beads across a feaure (2x the wall count)
+    public integer maxBeads = 4
+
+    // connects meta scheme to scheme it wraps
+    action SetBase(BeadingScheme scheme)
+        base = scheme
+    end
+
+    // the bead count, always <= maxBeads
+    // q'(d)
+    action QuantizeCount(number diameter) returns integer
+        integer q = base:QuantizeCount(diameter)
+        if q > maxBeads
+            return maxBeads
+        end
+        return q
+    end
+
+    // decides a bead's width and location given a feature that has a width of d = 2r and n beads
+    action Beads(integer n, number r) returns Array<Bead>
+        // determining diameter of where the base scheme increases by one bead (the 'switch' diameter)
+        number w = parent:BeadingScheme:preferredWidth
+        number d = 2.0 * r
+        number dSwitch = (cast(number, maxBeads) + 0.5) * w 
+
+        // below the 'switch' (diameter where base scheme would add a bead), the beads are the base scheme's
+        if n < maxBeads or d <= dSwitch
+            return base:Beads(n, r)
+        end
+
+        // above the 'switch,' base scheme uses more beads than maxBeads allows, so shell handles setting the widths instead
+
+        // the ends of a blend
+        Array<Bead> atSwitch = base:Beads(maxBeads, dSwitch / 2.0)
+        Array<Bead> preferred = base:Beads(maxBeads, cast(number, maxBeads) * w / 2.0)
+
+        // finding how far past the switch (t)
+        // 0 is at the switch, 1 is at switch + w*/2 and anything wider
+        number t = (d - dSwitch) / (0.5 * w)
+        if t > 1.0
+            t = 1.0
+        end
+
+        // the widths are fraction t from its width at the switch to its preferred width
+        Array<Bead> beads
+        integer i = 0
+        repeat while i < maxBeads
+            Bead a = atSwitch:Get(i)
+            Bead p = preferred:Get(i)
+            Bead b
+            b:width = (1.0 - t) * a:width + t * p:width
+            beads:Add(b)
+            i = i + 1
+        end
+
+        // the walls are narrower than the feature, hug sides and leave middle empty
+        number edge = 0.0
+        integer k = 0
+        repeat while k < maxBeads / 2
+            // first half of beads are laid side by side from this side of the outline
+            Bead near = beads:Get(k)
+            near:location = edge + near:width / 2.0
+            edge = edge + near:width
+
+            // the second half of the beads mirrors the first half (which are on the other side)
+            // i.e. last bead b mirrors bead 0, second to last bead (b-1) mirrors bead 1, etc.
+            Bead far = beads:Get(maxBeads - 1 - k)
+            far:location = d - near:location
+            k = k + 1
+        end
+        return beads
+    end
+
+    // the count never goes above maxBeads, so only the base scheme's steps below it are ever asked for
+    action TransitionDiameter(integer n) returns number
+        return base:TransitionDiameter(n)
+    end
+
+    // lists the widths where the shell rules change
+    // skeleton needs a node at eachS
+    action NonlinearDiameters returns Array<number>
+        number w = parent:BeadingScheme:preferredWidth
+        number m = cast(number, maxBeads)
+        Array<number> diameters = base:NonlinearDiameters()
+
+        // add skeleton node at M beads at nozzle width
+        // M * w*
+        diameters:Add(m * w)            
+        
+        // add skeleton node where blend begins
+        // q^-1(M) = (M + 1/2) w*
+        diameters:Add((m + 0.5) * w)
+
+        // add skeleton node where blend ends
+        // q^-1(M) + w*/2 = (M + 1) w*
+        diameters:Add((m + 1.0) * w)    
+        return diameters
+    end
+end

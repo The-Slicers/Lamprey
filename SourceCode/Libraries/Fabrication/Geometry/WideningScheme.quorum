@@ -1,0 +1,72 @@
+package Libraries.Fabrication.Geometry
+
+use Libraries.Containers.Array
+use Libraries.Fabrication.Geometry.BeadingScheme
+use Libraries.Fabrication.Geometry.Bead
+
+// widening meta-scheme around a base scheme 
+// prevents thin features from disappearing and widens beads that are too thin to print reliably
+
+class WideningScheme is BeadingScheme
+    BeadingScheme base
+    public number minFeatureSize = 0.1  // 0.25 * line width (set from adaptive path)
+    public number minBeadWidth = 0.3    // 0.75 * line width (set from adaptive path)
+
+    // connect widening scheme to base scheme
+    action SetBase(BeadingScheme scheme)
+        base = scheme
+    end
+
+    // determine bead count for a feature that is d wide
+    action QuantizeCount(number diameter) returns integer
+        number w = parent:BeadingScheme:preferredWidth
+
+        // feature too thin, no bead
+        if diameter < minFeatureSize
+            return 0
+        end
+
+        // if within [minFeatureSize, nozzle width] range, print a single bead
+        if diameter < w
+            return 1
+        end
+
+        // use the base scheme's count if atleast a width of a nozzle
+        return base:QuantizeCount(diameter)
+    end
+
+    // widening a bead
+    action Beads(integer n, number r) returns Array<Bead>
+        // strat with base scheme's beads
+        number w = parent:BeadingScheme:preferredWidth
+        Array<Bead> beads = base:Beads(n, r)
+
+        // if feature is thinner than nozzle, only one bead
+        // if narrower than minBeadWidth, widen
+        if n >= 1 and 2.0 * r < w and beads:GetSize() > 0
+            Bead first = beads:Get(0)
+            if first:width < minBeadWidth
+                first:width = minBeadWidth
+            end
+        end
+        return beads
+    end
+
+    // the width where bead count increases by 1
+    // 0 to 1 is done at the min feature size, other increases done by base scheme
+    action TransitionDiameter(integer n) returns number
+        if n = 0 and minFeatureSize > 0.0
+            return minFeatureSize
+        end
+        return base:TransitionDiameter(n)
+    end
+
+    // adding a skeleton node were bead width change
+    action NonlinearDiameters returns Array<number>
+        Array<number> diameters = base:NonlinearDiameters()
+        if minFeatureSize > 0.0
+            diameters:Add(minFeatureSize)
+        end
+        return diameters
+    end
+end

@@ -1,0 +1,92 @@
+package Libraries.Fabrication.Geometry
+
+use Libraries.Containers.Array
+use Libraries.Fabrication.Geometry.BeadingScheme
+use Libraries.Fabrication.Geometry.Bead
+use Libraries.Fabrication.Geometry.GeometryUtilities
+
+// this is the inward distributed beading scheme
+
+class InwardDistributed is BeadingScheme
+    public number centreSpread = 2.0
+    
+    GeometryUtilities util
+
+    // count is the diameter in preferred widths rounded to nearest whole number
+    // q(d) = floor(d / w* + 1/2)
+    action QuantizeCount(number diameter) returns integer
+        number w = parent:BeadingScheme:preferredWidth
+        return util:FloorToInt(diameter / w + 0.5)
+    end
+
+    // the beading B(n,r)
+    // returns each bead width and location so the n beads fill the exact feature's width
+    action Beads(integer n, number r) returns Array<Bead>
+        Array<Bead> beads
+
+        // no beads, feature too thin
+        if n <= 0
+            return beads
+        end
+
+        // calculate preferred width and how far the feature's actual width is from it
+        number w = parent:BeadingScheme:preferredWidth
+        number discrepancy = 2.0 * r - cast(number, n) * w
+
+        // bead closest to center changes the most, outerbeads stay close to nozzle width (w*)
+        // weights: 1 - (distance from centre / N)^2, clamped at zero; table 1f
+        Array<number> weights
+        number total = 0.0
+        integer i = 0
+        repeat while i < n
+
+            // distance of bead to middle of row
+            number fromCentre = cast(number, i) - (cast(number, n) - 1.0) / 2.0
+            number x = fromCentre / centreSpread
+            number weight = 1.0 - x * x
+
+            // no change for beads more than N beads from the center (keep changes near middle)
+            if weight < 0.0
+                weight = 0.0
+            end
+
+            weights:Add(weight)
+            total = total + weight
+            i = i + 1
+        end
+
+        // calculate new widths for each bead
+        // preferred width PLUS its share of the discrepancy (its weight / total weight)
+        i = 0
+        repeat while i < n
+            Bead bead
+
+            // widths should add up to n * w* + discrepancy (i.e. 2r)
+            if total > 0.0
+                bead:width = w + discrepancy * weights:Get(i) / total
+
+            // if every weight is 0, all beads are equal (2r/n)
+            else
+                bead:width = 2.0 * r / cast(number, n)
+            end
+            beads:Add(bead)
+            i = i + 1
+        end
+
+        // setting locations for each bead (laying beads side by side from the outline towards the center)
+        number edge = 0.0
+        i = 0
+        repeat while i < n
+            Bead bead = beads:Get(i)
+
+            // next bead starts where previous edge (the widths so far) ends
+            // bead's center is at prev edge's width plus half of its own
+            bead:location = edge + bead:width / 2.0
+            edge = edge + bead:width
+            beads:Set(i, bead)
+            i = i + 1
+        end
+
+        return beads
+    end
+end

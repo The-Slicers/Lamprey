@@ -1,0 +1,8 @@
+package Libraries.Fabrication.Geometry
+
+// one bead per skeleton node
+
+class Bead
+    public number width = 0.0
+    public number location = 0.0
+end
