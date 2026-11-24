@@ -106,6 +106,33 @@
         "joinInfill": true
     },
 
+    "bambu-p2s-adaptive": {
+        "_note": "Adaptive (variable-width) walls, with the filament and cooling settings of Bambu Studio's own slice of this plate (3dbenchy_BAMBU_arachne.gcode). bambu-p2s is left unchanged, so uniform slices still match the baseline G-code.",
+        "inherits": "bambu-p2s",
+        "adaptive": true,
+
+        "_flowNote": "Bambu's profile for this filament: filament_max_volumetric_speed 12, filament_flow_ratio 0.98, 220 C. bambu-p2s uses 21 mm3/s (Bambu PLA Basic) at 210 C, which pushed walls and infill to 200-260 mm/s.",
+        "maxFlow": 12,
+        "flow": 0.98,
+        "nozzleTemperature": 220,
+
+        "_firstLayerNote": "Bambu doesn't boost the first layer (it uses 0.5 mm lines instead); 1.05 put down 5-6% more than Bambu on layer 0.",
+        "firstLayerFlow": 1.0,
+
+        "_coolingNote": "Bambu's slow_down_layer_time 8 and slow_down_min_speed 20. With 4 s, the hull and cabin layers printed in 3-4 s, too soon for the layer below to cool: rope-like walls and sagging overhangs.",
+        "minLayerTime": 8,
+        "minPrintSpeed": 20,
+
+        "_fillNote": "Infill reaches 15% of a line width into the innermost adaptive wall, like Bambu's infill_wall_overlap.",
+        "adaptiveFillOverlap": 0.15
+    },
+
+    "bambu-p2s-uniform-fair": {
+        "_note": "Uniform walls with the same settings as bambu-p2s-adaptive, for comparing the two on a real print: only the walls differ.",
+        "inherits": "bambu-p2s-adaptive",
+        "adaptive": false
+    },
+
     "bambu-p2s-petg": {
         "_note": "Example of a filament variant. Export a sliced PETG plate from Bambu Studio and point bambuSettingsTemplate at it, or the 3MF keeps the PLA template's other filament settings (Lamprey warns about this).",
         "inherits": "bambu-p2s",

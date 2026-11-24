@@ -59,6 +59,7 @@ class ProfileSchema
         AddInteger("paths", "wallCount", "2", 0, 50, "Number of walls")
         AddNumber("paths", "infillDensity", "0.2", 0, 1, "Sparse infill: 0 = none, 1 = solid")
         AddNumber("paths", "infillOverlap", "0.25", 0, 1, "How far infill reaches into the inner wall, as a fraction of the line width")
+        AddNumber("paths", "adaptiveFillOverlap", "0.25", 0, 1, "How far infill reaches into the innermost adaptive wall, as a fraction of the line width")
         AddInteger("paths", "topLayers", "4", 0, 100, "Solid layers under top surfaces")
         AddInteger("paths", "bottomLayers", "4", 0, 100, "Solid layers over bottom surfaces")
         AddBoolean("paths", "joinFirstLayer", "true", "Chain the first layer's solid fill into continuous zigzags")

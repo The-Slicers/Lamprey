@@ -350,6 +350,7 @@ class SliceJob
         paths:SetWallCount(profile:GetInteger("wallCount"))
         paths:SetInfillDensity(profile:GetNumber("infillDensity"))
         paths:SetInfillOverlap(profile:GetNumber("infillOverlap"))
+        paths:SetAdaptiveFillOverlap(profile:GetNumber("adaptiveFillOverlap"))
         paths:SetTopLayers(profile:GetInteger("topLayers"))
         paths:SetBottomLayers(profile:GetInteger("bottomLayers"))
         paths:SetJoinFirstLayer(profile:GetBoolean("joinFirstLayer"))

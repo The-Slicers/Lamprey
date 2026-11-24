@@ -25,7 +25,7 @@ class Main
     boolean runTests = false
     text modelPath = "assets/3dbenchy.stl"
     text profilesPath = "Profiles/profiles.json"
-    text profileName = "bambu-p2s" // or "bambu-a1", "bambu-p2s", "ender3-v2", "ender3-v2-fine", "bambu-p2s-petg"
+    text profileName = "bambu-p2s-adaptive" // or "bambu-a1", "bambu-p2s", "bambu-p2s-adaptive" (bambu-p2s but with variable-width walls), "ender3-v2", "ender3-v2-fine", "bambu-p2s-petg"
     text outputFolder = "Outputs"
 
     action Main
@@ -44,9 +44,8 @@ class Main
             profiles:Load(profilesPath)
             PrintWarnings(profiles:GetWarnings())
             Profile profile = profiles:Require(profileName)
-            profile:Set("supportsEnabled", "true")
+            profile:Set("supportsEnabled", "false")
             profile:Set("adhesionType", "none")
-            profile:Set("adaptive", "true")
     
             text gcodePath = outputFolder + "/" + BaseName(modelPath) + ".gcode"
             SliceJob job
