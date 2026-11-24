@@ -1,6 +1,0 @@
-package Libraries.Fabrication.Geometry
-
-// declaring java build method to use in quorum
-class VoronoiNative
-    system action Build(text inputPath, text outputPath) returns integer
-end

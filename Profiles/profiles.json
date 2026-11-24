@@ -198,6 +198,12 @@
         "fanOffLayers": 2,
         "fanFullLayer": 5,
 
+        "adaptive": true,
+
+        "_fillNote": "Infill reaches 15% of a line width into the innermost adaptive wall, like Bambu's infill_wall_overlap.",
+        "adaptiveFillOverlap": 0.15,
+
+
         "_joinNote": "Solid fill and sparse infill are chained into zigzags, so each layer has a few long paths instead of a separate start, stop and jump for every line.",
         "joinSkin": true,
         "joinInfill": true

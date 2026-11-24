@@ -28,6 +28,7 @@ class AdaptivePath
     number minFeatureShare = 0.25
     number sampleShare = 0.25           // outline sample spacing for the voronoi diagram, as a share of a width
     number widthSlack = 0.01            // a bead up to this share wider than HighWidth is printed at HighWidth
+    integer clampedPoints = 0           // bead points printed at HighWidth because they asked for more
                                         // (the sampled skeleton's radius can be a few micrometres over)
 
     number tolerance = 0.000001
@@ -44,6 +45,7 @@ class AdaptivePath
     action Generate(Array<Contour> outline) returns Array<Contour>
         valid = false
         reason = ""
+        clampedPoints = 0
         Array<Contour> walls
 
         if outline:GetSize() = 0
@@ -126,7 +128,7 @@ class AdaptivePath
                 integer k = from
                 repeat while k < to
                     integer s = tx:polySites:Get(k)
-                    run:AddPoint(tx:siteX:Get(s), tx:siteY:Get(s), Capped(tx:siteWidth:Get(s)))
+                    run:AddPoint(tx:siteX:Get(s), tx:siteY:Get(s), Capped(tx:siteWidth:Get(s), tx:polyIndex:Get(p)))
                     k = k + 1
                 end
 
@@ -236,7 +238,7 @@ class AdaptivePath
             if tx:dotIndex:Get(d) < WallCount
 
                 // get half of line that can hold dot's area (pi w^2 / 4) 
-                number dotWidth = Capped(tx:dotWidth:Get(d))
+                number dotWidth = Capped(tx:dotWidth:Get(d), tx:dotIndex:Get(d))
                 number half = 3.141592653589793 * dotWidth / 8.0    // half of line
                 number limit = 0.95 * tx:dotRadius:Get(d)
                 if half > limit
@@ -357,13 +359,25 @@ class AdaptivePath
         return walls
     end
 
-    // a width just over HighWidth (within widthSlack) is HighWidth: the sampled skeleton's radius can be a few
-    // micrometres over the true one, and a feature exactly HighWidth wide would otherwise fail the layer
-    private action Capped(number width) returns number
-        if width > HighWidth() and width <= HighWidth() * (1.0 + widthSlack)
+    /*
+    The width a bead is printed at. An outer bead is never printed wider than HighWidth. BeadTransitions
+    dissolves a short stretch where the bead count would go up and straight back down (as on a sculpted model's
+    bumps), so there the beads share a wider feature: on a werewolf model the outer bead reached 0.64-0.76 mm,
+    and rejecting those layers sent 70 of 352 to uniform walls. Printed at HighWidth the bead leaves at most a
+    few hundredths of a millimetre unfilled in that stretch. A width just over HighWidth (within widthSlack,
+    the sampled skeleton's radius being a few micrometres over the true one) is HighWidth for every bead.
+    */
+    private action Capped(number width, integer index) returns number
+        if width > HighWidth() and (index = 0 or width <= HighWidth() * (1.0 + widthSlack))
+            clampedPoints = clampedPoints + 1
             return HighWidth()
         end
         return width
+    end
+
+    // how many bead points the last Generate printed at HighWidth instead of wider
+    action GetClampedCount returns integer
+        return clampedPoints
     end
 
     // calculates width of a strip

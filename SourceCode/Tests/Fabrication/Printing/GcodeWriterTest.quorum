@@ -3,6 +3,8 @@ package Tests.Fabrication.Printing
 use Libraries.Containers.Array
 use Libraries.Language.Errors.InvalidArgumentError
 use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Geometry.PathRole
+use Libraries.Compute.Math
 use Libraries.Fabrication.Slicing.PathGenerator
 use Libraries.Fabrication.Slicing.PathOrderer
 use Libraries.Fabrication.Printing.GcodeWriter
@@ -47,6 +49,7 @@ class GcodeWriterTest is LampreyTest
         TopSurfaceAndIroning()
         OverhangSlowdown()
         SeamGapAndWipe()
+        SupportTineRetracts()
         RejectsBadSettings()
     end
 
@@ -365,6 +368,70 @@ class GcodeWriterTest is LampreyTest
         ExpectTrue(wipes >= 100, "every outer wall loop ends with a retracting wipe (" + wipes + " wipe moves)")
         ExpectTrue(wiped:GetFilamentLength() < plain:GetFilamentLength(), "the seam gap leaves out a little plastic")
         ExpectNumber(reader:GetMinRatio(), FullLineRatio(), FullLineRatio() * 0.02, "the walls themselves are unchanged")
+    end
+
+    /*
+    Travelling to a new support tine crosses an air gap, so it retracts however short the hop. A tine's inner
+    ring starts inside the loop just printed, so the hop to it stays over support and doesn't (on a tree-supported
+    benchy that was about 1,300 needless retracts).
+    */
+    action SupportTineRetracts
+        Case("support tines retract, a tine's inner ring doesn't")
+        PathRole roles
+        Array<Contour> paths
+        paths:Add(Ring(110.0, 110.0, 1.0, 3.141592653589793, roles:SUPPORT_WALL))   // tine A, starts at (109, 110)
+        paths:Add(Ring(110.0, 110.0, 0.5, 3.141592653589793, roles:SUPPORT_WALL))   // A's inner ring: 0.5 mm hop
+        paths:Add(Ring(107.8, 110.0, 0.6, 0.0, roles:SUPPORT_WALL))                 // tine B, 0.6 mm from A: 1.1 mm hop
+
+        GcodeWriter gcode = Writer()
+        gcode:SetRetractionLimit(1000, 1)
+        text path = files:Path("gcode/support-tines.gcode")
+        gcode:Write(paths, path)
+        GcodeReader reader
+        reader:Read(path)
+        Array<text> lines = reader:GetLines()
+
+        // retracts in the hop before each support loop (from its ;TYPE: line to its first printing move)
+        Array<integer> hops
+        integer loop = -1
+        boolean printing = false
+        integer i = 0
+        repeat while i < lines:GetSize()
+            text line = lines:Get(i)
+            if line:StartsWith(";TYPE:")
+                loop = loop + 1
+                hops:Add(0)
+                printing = false
+            elseif loop >= 0 and not printing
+                if line:StartsWith("G1 E-")
+                    hops:Set(loop, hops:Get(loop) + 1)
+                elseif line:StartsWith("G1 X") and line:Contains(" E") and not line:Contains(" E-")
+                    printing = true
+                end
+            end
+            i = i + 1
+        end
+        ExpectInteger(hops:GetSize(), 3, "three support loops")
+        if hops:GetSize() = 3
+            ExpectInteger(hops:Get(1), 0, "no retract for the hop to the tine's inner ring")
+            ExpectInteger(hops:Get(2), 1, "one retract for the short hop to the next tine")
+        end
+    end
+
+    // a closed loop of the given role around (cx, cy), starting at the given angle
+    action Ring(number cx, number cy, number radius, number start, integer role) returns Contour
+        Math math
+        Contour ring
+        integer k = 0
+        repeat while k < 24
+            number angle = start + 2.0 * 3.141592653589793 * cast(number, k) / 24.0
+            ring:AddPoint(cx + radius * math:Cosine(angle), cy + radius * math:Sine(angle))
+            k = k + 1
+        end
+        ring:closed = true
+        ring:role = role
+        ring:planeIndex = 0
+        return ring
     end
 
     action FullLineRatio returns number

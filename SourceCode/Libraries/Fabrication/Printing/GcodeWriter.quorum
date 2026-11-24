@@ -206,6 +206,7 @@ class GcodeWriter
     number totalFilament = 0.0
     number totalSeconds = 0.0
     integer lastRole = -1
+    Contour lastSupportLoop       // the last closed support wall written (to tell a tine's inner ring from a new tine)
     integer lastSpeed = -1
     NumberBuffer retractHistory
     integer skippedRetracts = 0
@@ -1337,6 +1338,8 @@ class GcodeWriter
             zKnown = false
             zPending = false
             lastRole = -1
+            Contour noLoop
+            lastSupportLoop = noLoop
             lastSpeed = -1
             return now
         end
@@ -1372,6 +1375,8 @@ class GcodeWriter
         zKnown = false
         zPending = false
         lastRole = -1
+        Contour noSupportLoop
+        lastSupportLoop = noSupportLoop
         lastSpeed = -1
     end
 
@@ -1703,7 +1708,9 @@ class GcodeWriter
         Feature(feature)
 
         // a new tine, or a switch between model and support, means crossing
-        // an air gap: always retract for it, however short the move
+        // an air gap: always retract for it, however short the move. A
+        // support loop that starts inside the loop just printed is the same
+        // tine (its inner ring), so that hop stays over support.
         // short hops inside infill, or between ironing zigzags (the nozzle
         // stays over printed plastic), don't need a retract
         boolean infillToInfill = path:role = roles:INFILL and lastRole = roles:INFILL
@@ -1712,7 +1719,19 @@ class GcodeWriter
         end
         boolean supportNow = roles:IsSupport(path:role)
         boolean supportBefore = roles:IsSupport(lastRole)
-        boolean newPart = path:role = roles:SUPPORT_WALL or (lastRole >= 0 and supportNow not= supportBefore)
+        boolean newPart = lastRole >= 0 and supportNow not= supportBefore
+        if path:role = roles:SUPPORT_WALL
+            boolean sameTine = false
+            if roles:IsSupport(lastRole)
+                sameTine = lastSupportLoop:ContainsPoint(path:HeadX(), path:HeadY())
+            end
+            if not sameTine
+                newPart = true
+            end
+            if path:closed
+                lastSupportLoop = path
+            end
+        end
         lastRole = path:role
         TravelTo(path:HeadX() + offsetX, path:HeadY() + offsetY, newPart, infillToInfill)
         Unretract()

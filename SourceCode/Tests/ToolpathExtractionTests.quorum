@@ -37,6 +37,7 @@ class ToolpathExtractionTests
         TestBarCentreBeadMadeOnce()
         TestSmallSquareIsADot()
         TestShallowCornerJoinsTheBead()
+        TestFurredEdgeOuterBeadCloses()
 
         output "ToolpathExtraction tests: passed " + passed + ", failed " + failed
         return failed
@@ -588,6 +589,54 @@ class ToolpathExtractionTests
         end
         Check(atBend >= 1, "a corner site joins the outer bead at the bend (" + atBend + " there, " + corners + " in all)")
         Check(worst <= 0.01, "every corner site sits at its bead's location from the outline (worst off by " + worst + " mm)")
+    end
+
+    // 10 by 4 mm block whose bottom edge zigzags 0.05 mm every 0.25 mm (like a sculpted model's fur): many shallow
+    // corners, and skeleton nodes with two corners beside them
+    private action FurredBlock returns Array<Contour>
+        Array<Contour> outline
+        Contour c
+        integer k = 0
+        repeat while k < 40
+            number y = 0.0
+            if k mod 2 = 1
+                y = 0.05
+            end
+            c:AddPoint(0.25 * k, y)
+            k = k + 1
+        end
+        c:AddPoint(10.0, 0.0)
+        c:AddPoint(10.0, 4.0)
+        c:AddPoint(0.0, 4.0)
+        c:closed = true
+        outline:Add(c)
+        return outline
+    end
+
+    // The outer bead runs right round the furred block without a break. Where a node has two corners beside it,
+    // each corner's two loose ends must be joined to each other (closest first), not to the first loose end found
+    // there (on a werewolf model that left one break in the outer wall every few layers).
+    action TestFurredEdgeOuterBeadCloses()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BeadPlacement bp
+        ToolpathExtraction tx
+        RunPipeline(st, cm, bt, bp, tx, FurredBlock())
+        integer openRuns = 0
+        integer closedRuns = 0
+        integer p = 0
+        repeat while p < tx:polyStart:GetSize()
+            if tx:polyIndex:Get(p) = 0
+                if tx:polySites:Get(tx:polyStart:Get(p)) = tx:polySites:Get(RunEnd(tx, p) - 1)
+                    closedRuns = closedRuns + 1
+                else
+                    openRuns = openRuns + 1
+                end
+            end
+            p = p + 1
+        end
+        Check(closedRuns >= 1 and openRuns = 0, "the furred block's outer bead runs unbroken (" + closedRuns + " closed, " + openRuns + " open pieces)")
     end
 
     private action Near(ToolpathExtraction tx, integer s, number x, number y, number within) returns boolean

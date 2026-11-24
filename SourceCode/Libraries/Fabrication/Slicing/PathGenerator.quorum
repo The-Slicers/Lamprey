@@ -80,6 +80,7 @@ class PathGenerator
     // 1 if adaptive wall, 0 when uniform
     IntegerBuffer planeAdaptive
     integer adaptiveFallbacks = 0
+    integer adaptiveClamped = 0     // adaptive bead points printed at the widest allowed width instead of wider
 
     Array<Contour> walls
     Array<Contour> skin
@@ -762,6 +763,7 @@ class PathGenerator
     action Generate(Array<Contour> contours, integer planeCount)
         planeAdaptive:Empty()
         adaptiveFallbacks = 0
+        adaptiveClamped = 0
         walls:Empty()
         skin:Empty()
         infill:Empty()
@@ -840,6 +842,7 @@ class PathGenerator
                     Array<Contour> APwalls = arachne:Generate(layer)
                     if arachne:IsValid()
                         useArachne = true
+                        adaptiveClamped = adaptiveClamped + arachne:GetClampedCount()
                         planeAdaptive:Set(p, 1)
                         planeWalls = APwalls
                         integer aw = 0
@@ -973,6 +976,7 @@ class PathGenerator
             output "extruded mm2: walls " + ExtrudedArea(walls) + ", solid " + (ExtrudedArea(skin) + ExtrudedArea(topSurface)) + ", infill " + ExtrudedArea(infill) + ", region " + RegionArea(contours)
             if adaptive
                 output "adaptive fallback planes " + adaptiveFallbacks + " of " + planeTotal
+                output "adaptive bead points printed at the widest allowed width: " + adaptiveClamped
             end
         end
     end

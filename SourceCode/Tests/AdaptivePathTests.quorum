@@ -25,6 +25,7 @@ class AdaptivePathTests
         TestEllPointsStayInside()
         TestRingHasCentreBeadOnEverySide()
         TestCentreBeadSurvivesRounding()
+        TestShortBulgeKeepsAdaptiveWalls()
 
         output "AdaptivePath tests: passed " + passed + ", failed " + failed
         return failed
@@ -398,4 +399,48 @@ class AdaptivePathTests
         end
         Check(missing = 0, "every side of 31 offset squares keeps its centre bead (" + missing + " missing)")
     end
+
+    // A 0.9 mm strip with a 1.3 mm bulge 0.8 mm long: the bulge would take three beads, but BeadTransitions
+    // dissolves so short a rise, so the strip's two beads widen over it (about 0.65 mm in a Java model of the
+    // pipeline). The outer bead is printed at HighWidth there instead of the layer falling back to uniform walls
+    // (a werewolf model lost 70 of 352 layers that way).
+    action TestShortBulgeKeepsAdaptiveWalls()
+        Contour c
+        c:AddPoint(0.0, 0.0)
+        c:AddPoint(10.0, 0.0)
+        c:AddPoint(10.0, 0.9)
+        c:AddPoint(5.7, 0.9)
+        c:AddPoint(5.4, 1.3)
+        c:AddPoint(4.6, 1.3)
+        c:AddPoint(4.3, 0.9)
+        c:AddPoint(0.0, 0.9)
+        c:closed = true
+        Array<Contour> outline
+        outline:Add(c)
+
+        AdaptivePath path
+        path:SetWidth(0.4)
+        path:SetWallCount(2)
+        Array<Contour> walls = path:Generate(outline)
+        Check(path:IsValid(), "a strip with a short bulge keeps adaptive walls (" + path:Reason() + ", "
+              + path:GetClampedCount() + " points printed at the widest width)")
+
+        boolean capped = true
+        integer w = 0
+        repeat while w < walls:GetSize()
+            Contour wall = walls:Get(w)
+            if wall:wallIndex = 0
+                integer k = 0
+                repeat while k < wall:GetSize()
+                    if wall:ws:Get(k) > path:HighWidth() + 0.000001
+                        capped = false
+                    end
+                    k = k + 1
+                end
+            end
+            w = w + 1
+        end
+        Check(capped, "no outer wall point is wider than HighWidth")
+    end
+
 end

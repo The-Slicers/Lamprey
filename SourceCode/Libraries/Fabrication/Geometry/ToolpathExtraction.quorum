@@ -457,33 +457,87 @@ class ToolpathExtraction
     */
     private action JoinCorners(SkeletalTrapezoidation st)
         integer count = siteX:GetSize()
-        Array<boolean> joined
-        integer s = 0
-        repeat while s < count
-            joined:Add(false)
-            s = s + 1
-        end
 
-        // the first loose rib site of each node and bead
-        HashTable<text, integer> loose
-        s = 0
+        // the loose rib sites of each node and bead
+        HashTable<text, integer> groupOf
+        Array<IntegerBuffer> groups
+        integer s = 0
         repeat while s < count
             integer rib = siteRib:Get(s)
             if rib >= 0 and SiteDegree(s) = 1
                 text key = "" + st:ribNode:Get(rib) + "_" + siteIndex:Get(s)
-                if not loose:HasKey(key)
-                    loose:Add(key, s)
-                else
-                    integer other = loose:GetValue(key)
-                    if not joined:Get(other)
-                        if JoinCorner(st, other, s)
-                            joined:Set(other, true)
-                            joined:Set(s, true)
-                        end
-                    end
+                if not groupOf:HasKey(key)
+                    IntegerBuffer fresh
+                    groups:Add(fresh)
+                    groupOf:Add(key, groups:GetSize() - 1)
                 end
+                IntegerBuffer group = groups:Get(groupOf:GetValue(key))
+                group:Add(s)
             end
             s = s + 1
+        end
+
+        // a node can have two corners beside it (four loose ends): join the closest ends first
+        integer g = 0
+        repeat while g < groups:GetSize()
+            JoinGroup(st, groups:Get(g))
+            g = g + 1
+        end
+    end
+
+    // joins the loose ends of one node and bead in pairs, closest pair first
+    private action JoinGroup(SkeletalTrapezoidation st, IntegerBuffer group)
+        integer n = group:GetSize()
+        if n < 2
+            return now
+        end
+        Array<boolean> joined
+        Array<boolean> tried        // pair (i, j) at i * n + j
+        integer i = 0
+        repeat while i < n
+            joined:Add(false)
+            i = i + 1
+        end
+        i = 0
+        repeat while i < n * n
+            tried:Add(false)
+            i = i + 1
+        end
+
+        boolean searching = true
+        repeat while searching
+            // the closest pair not yet tried whose ends are both still loose
+            integer bestI = -1
+            integer bestJ = -1
+            number best = 0.0
+            i = 0
+            repeat while i < n
+                integer j = i + 1
+                repeat while j < n
+                    if not joined:Get(i) and not joined:Get(j) and not tried:Get(i * n + j)
+                        number dx = siteX:Get(group:Get(j)) - siteX:Get(group:Get(i))
+                        number dy = siteY:Get(group:Get(j)) - siteY:Get(group:Get(i))
+                        number d2 = dx * dx + dy * dy
+                        if bestI < 0 or d2 < best
+                            bestI = i
+                            bestJ = j
+                            best = d2
+                        end
+                    end
+                    j = j + 1
+                end
+                i = i + 1
+            end
+
+            if bestI < 0
+                searching = false
+            else
+                tried:Set(bestI * n + bestJ, true)
+                if JoinCorner(st, group:Get(bestI), group:Get(bestJ))
+                    joined:Set(bestI, true)
+                    joined:Set(bestJ, true)
+                end
+            end
         end
     end
 
