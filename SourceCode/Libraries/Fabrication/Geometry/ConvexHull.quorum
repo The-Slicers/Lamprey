@@ -256,10 +256,10 @@ class ConvexHull
         Integer32BitArray temp
         indices:SetSize(size)
         temp:SetSize(size)
+        temp:Fill(0)
         integer i = 0
         repeat while i < size
             indices:Set(i, i)
-            temp:Set(i, 0)
             i = i + 1
         end
         MergeSort(xs, ys, indices, temp, 0, size - 1)
