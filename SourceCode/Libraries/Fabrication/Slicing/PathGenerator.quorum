@@ -851,7 +851,9 @@ class PathGenerator
                         end
                     else
                         adaptiveFallbacks = adaptiveFallbacks + 1
-                        output "adaptive fallback plane " + p + ": " + arachne:Reason()
+                        if progress
+                            output "adaptive fallback plane " + p + ": " + arachne:Reason()
+                        end
                     end
 //                    output "plane " + p + " valid " + arachne:IsValid() + " walls " + APwalls:GetSize()
                 end
@@ -925,8 +927,11 @@ class PathGenerator
 //                Array<Contour> fillArea = Inset(layer2, inset)
                 Array<Contour> fillArea
                 if planeAdaptive:Get(p) = 1
-                    // adaptive planes: the fill reaches adaptiveFillOverlap line widths into the innermost wall
-                    fillArea = Inset(layer2, lineWidth * (cast(number, wallCount) - adaptiveFillOverlap))
+                    // adaptive planes: the fill reaches adaptiveFillOverlap line widths into the innermost wall.
+                    // fillArea holds the fill lines' centres, so (as for uniform planes) it sits half a line width
+                    // further in than the edge the lines may reach: the walls end wallCount widths in, and a line's
+                    // edge reaches adaptiveFillOverlap widths past that.
+                    fillArea = Inset(layer2, lineWidth * (cast(number, wallCount) + 0.5 - adaptiveFillOverlap))
                 else
                     fillArea = Inset(layer2, inset)
                 end
@@ -963,10 +968,12 @@ class PathGenerator
             Progress("fill", p)
             p = p + 1
         end
-        output "extruded mm2: walls " + ExtrudedArea(walls) + ", solid " + (ExtrudedArea(skin) + ExtrudedArea(topSurface)) + ", infill " + ExtrudedArea(infill) + ", region " + RegionArea(contours)
-        if adaptive
-            output "adaptive fallback planes " + adaptiveFallbacks + " of " + planeTotal
-//            ReportAdaptiveWalls()
+        // diagnostics, printed with SetProgress(true) (SliceJob's verbose output)
+        if progress
+            output "extruded mm2: walls " + ExtrudedArea(walls) + ", solid " + (ExtrudedArea(skin) + ExtrudedArea(topSurface)) + ", infill " + ExtrudedArea(infill) + ", region " + RegionArea(contours)
+            if adaptive
+                output "adaptive fallback planes " + adaptiveFallbacks + " of " + planeTotal
+            end
         end
     end
 
@@ -2280,8 +2287,9 @@ class PathGenerator
     end
 
     // area inside adative walls
-    // uses shell meta-scheme s.t. the walls are the preferred width if part is wide enough for infill
-    // infill area starts as on uniform planes
+    // the same as on uniform planes: the shell meta-scheme gives the walls their preferred width once a part is
+    // (2 * wallCount + 1) widths wide, so they end wallCount widths in. Narrower parts get no fill from Generate's
+    // fillArea (its centres need 2 * (wallCount + 0.5 - adaptiveFillOverlap) widths), and their walls fill them
     private action AdaptiveInner(Array<Contour> layer, Array<Contour> planeWalls) returns Array<Contour>
         return Inset(layer, lineWidth * cast(number, wallCount))
     end

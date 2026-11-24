@@ -5,7 +5,14 @@ rem     Plugins\build.bat
 setlocal EnableDelayedExpansion
 cd /d "%~dp0" || exit /b 1
 
-if exist native rmdir /s /q native
+rem VoronoiJava compiles against the JTS Topology Suite (see README, "Adaptive walls")
+set "JTS=jts-core-1.20.0.jar"
+if not exist "%JTS%" (
+    echo Plugins\%JTS% is missing: download it from 1>&2
+    echo   https://repo1.maven.org/maven2/org/locationtech/jts/jts-core/1.20.0/jts-core-1.20.0.jar 1>&2
+    goto :fail
+)
+
 if exist classes rmdir /s /q classes
 mkdir classes || goto :fail
 
@@ -22,8 +29,7 @@ if not exist sources.txt (
     goto :fail
 )
 
-if not exist native mkdir native
-javac --release 8 -h native -d classes @sources.txt || goto :fail
+javac --release 8 -cp "%JTS%" -d classes @sources.txt || goto :fail
 jar --create --file lamprey-plugins.jar -C classes . || goto :fail
 
 rmdir /s /q classes

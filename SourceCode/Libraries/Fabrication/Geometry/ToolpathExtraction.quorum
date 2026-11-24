@@ -19,6 +19,7 @@ class ToolpathExtraction
     public Array<integer> siteIndex
     public Array<integer> siteEdge
     public Array<integer> siteRib
+    public Array<integer> siteCorner        // the node of a site added at a convex corner (see JoinCorners), else -1
 
     // chords
     public Array<integer> segStart
@@ -52,6 +53,7 @@ class ToolpathExtraction
         siteIndex:Empty()
         siteEdge:Empty()
         siteRib:Empty()
+        siteCorner:Empty()
         siteSegs:Empty()
         segStart:Empty()
         segEnd:Empty()
@@ -208,6 +210,9 @@ class ToolpathExtraction
             te = te + 1
         end
 
+        // beads that turn a convex corner but have no edge to cross there
+        JoinCorners(st)
+
         // polylines: chain the chords
         // no chord used yet
         Array<boolean> used
@@ -337,6 +342,7 @@ class ToolpathExtraction
         siteIndex:Add(index)
         siteEdge:Add(edge)
         siteRib:Add(rib)
+        siteCorner:Add(-1)
         IntegerBuffer none
         siteSegs:Add(none)
     end
@@ -433,6 +439,124 @@ class ToolpathExtraction
         segOdd:Add(alongEdge)
 
         // list it at both its sites
+        integer g = segStart:GetSize() - 1
+        Attach(a, g)
+        Attach(b, g)
+    end
+
+    /*
+    A bead turning a convex corner of the outline crosses the corner's bisector (the skeleton edge between the
+    corner's two segments) and so continues from the trapezoids of one segment into those of the other. Where the
+    corner is shallow, the sampled skeleton has that edge only near the middle of the part or not at all: it stops
+    at a node with ribs to both segments, and the bead is left with two loose ends there, one on each rib, a few
+    hundredths of a millimetre apart. Those gaps are wider than AdaptivePath joins, so the wall came out in short
+    open pieces (one per outline segment) with a travel between each.
+
+    This joins each such pair (same node, same bead, one chord each) through the point where the bead's two offset
+    lines meet, which is where the bisector would have put the bead.
+    */
+    private action JoinCorners(SkeletalTrapezoidation st)
+        integer count = siteX:GetSize()
+        Array<boolean> joined
+        integer s = 0
+        repeat while s < count
+            joined:Add(false)
+            s = s + 1
+        end
+
+        // the first loose rib site of each node and bead
+        HashTable<text, integer> loose
+        s = 0
+        repeat while s < count
+            integer rib = siteRib:Get(s)
+            if rib >= 0 and SiteDegree(s) = 1
+                text key = "" + st:ribNode:Get(rib) + "_" + siteIndex:Get(s)
+                if not loose:HasKey(key)
+                    loose:Add(key, s)
+                else
+                    integer other = loose:GetValue(key)
+                    if not joined:Get(other)
+                        if JoinCorner(st, other, s)
+                            joined:Set(other, true)
+                            joined:Set(s, true)
+                        end
+                    end
+                end
+            end
+            s = s + 1
+        end
+    end
+
+    // joins loose rib sites a and b of one node through their corner point; false if they aren't at a convex corner
+    private action JoinCorner(SkeletalTrapezoidation st, integer a, integer b) returns boolean
+        number ax = siteX:Get(a)
+        number ay = siteY:Get(a)
+        number dx = siteX:Get(b) - ax
+        number dy = siteY:Get(b) - ay
+        number gap2 = dx * dx + dy * dy
+
+        // only ends closer than the bead is wide (and not in the same place, where there is nothing to join)
+        number width = siteWidth:Get(a)
+        if siteWidth:Get(b) > width
+            width = siteWidth:Get(b)
+        end
+        if gap2 >= width * width or gap2 < 0.000000000001
+            return false
+        end
+
+        // each bead end runs on along its offset line, square to its rib (node to foot)
+        integer ribA = siteRib:Get(a)
+        integer ribB = siteRib:Get(b)
+        integer node = st:ribNode:Get(ribA)
+        number jx = st:xs:Get(node)
+        number jy = st:ys:Get(node)
+        number ux = st:ys:Get(st:ribFoot:Get(ribA)) - jy
+        number uy = jx - st:xs:Get(st:ribFoot:Get(ribA))
+        number vx = st:ys:Get(st:ribFoot:Get(ribB)) - jy
+        number vy = jx - st:xs:Get(st:ribFoot:Get(ribB))
+
+        // where the lines meet: a + t u = b + q v (none if they are parallel, as on opposite walls)
+        number det = vx * uy - ux * vy
+        number scale2 = (ux * ux + uy * uy) * (vx * vx + vy * vy)
+        if det * det < 0.000001 * scale2
+            return false
+        end
+        number t = (vx * dy - dx * vy) / det
+        number cx = ax + t * ux
+        number cy = ay + t * uy
+
+        // a convex corner: the meeting point is beyond the ends (seen from the node) and close to them (the lines
+        // of two walls that taper together meet far away)
+        number mx = ax + dx / 2.0
+        number my = ay + dy / 2.0
+        number ex = cx - mx
+        number ey = cy - my
+        if ex * ex + ey * ey > gap2
+            return false
+        end
+        number fx = cx - jx
+        number fy = cy - jy
+        number gx = mx - jx
+        number gy = my - jy
+        if fx * fx + fy * fy < gx * gx + gy * gy
+            return false
+        end
+
+        // the corner site, and a chord to it from each end
+        integer index = siteIndex:Get(a)
+        AddSite(cx, cy, (siteWidth:Get(a) + siteWidth:Get(b)) / 2.0, index, -1, -1)
+        integer corner = siteX:GetSize() - 1
+        siteCorner:Set(corner, node)
+        AddCornerChord(a, corner, index)
+        AddCornerChord(corner, b, index)
+        return true
+    end
+
+    private action AddCornerChord(integer a, integer b, integer index)
+        segStart:Add(a)
+        segEnd:Add(b)
+        segIndex:Add(index)
+        segOdd:Add(false)
         integer g = segStart:GetSize() - 1
         Attach(a, g)
         Attach(b, g)

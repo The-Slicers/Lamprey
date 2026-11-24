@@ -178,15 +178,10 @@ class Contour
         output path:GetSize()     // 2
     */
     action AddPoint(number x, number y)
-        ArgumentChecker argCheck
-
-//        // path must be uniform OR adaptive (all points must have a width)
-//        if ws:GetSize() > 0
-//            // output "Contour: path contains widths, cannot add point without a width"
-//            return now
-//        end
-
+        // path must be uniform OR adaptive (all points must have a width); the checker is only made to fail,
+        // since this is called for every point the slicer makes
         if IsAdaptive()
+            ArgumentChecker argCheck
             argCheck:Fail("Contour: path contains widths, cannot add point without a width")
         end
 
@@ -201,17 +196,11 @@ class Contour
     end
 
     action AddPoint(number x, number y, number w)
-        ArgumentChecker argCheck
-
         integer n = xs:GetSize()
         if n > 0
-            // return error for uniform paths
-//            if ws:GetSize() = 0
-//                output "Contour: path is uniform, cannot add with width"
-//                return now
-//            end
-
+            // a uniform path can't take a width
             if not IsAdaptive()
+                ArgumentChecker argCheck
                 argCheck:Fail("Contour: path is uniform, cannot add with width")
             end
 

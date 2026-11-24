@@ -11,11 +11,12 @@ import java.util.zip.ZipFile;
 import javax.imageio.ImageIO;
 
 import plugins.quorum.Libraries.Data.Compression.ZipWriter;
+import plugins.quorum.Libraries.Fabrication.Geometry.VoronoiJava;
 
 /**
- * Tests for Lamprey's Java plugin, ZipWriter (Plugins/src), runnable without
- * Quorum or any test library: sh Plugins/test.sh. The archives are read back
- * with java.util.zip.
+ * Tests for Lamprey's Java plugins, ZipWriter and VoronoiJava (Plugins/src),
+ * runnable without Quorum or any test library: sh Plugins/test.sh. The
+ * archives are read back with java.util.zip.
  */
 public class PluginTests {
     private static int checks = 0;
@@ -29,6 +30,7 @@ public class PluginTests {
         files();
         thumbnails();
         misuse();
+        voronoi();
         System.out.println(checks + " checks, " + failures.size() + " failed");
         for (String failure : failures) {
             System.out.println("  FAIL " + failure);
@@ -220,6 +222,114 @@ public class PluginTests {
             }
             return out.toByteArray();
         }
+    }
+
+    // ------------------------------------------------------------ VoronoiJava
+
+    /** Adds a closed loop's segments to the plugin. */
+    static void addLoop(VoronoiJava v, double[][] points) {
+        for (int i = 0; i < points.length; i++) {
+            double[] a = points[i];
+            double[] b = points[(i + 1) % points.length];
+            v.AddSegment(a[0], a[1], b[0], b[1]);
+        }
+    }
+
+    /** Even-odd point in the loops. */
+    static boolean inside(double[][][] loops, double x, double y) {
+        boolean in = false;
+        for (double[][] loop : loops) {
+            for (int i = 0, j = loop.length - 1; i < loop.length; j = i++) {
+                double yi = loop[i][1], yj = loop[j][1];
+                if ((yi > y) != (yj > y)) {
+                    double xc = loop[i][0] + (y - yi) * (loop[j][0] - loop[i][0]) / (yj - yi);
+                    if (x < xc) {
+                        in = !in;
+                    }
+                }
+            }
+        }
+        return in;
+    }
+
+    static void voronoi() {
+        // the square with a hole: outer 0..1 counter-clockwise, hole 0.4..0.6 clockwise
+        double[][] outer = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+        double[][] hole = {{0.4, 0.4}, {0.4, 0.6}, {0.6, 0.6}, {0.6, 0.4}};
+        VoronoiJava v = new VoronoiJava();
+        addLoop(v, outer);
+        addLoop(v, hole);
+        check("voronoi: square with hole builds", v.Build(0.1) == VoronoiJava.OK);
+        check("voronoi: square with hole has edges", v.GetEdgeCount() > 0);
+        check("voronoi: edges come in pairs", v.GetEdgeCount() % 2 == 0);
+        check("voronoi: the outline is sampled between corners", v.GetSampleCount() > 8);
+
+        java.util.Set<String> halves = new java.util.HashSet<>();
+        for (int e = 0; e < v.GetEdgeCount(); e++) {
+            halves.add(v.GetEdgeVertex0(e) + " " + v.GetEdgeVertex1(e) + " " + v.GetEdgeCell0(e) + " " + v.GetEdgeCell1(e)
+                    + " " + v.GetEdgeCategory0(e) + " " + v.GetEdgeCategory1(e));
+        }
+        boolean twins = true, categories = true, cells = true, insideOnly = true, bounded = true;
+        double[][][] loops = {outer, hole};
+        for (int e = 0; e < v.GetEdgeCount(); e++) {
+            String twin = v.GetEdgeVertex1(e) + " " + v.GetEdgeVertex0(e) + " " + v.GetEdgeCell1(e) + " " + v.GetEdgeCell0(e)
+                    + " " + v.GetEdgeCategory1(e) + " " + v.GetEdgeCategory0(e);
+            twins &= halves.contains(twin);
+            int c0 = v.GetEdgeCategory0(e), c1 = v.GetEdgeCategory1(e);
+            categories &= (c0 == 1 || c0 == 8) && (c1 == 1 || c1 == 8);
+            cells &= v.GetEdgeCell0(e) >= 0 && v.GetEdgeCell0(e) < 8 && v.GetEdgeCell1(e) >= 0 && v.GetEdgeCell1(e) < 8;
+            int a = v.GetEdgeVertex0(e), b = v.GetEdgeVertex1(e);
+            bounded &= a >= 0 && b >= 0 && a != b && a < v.GetVertexCount() && b < v.GetVertexCount();
+            if (a >= 0 && b >= 0) {
+                insideOnly &= inside(loops, (v.GetVertexX(a) + v.GetVertexX(b)) / 2, (v.GetVertexY(a) + v.GetVertexY(b)) / 2);
+            }
+        }
+        check("voronoi: every edge has a twin with cells, categories and vertices swapped", twins);
+        check("voronoi: every category is 1 (corner) or 8 (segment)", categories);
+        check("voronoi: every cell is one of the 8 segments", cells);
+        check("voronoi: every edge has two different, valid vertices", bounded);
+        check("voronoi: every edge's midpoint is inside the outline", insideOnly);
+
+        // a 6 by 1 strip: the skeleton between the long sides (segments 0 and 2) is y = 0.5, joined into one edge
+        VoronoiJava strip = new VoronoiJava();
+        addLoop(strip, new double[][] {{0, 0}, {6, 0}, {6, 1}, {0, 1}});
+        check("voronoi: strip builds", strip.Build(0.1) == VoronoiJava.OK);
+        boolean centred = true;
+        int between = 0;
+        double length = 0;
+        for (int e = 0; e < strip.GetEdgeCount(); e++) {
+            int c0 = strip.GetEdgeCell0(e), c1 = strip.GetEdgeCell1(e);
+            if ((c0 == 0 && c1 == 2) || (c0 == 2 && c1 == 0)) {
+                between++;
+                int a = strip.GetEdgeVertex0(e), b = strip.GetEdgeVertex1(e);
+                centred &= Math.abs(strip.GetVertexY(a) - 0.5) <= 0.0025 && Math.abs(strip.GetVertexY(b) - 0.5) <= 0.0025;
+                length += Math.hypot(strip.GetVertexX(b) - strip.GetVertexX(a), strip.GetVertexY(b) - strip.GetVertexY(a)) / 2;
+            }
+        }
+        check("voronoi: strip's centre line runs most of its length", length > 4.5);
+        check("voronoi: strip's centre line is within 0.0025 mm of y = 0.5", centred);
+        check("voronoi: the run between the long sides is joined into at most two edges", between > 0 && between <= 4);
+        check("voronoi: the strip's whole skeleton is a few edges", strip.GetEdgeCount() < 40);
+
+        // a second Build replaces the first
+        int edges = strip.GetEdgeCount();
+        strip.Build(0.1);
+        check("voronoi: a second Build gives the same edges, not twice as many", strip.GetEdgeCount() == edges);
+
+        // failures are reported, not thrown, and leave no results
+        VoronoiJava bad = new VoronoiJava();
+        addLoop(bad, new double[][] {{0, 0}, {1, 0}, {1, 1}});
+        check("voronoi: spacing 0 is refused", bad.Build(0) == VoronoiJava.BAD_SPACING && !bad.GetError().isEmpty());
+        check("voronoi: a refused Build leaves no results", bad.GetEdgeCount() == 0 && bad.GetVertexCount() == 0);
+        check("voronoi: NaN spacing is refused", bad.Build(Double.NaN) == VoronoiJava.BAD_SPACING);
+        bad.Clear();
+        bad.AddSegment(0, 0, 0, 0);
+        bad.AddSegment(0, 0, 1, 0);
+        bad.AddSegment(1, 0, 0, 1);
+        check("voronoi: a zero-length segment is refused", bad.Build(0.1) == VoronoiJava.BAD_SEGMENT);
+        bad.Clear();
+        check("voronoi: no segments gives no diagram", bad.Build(0.1) == VoronoiJava.OK && bad.GetEdgeCount() == 0);
+        check("voronoi: success clears the error", bad.GetError().isEmpty());
     }
 
     static void check(String what, boolean passed) {

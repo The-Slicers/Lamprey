@@ -1,27 +1,76 @@
 package Libraries.Fabrication.Geometry
 
 use Libraries.Containers.Array
-use Libraries.System.File
-use Libraries.System.FileWriter
 use Libraries.Fabrication.ArgumentChecker
 use Libraries.Fabrication.Geometry.OutlineEdges
-use Libraries.Fabrication.Geometry.VoronoiNative
+use Libraries.Fabrication.Geometry.VoronoiJava
 
+/*
+The VoronoiDiagram class builds the Voronoi diagram of a layer's outline, the
+start of the adaptive walls' skeleton (SkeletalTrapezoidation). It is built by
+the VoronoiJava plugin with the JTS Topology Suite, which runs on every
+operating system without a native library.
+
+JTS diagrams points, not segments, so the outline is sampled every `spacing`
+mm (and at every corner). The diagram therefore comes out already cut down to
+the skeleton: only edges inside the outline, all straight (linear = 1), no
+unbounded edges, and each run between the same two segments joined into one
+edge. SkeletalTrapezoidation reads `sampled` to skip its own inside test, and
+measures radii to the real outline segments and corners.
+
+The arrays hold one entry per directed edge; every edge appears twice, once per
+direction, with its cells, categories and vertices swapped. A cell is a
+segment of OutlineEdges (cell0 is on the edge's left): category 1 for a
+segment's start point (a reflex corner), 8 for the segment itself.
+
+Attribute: Example
+
+    use Libraries.Containers.Array
+    use Libraries.Fabrication.Geometry.Contour
+    use Libraries.Fabrication.Geometry.OutlineEdges
+    use Libraries.Fabrication.Geometry.VoronoiDiagram
+
+    class Main
+        action Main
+            Contour square
+            square:AddPoint(0, 0)
+            square:AddPoint(1, 0)
+            square:AddPoint(1, 1)
+            square:AddPoint(0, 1)
+            square:closed = true
+            Array<Contour> outline
+            outline:Add(square)
+
+            OutlineEdges edges
+            edges:BuildEdges(outline)
+            VoronoiDiagram diagram
+            diagram:Generate(edges)
+            if diagram:Failed()
+                output diagram:GetError()
+            else
+                output diagram:vertX:GetSize() + " vertices"
+            end
+        end
+    end
+*/
 class VoronoiDiagram
-    boolean boost = true                // use boost c++ library to generate VD
-    text workPath = "Outputs/voronoi"
-    text inFile = "voronoi_in.txt"
-    text outFile = "voronoi_out.txt"
     number scale = 1000.0
+    number spacing = 0.1                // mm between outline samples
 
-    FileWriter writer
+    /* True: the edges come from a sampled outline (inside only, straight). */
+    public boolean sampled = true
+
+    boolean failed = false
+    text error = ""
+
+    VoronoiJava plugin
     ArgumentChecker checker
 
-    // storing vertices (x,y) from boost
+    // vertices (mm)
     public Array<number> vertX
     public Array<number> vertY
 
-    // storing edges from boost
+    // directed edges
     public Array<integer> cell0
     public Array<integer> category0
     public Array<integer> cell1
@@ -30,154 +79,93 @@ class VoronoiDiagram
     public Array<integer> vertex1          // vertex were edge ends
     public Array<integer> linear
 
+    /*
+    Builds the diagram of the outline's segments, replacing any earlier one.
+    If it fails, Failed is true, GetError says why, and the arrays are empty.
+    */
     action Generate(OutlineEdges edges)
         scale = edges:scale
+        failed = false
+        error = ""
 
         // reset arrays
         vertX:Empty()
-        vertY:Empty()   
-        cell0:Empty() 
-        cell1:Empty() 
-        category0:Empty() 
-        category1:Empty() 
-        vertex0:Empty() 
-        vertex1:Empty() 
-        linear:Empty() 
+        vertY:Empty()
+        cell0:Empty()
+        cell1:Empty()
+        category0:Empty()
+        category1:Empty()
+        vertex0:Empty()
+        vertex1:Empty()
+        linear:Empty()
 
         if edges:x0:GetSize() = 0
             return now
         end
 
-        if boost
-            RunBoost(edges)
-        else
-            RunQuorum(edges)
-        end
-    end
-
-    action RunBoost(OutlineEdges edges)
-        // make directory for voroni operations
-        File folder
-        folder:SetPath(workPath)
-        if not folder:Exists()
-            folder:CreateDirectories()
-        end
-
-        // paths to input and output files
-        text PathIn = workPath + "/" + inFile
-        text PathOut = workPath + "/" + outFile
-
-        // write input file for boost
-        File inputF
-        inputF:SetPath(PathIn)
-        writer:OpenForWrite(inputF)
-
-        writer:WriteLine("" + edges:x0:GetSize())   // write number of edges
-
+        // segments in OutlineEdges order, so the plugin's cells are OutlineEdges' segment indices
+        plugin:Clear()
         integer i = 0
         repeat while i < edges:x0:GetSize()
-            // writes values a b c d s.t. segment is (a,b) to (c,d)
-            writer:WriteLine("" + edges:x0:Get(i) + " " + edges:y0:Get(i) + " " + edges:x1:Get(i) + " " + edges:y1:Get(i))
+            plugin:AddSegment(edges:ScaleDown(edges:x0:Get(i)), edges:ScaleDown(edges:y0:Get(i)),
+                              edges:ScaleDown(edges:x1:Get(i)), edges:ScaleDown(edges:y1:Get(i)))
             i = i + 1
         end
-        writer:Close()
 
-        // call boost library for voronoi diagram
-        VoronoiNative boostVD
-        integer status = boostVD:Build(PathIn, PathOut)
+        integer status = plugin:Build(spacing)
         if status not= 0
-            checker:Fail("boost library failed to generate voronoi diagram successfully")
+            failed = true
+            error = plugin:GetError()
+            return now
         end
 
-        // read output written by boost
-        ParseOutput(PathOut)
-    end
-
-    action ParseOutput(text path)
-        File outputF
-        outputF:SetPath(path)
-        text content = outputF:Read()
-
-        text lineFeed = ""
-        lineFeed = lineFeed:GetLineFeed()
-        text carriageReturn = ""
-        carriageReturn = carriageReturn:GetCarriageReturn()
-
-        // go through each line in output
-        Array<text> lines = content:Split(lineFeed)
-        integer expectedVertices = 0
-        integer expectedEdges = 0
-
-        integer i = 0
-        repeat while i < lines:GetSize()
-            // windows-specific : remove \r before reading
-            // make less fixed? depedent on var?
-            text line = lines:Get(i):Replace(carriageReturn, "")
-
-            if line:StartsWith("V ")
-                // set expected verticies    
-                expectedVertices = ParseInteger(line:GetSubtext(2))
-
-            elseif line:StartsWith("E ")
-                // set expected edges
-                expectedEdges = ParseInteger(line:GetSubtext(2))
-
-            elseif line:StartsWith("v ")
-                // read in a vertex
-                Array<text> vertex = line:Split(" ")
-                vertX:Add(cast(number, vertex:Get(1)) / scale)
-                vertY:Add(cast(number, vertex:Get(2)) / scale)
-
-            elseif line:StartsWith("e ")
-                // read in an edge
-                Array<text> edge = line:Split(" ")
-                
-                if edge:GetSize() not= 8
-                    checker:Fail("incorrect edge format from boost")
-                end
-
-                cell0:Add(ParseInteger(edge:Get(1)))
-                cell1:Add(ParseInteger(edge:Get(3)))
-                category0:Add(ParseInteger(edge:Get(2)))
-                category1:Add(ParseInteger(edge:Get(4)))
-                vertex0:Add(ParseInteger(edge:Get(5)))
-                vertex1:Add(ParseInteger(edge:Get(6)))
-                linear:Add(ParseInteger(edge:Get(7)))
-            end
-            i = i + 1
+        integer vertexCount = plugin:GetVertexCount()
+        integer v = 0
+        repeat while v < vertexCount
+            vertX:Add(plugin:GetVertexX(v))
+            vertY:Add(plugin:GetVertexY(v))
+            v = v + 1
         end
 
-        if expectedVertices not= vertX:GetSize()
-            checker:Fail("issue with reading in vertices")
+        integer edgeCount = plugin:GetEdgeCount()
+        integer e = 0
+        repeat while e < edgeCount
+            cell0:Add(plugin:GetEdgeCell0(e))
+            category0:Add(plugin:GetEdgeCategory0(e))
+            cell1:Add(plugin:GetEdgeCell1(e))
+            category1:Add(plugin:GetEdgeCategory1(e))
+            vertex0:Add(plugin:GetEdgeVertex0(e))
+            vertex1:Add(plugin:GetEdgeVertex1(e))
+            linear:Add(1)
+            e = e + 1
         end
-
-        if expectedEdges not= cell0:GetSize()
-            checker:Fail("issue with reading in edges")
-        end
-
     end
 
-    action ParseNumber(text t) returns number
-        return cast(number, t)
+    /*
+    Sets how far apart (mm) the outline is sampled. Smaller is closer to the exact
+    skeleton but slower: the skeleton's error is about spacing^2 / (8 * radius).
+    */
+    action SetSpacing(number mm)
+        checker:RequirePositive("VoronoiDiagram:SetSpacing mm", mm)
+        spacing = mm
     end
 
-    action ParseInteger(text t) returns integer
-        return cast(integer, t)
+    action GetSpacing returns number
+        return spacing
     end
 
-    action RunQuorum(OutlineEdges edges)
-        checker:Fail("Quorum implementation of voronoi diagram not finished. Try: SetBoost(true)")
+    /* True if the last Generate failed (see GetError). */
+    action Failed returns boolean
+        return failed
     end
 
-    // true to use boost, false to use quorum
-    action SetBoost(boolean useB)
-        boost = useB
+    /* Why the last Generate failed; empty when it didn't. */
+    action GetError returns text
+        return error
     end
 
-    action SetWorkPath(text path)
-        if path = ""
-            checker:Fail("invalid path, is empty")
-        end
-        workPath = path
+    /* How many outline samples the last Generate used. */
+    action GetSampleCount returns integer
+        return plugin:GetSampleCount()
     end
 end

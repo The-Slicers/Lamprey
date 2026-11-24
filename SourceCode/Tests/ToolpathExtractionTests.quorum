@@ -36,6 +36,7 @@ class ToolpathExtractionTests
         TestOneSitePerRib()
         TestBarCentreBeadMadeOnce()
         TestSmallSquareIsADot()
+        TestShallowCornerJoinsTheBead()
 
         output "ToolpathExtraction tests: passed " + passed + ", failed " + failed
         return failed
@@ -136,7 +137,6 @@ class ToolpathExtractionTests
         OutlineEdges edges
         edges:BuildEdges(contours)
         VoronoiDiagram voronoi
-        voronoi:SetWorkPath("Outputs/voronoi_test")
         voronoi:Generate(edges)
         st:Build(contours, edges, voronoi)
         cm:Build(st)
@@ -172,6 +172,9 @@ class ToolpathExtractionTests
 
     // the node a site was made from: the rib's node, or the upper end of its medial edge
     private action UpperNode(SkeletalTrapezoidation st, ToolpathExtraction tx, integer s) returns integer
+        if tx:siteCorner:Get(s) >= 0
+            return tx:siteCorner:Get(s)
+        end
         integer r = tx:siteRib:Get(s)
         if r >= 0
             return st:ribNode:Get(r)
@@ -208,7 +211,8 @@ class ToolpathExtractionTests
 
     // ------------------------------------------------------------ holds (each builds its own pipeline)
 
-    // a site lies on its rib, or on its medial edge
+    // a site lies on its rib, or on its medial edge (a convex-corner site has neither: TestShallowCornerJoinsTheBead
+    // checks those)
     private action SitesOnSourcesHold(Array<Contour> contours) returns boolean
         SkeletalTrapezoidation st
         CenterMarking cm
@@ -221,23 +225,30 @@ class ToolpathExtractionTests
         end
         integer s = 0
         repeat while s < tx:siteX:GetSize()
-            integer a = 0
-            integer b = 0
-            integer r = tx:siteRib:Get(s)
-            if r >= 0
-                a = st:ribNode:Get(r)
-                b = st:ribFoot:Get(r)
-            else
-                integer e = tx:siteEdge:Get(s)
-                a = st:cleanStart:Get(e)
-                b = st:cleanEnd:Get(e)
-            end
-            if util:SegmentDistance2(tx:siteX:Get(s), tx:siteY:Get(s), st:xs:Get(a), st:ys:Get(a), st:xs:Get(b), st:ys:Get(b)) > 0.000000000001
+            if tx:siteCorner:Get(s) >= 0
+                s = s + 1
+            elseif not SiteOnSource(st, tx, s)
                 return false
+            else
+                s = s + 1
             end
-            s = s + 1
         end
         return true
+    end
+
+    private action SiteOnSource(SkeletalTrapezoidation st, ToolpathExtraction tx, integer s) returns boolean
+        integer a = 0
+        integer b = 0
+        integer r = tx:siteRib:Get(s)
+        if r >= 0
+            a = st:ribNode:Get(r)
+            b = st:ribFoot:Get(r)
+        else
+            integer e = tx:siteEdge:Get(s)
+            a = st:cleanStart:Get(e)
+            b = st:cleanEnd:Get(e)
+        end
+        return util:SegmentDistance2(tx:siteX:Get(s), tx:siteY:Get(s), st:xs:Get(a), st:ys:Get(a), st:xs:Get(b), st:ys:Get(b)) <= 0.000000000001
     end
 
     // a site sits at its bead's location from the outline (parabolic pieces are approximate to ~0.01 mm)
@@ -474,7 +485,8 @@ class ToolpathExtractionTests
     end
 
     // Paper 6.3: a 0.3 mm square has one bead (R = 0.15, b = 0.75 rounds to 1), whose centre sits on the single
-    // local maximum at the square's centre, so the bead is one dot there.
+    // local maximum at the square's centre, so the bead is one dot there. The skeleton comes from the outline
+    // sampled every 0.1 mm, so the local maximum is within a few micrometres of the exact centre.
     action TestSmallSquareIsADot()
         Array<Contour> outline
         Contour c
@@ -494,8 +506,94 @@ class ToolpathExtractionTests
 
         Check(tx:dotX:GetSize() = 1, "a 0.3 mm square's single bead is one dot")
         if tx:dotX:GetSize() = 1
-            Check(util:AbsNum(tx:dotX:Get(0) - 0.15) < 0.000001 and util:AbsNum(tx:dotY:Get(0) - 0.15) < 0.000001,
-                  "the dot sits at the square's centre")
+            Check(util:AbsNum(tx:dotX:Get(0) - 0.15) < 0.005 and util:AbsNum(tx:dotY:Get(0) - 0.15) < 0.005,
+                  "the dot sits within 0.005 mm of the square's centre")
         end
     end
+
+    // 0.8 mm strip (two beads) bent 10 degrees at (10, 0): the outer side turns a shallow convex corner there,
+    // the inner side a reflex one at (10 - 0.8 tan 5, 0.8)
+    private action BentStrip returns Array<Contour>
+        number turn = 10.0 * 3.141592653589793 / 180.0
+        number c = math:Cosine(turn)
+        number s = math:Sine(turn)
+        number w = 0.8
+        Array<Contour> outline
+        Contour con
+        con:AddPoint(0.0, 0.0)
+        con:AddPoint(10.0, 0.0)
+        con:AddPoint(10.0 + 10.0 * c, 10.0 * s)
+        con:AddPoint(10.0 + 10.0 * c - w * s, 10.0 * s + w * c)
+        con:AddPoint(10.0 - w * math:Sine(turn / 2.0) / math:Cosine(turn / 2.0), w)
+        con:AddPoint(0.0, w)
+        con:closed = true
+        outline:Add(con)
+        return outline
+    end
+
+    // A bead turning a shallow convex corner runs on unbroken: the sampled skeleton has no bisector edge for it to
+    // cross there, so ToolpathExtraction joins its two ends at the node (they were ~0.03 mm apart, wider than
+    // AdaptivePath joins, and the outer wall of curved parts came out in short pieces). The joining site lies at
+    // the bead's location from both segments.
+    action TestShallowCornerJoinsTheBead()
+        Array<Contour> outline = BentStrip()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BeadPlacement bp
+        ToolpathExtraction tx
+        RunPipeline(st, cm, bt, bp, tx, outline)
+
+        // no open polyline of the outer bead ends near the corner
+        integer endsNear = 0
+        integer runs = 0
+        integer p = 0
+        repeat while p < tx:polyStart:GetSize()
+            if tx:polyIndex:Get(p) = 0
+                runs = runs + 1
+                integer first = tx:polySites:Get(tx:polyStart:Get(p))
+                integer last = tx:polySites:Get(RunEnd(tx, p) - 1)
+                if first not= last
+                    if Near(tx, first, 10.0, 0.0, 0.4)
+                        endsNear = endsNear + 1
+                    end
+                    if Near(tx, last, 10.0, 0.0, 0.4)
+                        endsNear = endsNear + 1
+                    end
+                end
+            end
+            p = p + 1
+        end
+        Check(runs > 0 and endsNear = 0, "the outer bead runs on through a 10 degree convex corner (" + endsNear + " ends there)")
+
+        // corner sites: at least one at the bend (others can come where the sampled skeleton leaves a smaller gap,
+        // as beside the reflex corner), each as far from the outline as its bead
+        integer corners = 0
+        integer atBend = 0
+        number worst = 0.0
+        integer s = 0
+        repeat while s < tx:siteX:GetSize()
+            if tx:siteCorner:Get(s) >= 0
+                corners = corners + 1
+                if Near(tx, s, 10.0, 0.0, 0.4)
+                    atBend = atBend + 1
+                end
+                Bead bead = bp:beads:Get(bp:beadStart:Get(tx:siteCorner:Get(s)) + tx:siteIndex:Get(s))
+                number off = util:AbsNum(DistanceToOutline(outline, tx:siteX:Get(s), tx:siteY:Get(s)) - bead:location)
+                if off > worst
+                    worst = off
+                end
+            end
+            s = s + 1
+        end
+        Check(atBend >= 1, "a corner site joins the outer bead at the bend (" + atBend + " there, " + corners + " in all)")
+        Check(worst <= 0.01, "every corner site sits at its bead's location from the outline (worst off by " + worst + " mm)")
+    end
+
+    private action Near(ToolpathExtraction tx, integer s, number x, number y, number within) returns boolean
+        number dx = tx:siteX:Get(s) - x
+        number dy = tx:siteY:Get(s) - y
+        return dx * dx + dy * dy < within * within
+    end
+
 end

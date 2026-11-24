@@ -19,14 +19,12 @@ class SkeletalTrapezoidationTests
         TestVoronoiEdgesHaveTwins()
         TestRibLengthMatchesRadius()
         TestEveryTouchedNodeHasRadius()
-        TestUntouchedNodesAreHoleCornersAndCentre()
-        TestRadiiKnownValues()
-        TestLShapeParabolasAreMixed()
-        TestLShapePiecesAreShort()
-        TestParabolaNodesLieOnCurve()
-        TestBisectorPiecesAreStraight()
-        TestBisectorNodesAreEquidistant()
-        TestBisectorPiecesAreShort()
+        TestEveryNodeIsUsed()
+        TestRadiiMatchTheOutline()
+        TestLShapeCurvesAreSplit()
+        TestLShapeRadiiMatchTheOutline()
+        TestReflexCornerIsASupport()
+        TestNeckRadiusIsHalfItsWidth()
         TestParabolaCutMatchesSignificanceAngle()
         TestSplitAtOnRealSkeleton()
         TestInteriorEndsHaveRibs()
@@ -121,7 +119,6 @@ class SkeletalTrapezoidationTests
         edges:BuildEdges(contours)
 
         VoronoiDiagram diagram
-        diagram:SetWorkPath("Outputs/voronoi_test")
         diagram:Generate(edges)
 
         st:Build(contours, edges, diagram)
@@ -168,53 +165,51 @@ class SkeletalTrapezoidationTests
         return false
     end
 
-    // True when the node at (x, y) exists and no edge touches it.
-    private action UntouchedAt(SkeletalTrapezoidation st, number x, number y) returns boolean
-        integer v = FindNode(st, x, y)
-        if v < 0
-            return false
-        end
-        return not Touched(st, v)
-    end
-
-    // True when the node at (x, y) exists and its radius is expected, to one micrometre.
-    private action RadiusIs(SkeletalTrapezoidation st, number x, number y, number expected) returns boolean
-        integer v = FindNode(st, x, y)
-        if v < 0
-            return false
-        end
-        return Near(st:rad:Get(v), expected)
-    end
-
     private action Near(number a, number b) returns boolean
         return a - b < 0.000001 and b - a < 0.000001
     end
 
-    // True when (px, py) is equidistant, to within 0.01 mm, from the focus (fx, fy)
-    // and from the infinite line through (ax, ay)-(bx, by).
-    private action OnCurve(number px, number py, number fx, number fy,
-                           number ax, number ay, number bx, number by) returns boolean
-        number dx = bx - ax
-        number dy = by - ay
-        number len = math:SquareRoot(dx * dx + dy * dy)
-        number lineDist = util:AbsNum(dx * (py - ay) - dy * (px - ax)) / len
-        number focusDist = math:SquareRoot((px - fx) * (px - fx) + (py - fy) * (py - fy))
-        return util:AbsNum(focusDist - lineDist) <= 0.01
+    // Distance from (x, y) to the nearest segment of any loop.
+    private action DistanceToOutline(Array<Contour> contours, number x, number y) returns number
+        number best = -1.0
+        integer c = 0
+        repeat while c < contours:GetSize()
+            Contour con = contours:Get(c)
+            integer n = con:GetSize()
+            integer i = 0
+            repeat while i < n
+                integer j = (i + 1) mod n
+                number d2 = util:SegmentDistance2(x, y, con:xs:Get(i), con:ys:Get(i), con:xs:Get(j), con:ys:Get(j))
+                if best < 0.0 or d2 < best
+                    best = d2
+                end
+                i = i + 1
+            end
+            c = c + 1
+        end
+        return math:SquareRoot(best)
     end
 
-    // The point a point cell stands for, in mm: category 1 is the segment's start, 2 its end.
-    private action SourceX(OutlineEdges edges, integer segment, integer category) returns number
-        if category = 2
-            return edges:ScaleDown(edges:x1:Get(segment))
+    // True when every node an edge touches has a radius within `tolerance` of its distance to the outline,
+    // or `bigTolerance` for nodes at least 0.15 mm from it. The skeleton comes from the outline sampled
+    // every 0.1 mm, so a node can sit up to about spacing^2 / (8 * radius) off the true skeleton.
+    private action RadiiMatch(SkeletalTrapezoidation st, Array<Contour> contours, number tolerance, number bigTolerance) returns boolean
+        boolean ok = true
+        integer v = 0
+        repeat while v < st:xs:GetSize()
+            if Touched(st, v) and st:rad:Get(v) > 0.0
+                number truth = DistanceToOutline(contours, st:xs:Get(v), st:ys:Get(v))
+                number allowed = tolerance
+                if truth >= 0.15
+                    allowed = bigTolerance
+                end
+                if util:AbsNum(st:rad:Get(v) - truth) > allowed
+                    ok = false
+                end
+            end
+            v = v + 1
         end
-        return edges:ScaleDown(edges:x0:Get(segment))
-    end
-
-    private action SourceY(OutlineEdges edges, integer segment, integer category) returns number
-        if category = 2
-            return edges:ScaleDown(edges:y1:Get(segment))
-        end
-        return edges:ScaleDown(edges:y0:Get(segment))
+        return ok
     end
 
     // True when node v has a rib to the support given by cell and category. Both sides of a segment
@@ -263,7 +258,8 @@ class SkeletalTrapezoidationTests
         Check(allPaired, "every edge has a twin that points back")
     end
 
-    // Every rib's length equals the radius of the node it leaves.
+    // Every rib's length equals the radius of the node it leaves, to within the sampling error: the radius is
+    // the mean of the distances to the two sides, and a rib goes to one side.
     action TestRibLengthMatchesRadius()
         SkeletalTrapezoidation st
         BuildFor(st, ReferenceContours())
@@ -275,13 +271,13 @@ class SkeletalTrapezoidationTests
             integer f = st:ribFoot:Get(r)
             number dx = st:xs:Get(f) - st:xs:Get(v)
             number dy = st:ys:Get(f) - st:ys:Get(v)
-            if util:AbsNum(math:SquareRoot(dx * dx + dy * dy) - st:rad:Get(v)) > 0.0001
+            if util:AbsNum(math:SquareRoot(dx * dx + dy * dy) - st:rad:Get(v)) > 0.015
                 allMatch = false
             end
             r = r + 1
         end
         Check(st:ribNode:GetSize() > 0, "the reference shape has ribs")
-        Check(allMatch, "every rib's length equals the radius of the node it leaves")
+        Check(allMatch, "every rib's length is within 0.015 mm of the radius of the node it leaves")
     end
 
     // Every node that an edge or rib touches has a radius.
@@ -300,26 +296,30 @@ class SkeletalTrapezoidationTests
         Check(allSet, "every node touched by an edge or rib has a radius")
     end
 
-    // The only nodes no edge touches are the hole corners and the hole centre.
-    action TestUntouchedNodesAreHoleCornersAndCentre()
+    // A sampled diagram returns only the vertices its kept edges use, so every node is an edge's end or a rib's foot.
+    action TestEveryNodeIsUsed()
         SkeletalTrapezoidation st
         BuildFor(st, ReferenceContours())
 
-        Check(UntouchedAt(st, 0.4, 0.4), "hole corner (0.4, 0.4) is untouched")
-        Check(UntouchedAt(st, 0.4, 0.6), "hole corner (0.4, 0.6) is untouched")
-        Check(UntouchedAt(st, 0.6, 0.4), "hole corner (0.6, 0.4) is untouched")
-        Check(UntouchedAt(st, 0.6, 0.6), "hole corner (0.6, 0.6) is untouched")
-        Check(UntouchedAt(st, 0.5, 0.5), "hole centre (0.5, 0.5) is untouched")
+        boolean ok = true
+        integer v = 0
+        repeat while v < st:xs:GetSize()
+            if not TouchedByAny(st, v)
+                ok = false
+            end
+            v = v + 1
+        end
+        Check(st:xs:GetSize() > 0, "the reference shape has nodes")
+        Check(ok, "every node is touched by an edge or a rib")
     end
 
-    // Radii of interior nodes match values worked out by hand.
-    action TestRadiiKnownValues()
+    // Every node's radius is its distance to the outline, to within the sampling error.
+    action TestRadiiMatchTheOutline()
         SkeletalTrapezoidation st
-        BuildFor(st, ReferenceContours())
+        Array<Contour> contours = ReferenceContours()
+        BuildFor(st, contours)
 
-        Check(RadiusIs(st, 0.0, 0.0, 0.0), "outer corner has radius 0")
-        Check(RadiusIs(st, 0.2, 0.4, 0.2), "(0.2, 0.4) has radius 0.2")
-        Check(RadiusIs(st, 0.234314575, 0.234314575, 0.234314575), "diagonal node has radius 0.2343")
+        Check(RadiiMatch(st, contours, 0.015, 0.005), "every radius is within the sampling error of the distance to the outline")
     end
 
     // Every interior end of an edge (radius above 0) has a rib to the edge's side (cell0), so toolpath
@@ -349,15 +349,18 @@ class SkeletalTrapezoidationTests
         Check(ok, "every interior end of an edge has a rib to its side; outline ends need none")
     end
 
-    // ------------------------------------------------------------ L-shape (parabolas)
+    // ------------------------------------------------------------ L-shape and dumbbell (sampled outline)
 
-    // Every parabolic piece (linear = 0) has one point side and one segment side.
-    action TestLShapeParabolasAreMixed()
+    // The reflex corner (1, 1) stays a point (category 1), so the skeleton around it is curved: those edges are split
+    // on the exact parabola, as with Boost. Every curved piece has one point side and one segment side, and is at
+    // most splitLength long (plus a little, since its ends come from the sampled diagram).
+    action TestLShapeCurvesAreSplit()
         SkeletalTrapezoidation st
         BuildFor(st, LShapeContours())
 
-        boolean allMixed = true
         integer curved = 0
+        boolean allMixed = true
+        boolean allShort = true
         integer e = 0
         repeat while e < st:cleanStart:GetSize()
             if st:cleanLinear:Get(e) = 0
@@ -369,176 +372,77 @@ class SkeletalTrapezoidationTests
                 if point0 = point1
                     allMixed = false
                 end
-            end
-            e = e + 1
-        end
-        Check(curved > 0, "the L-shape has parabolic pieces")
-        Check(allMixed, "every parabolic piece is point to segment")
-    end
-
-    // Every parabolic piece is no longer than splitLength.
-    action TestLShapePiecesAreShort()
-        SkeletalTrapezoidation st
-        BuildFor(st, LShapeContours())
-
-        boolean allShort = true
-        integer e = 0
-        repeat while e < st:cleanStart:GetSize()
-            if st:cleanLinear:Get(e) = 0
                 integer a = st:cleanStart:Get(e)
                 integer b = st:cleanEnd:Get(e)
                 number dx = st:xs:Get(b) - st:xs:Get(a)
                 number dy = st:ys:Get(b) - st:ys:Get(a)
-                if math:SquareRoot(dx * dx + dy * dy) > st:splitLength + 0.000001
+                if math:SquareRoot(dx * dx + dy * dy) > st:splitLength + 0.01
                     allShort = false
                 end
             end
             e = e + 1
         end
-        Check(allShort, "every parabolic piece is at most splitLength long")
+        Check(curved > 0, "the L-shape has curved pieces around its reflex corner")
+        Check(allMixed, "every curved piece is point to segment")
+        Check(allShort, "every curved piece is at most about splitLength long")
     end
 
-    // Every node on a parabolic piece is equidistant, to within 0.01 mm, from its focus and
-    // its line. The focus is the endpoint of the point cell; the line is the segment cell's.
-    action TestParabolaNodesLieOnCurve()
+    // The radii around the reflex corner (on the parabolas) match the outline too.
+    action TestLShapeRadiiMatchTheOutline()
         SkeletalTrapezoidation st
         Array<Contour> contours = LShapeContours()
         BuildFor(st, contours)
 
-        OutlineEdges edges
-        edges:BuildEdges(contours)
+        Check(RadiiMatch(st, contours, 0.015, 0.005), "L-shape radii are within the sampling error of the distance to the outline")
+    end
 
-        boolean allOnCurve = true
-        boolean anyChecked = false
+    // Some nodes have a rib whose foot is the reflex corner (1, 1), the start of segment 3.
+    action TestReflexCornerIsASupport()
+        SkeletalTrapezoidation st
+        BuildFor(st, LShapeContours())
+
+        boolean found = false
+        integer r = 0
+        repeat while r < st:ribNode:GetSize()
+            integer f = st:ribFoot:Get(r)
+            if Near(st:xs:Get(f), 1.0) and Near(st:ys:Get(f), 1.0)
+                found = true
+            end
+            r = r + 1
+        end
+        Check(found, "some node has a rib to the reflex corner (1, 1)")
+    end
+
+    // In the dumbbell's 0.4 mm neck the skeleton between its two sides (segments 2 and 8) runs along y = 2 with
+    // radius 0.2.
+    action TestNeckRadiusIsHalfItsWidth()
+        SkeletalTrapezoidation st
+        BuildFor(st, DumbbellContours())
+
+        integer checked = 0
+        boolean ok = true
         integer e = 0
         repeat while e < st:cleanStart:GetSize()
-            if st:cleanLinear:Get(e) = 0
-                anyChecked = true
-                integer c0 = st:cleanCategory0:Get(e)
-                integer c1 = st:cleanCategory1:Get(e)
-                integer pointCell = st:cleanCell0:Get(e)
-                integer pointCat = c0
-                integer segment = st:cleanCell1:Get(e)
-                if c0 >= 8
-                    pointCell = st:cleanCell1:Get(e)
-                    pointCat = c1
-                    segment = st:cleanCell0:Get(e)
-                end
-
-                number fx = SourceX(edges, pointCell, pointCat)
-                number fy = SourceY(edges, pointCell, pointCat)
-                number ax = edges:ScaleDown(edges:x0:Get(segment))
-                number ay = edges:ScaleDown(edges:y0:Get(segment))
-                number bx = edges:ScaleDown(edges:x1:Get(segment))
-                number by = edges:ScaleDown(edges:y1:Get(segment))
-
+            integer c0 = st:cleanCell0:Get(e)
+            integer c1 = st:cleanCell1:Get(e)
+            if (c0 = 2 and c1 = 8) or (c0 = 8 and c1 = 2)
                 integer ends = 0
                 repeat while ends < 2
                     integer v = st:cleanStart:Get(e)
                     if ends = 1
                         v = st:cleanEnd:Get(e)
                     end
-                    if not OnCurve(st:xs:Get(v), st:ys:Get(v), fx, fy, ax, ay, bx, by)
-                        allOnCurve = false
+                    checked = checked + 1
+                    if util:AbsNum(st:ys:Get(v) - 2.0) > 0.002 or util:AbsNum(st:rad:Get(v) - 0.2) > 0.002
+                        ok = false
                     end
                     ends = ends + 1
                 end
             end
             e = e + 1
         end
-
-        Check(anyChecked, "the L-shape has parabolic pieces to check")
-        Check(allOnCurve, "every parabolic node is equidistant from its focus and its line")
-    end
-
-    // ------------------------------------------------------------ dumbbell neck (bisectors)
-
-    // Every point-to-point piece is straight (linear = 1). The dumbbell neck produces them.
-    action TestBisectorPiecesAreStraight()
-        SkeletalTrapezoidation st
-        BuildFor(st, DumbbellContours())
-
-        boolean anyBisector = false
-        boolean allStraight = true
-        integer e = 0
-        repeat while e < st:cleanStart:GetSize()
-            integer c0 = st:cleanCategory0:Get(e)
-            integer c1 = st:cleanCategory1:Get(e)
-            if (c0 = 1 or c0 = 2) and (c1 = 1 or c1 = 2)
-                anyBisector = true
-                if st:cleanLinear:Get(e) not= 1
-                    allStraight = false
-                end
-            end
-            e = e + 1
-        end
-        Check(anyBisector, "the dumbbell neck produces point-to-point edges")
-        Check(allStraight, "every point-to-point piece is straight (linear = 1)")
-    end
-
-    // Every node on a point-to-point piece is equidistant from the two points it bisects.
-    action TestBisectorNodesAreEquidistant()
-        SkeletalTrapezoidation st
-        Array<Contour> contours = DumbbellContours()
-        BuildFor(st, contours)
-
-        OutlineEdges edges
-        edges:BuildEdges(contours)
-
-        boolean allEquidistant = true
-        integer e = 0
-        repeat while e < st:cleanStart:GetSize()
-            integer c0 = st:cleanCategory0:Get(e)
-            integer c1 = st:cleanCategory1:Get(e)
-            if (c0 = 1 or c0 = 2) and (c1 = 1 or c1 = 2)
-                number pax = SourceX(edges, st:cleanCell0:Get(e), c0)
-                number pay = SourceY(edges, st:cleanCell0:Get(e), c0)
-                number pbx = SourceX(edges, st:cleanCell1:Get(e), c1)
-                number pby = SourceY(edges, st:cleanCell1:Get(e), c1)
-
-                integer ends = 0
-                repeat while ends < 2
-                    integer v = st:cleanStart:Get(e)
-                    if ends = 1
-                        v = st:cleanEnd:Get(e)
-                    end
-                    number nx = st:xs:Get(v)
-                    number ny = st:ys:Get(v)
-                    number da = math:SquareRoot((nx - pax) * (nx - pax) + (ny - pay) * (ny - pay))
-                    number db = math:SquareRoot((nx - pbx) * (nx - pbx) + (ny - pby) * (ny - pby))
-                    if util:AbsNum(da - db) > 0.01
-                        allEquidistant = false
-                    end
-                    ends = ends + 1
-                end
-            end
-            e = e + 1
-        end
-        Check(allEquidistant, "every bisector node is equidistant from its two points")
-    end
-
-    // Every point-to-point piece is no longer than splitLength.
-    action TestBisectorPiecesAreShort()
-        SkeletalTrapezoidation st
-        BuildFor(st, DumbbellContours())
-
-        boolean allShort = true
-        integer e = 0
-        repeat while e < st:cleanStart:GetSize()
-            integer c0 = st:cleanCategory0:Get(e)
-            integer c1 = st:cleanCategory1:Get(e)
-            if (c0 = 1 or c0 = 2) and (c1 = 1 or c1 = 2)
-                integer a = st:cleanStart:Get(e)
-                integer b = st:cleanEnd:Get(e)
-                number dx = st:xs:Get(b) - st:xs:Get(a)
-                number dy = st:ys:Get(b) - st:ys:Get(a)
-                if math:SquareRoot(dx * dx + dy * dy) > st:splitLength + 0.000001
-                    allShort = false
-                end
-            end
-            e = e + 1
-        end
-        Check(allShort, "every point-to-point piece is at most splitLength long")
+        Check(checked > 0, "the neck has an edge between its two sides")
+        Check(ok, "the neck's skeleton lies on y = 2 with radius 0.2")
     end
 
     // ------------------------------------------------------------ significance cut and splitting

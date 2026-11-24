@@ -1,0 +1,68 @@
+package Libraries.Fabrication.Geometry
+
+/*
+The VoronoiJava class is the Java plugin that builds the Voronoi diagram of a
+layer's outline for VoronoiDiagram, with the JTS Topology Suite (pure Java, so
+no native library is needed on any operating system). Its Java side is
+Plugins/src/plugins/quorum/Libraries/Fabrication/Geometry/VoronoiJava.java.
+
+JTS diagrams points, so the outline is sampled: every corner, plus points about
+`spacing` mm apart along each segment. Only the skeleton's edges (inside the
+outline) are returned, each twice (once per direction), with the cells reported
+the way Boost reported them: a reflex corner as category 1 (its segment's start
+point), a convex corner as the nearer of its two segments, any other sample as
+its own segment (category 8). Runs of edges between the same two segments are
+joined into one straight edge.
+
+Most code should use VoronoiDiagram rather than this class.
+
+Attribute: Example
+
+    use Libraries.Fabrication.Geometry.VoronoiJava
+
+    class Main
+        action Main
+            VoronoiJava plugin
+            plugin:AddSegment(0, 0, 1, 0)
+            plugin:AddSegment(1, 0, 1, 1)
+            plugin:AddSegment(1, 1, 0, 1)
+            plugin:AddSegment(0, 1, 0, 0)
+            if plugin:Build(0.1) = 0
+                output plugin:GetEdgeCount() + " directed edges"
+            else
+                output plugin:GetError()
+            end
+        end
+    end
+*/
+class VoronoiJava
+    /* Removes all segments and results. */
+    system action Clear
+
+    /* Adds one outline segment (mm). Segments are numbered from 0 in the order added. */
+    system action AddSegment(number x0, number y0, number x1, number y1)
+
+    /*
+    Builds the diagram, sampling the segments about spacing mm apart.
+    Returns 0 on success; otherwise an error code, with GetError saying why, and no results.
+    */
+    system action Build(number spacing) returns integer
+
+    /* Why the last Build failed (empty when it succeeded). */
+    system action GetError returns text
+
+    /* How many outline samples the last Build used. */
+    system action GetSampleCount returns integer
+
+    system action GetVertexCount returns integer
+    system action GetVertexX(integer index) returns number
+    system action GetVertexY(integer index) returns number
+
+    system action GetEdgeCount returns integer
+    system action GetEdgeCell0(integer index) returns integer
+    system action GetEdgeCategory0(integer index) returns integer
+    system action GetEdgeCell1(integer index) returns integer
+    system action GetEdgeCategory1(integer index) returns integer
+    system action GetEdgeVertex0(integer index) returns integer
+    system action GetEdgeVertex1(integer index) returns integer
+end

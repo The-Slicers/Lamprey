@@ -1,27 +1,35 @@
 package Tests
 
 use Libraries.Containers.Array
-use Libraries.System.File
+use Libraries.Compute.Math
 use Libraries.Language.Errors.InvalidArgumentError
 use Libraries.Fabrication.Geometry.Contour
 use Libraries.Fabrication.Geometry.OutlineEdges
 use Libraries.Fabrication.Geometry.VoronoiDiagram
+use Libraries.Fabrication.Geometry.GeometryUtilities
 
+// Tests for VoronoiDiagram, built by the JTS plugin (VoronoiJava) from the outline sampled every 0.1 mm.
+// The diagram is approximate, so these check properties every correct diagram has, not exact counts.
 class VoronoiDiagramTests
     integer passed = 0
     integer failed = 0
+    Math math
+    GeometryUtilities util
 
     action Run returns integer
-        TestSquareWithHoleCounts()
-        TestFirstEdgeFields()
-        TestVertexScaledToMillimetres()
+        TestReferenceHasEdges()
         TestEveryEdgeHasTwin()
         TestCategoriesAreKnown()
         TestIndicesAreInRange()
+        TestEdgesAreStraightAndBounded()
+        TestEdgesLieInsideTheShape()
+        TestStripSkeletonIsTheCentreLine()
+        TestVerticesAreEquidistantFromBothSides()
+        TestRunsAreJoined()
         TestRebuildReplacesResults()
         TestEmptyInputGivesNothing()
-        TestBoostOffFails()
-        TestWorkFolderCreated()
+        TestSpacingMustBePositive()
+        TestSmallerSpacingUsesMoreSamples()
 
         output "VoronoiDiagram tests: passed " + passed + ", failed " + failed
         return failed
@@ -60,28 +68,25 @@ class VoronoiDiagramTests
         return c
     end
 
-    // Builds the edges of the reference shape: outer 0..1 mm, hole 0.4..0.6 mm.
-    action BuildReferenceEdges returns OutlineEdges
+    // The reference shape: outer 0..1 mm, hole 0.4..0.6 mm.
+    action ReferenceOutline returns Array<Contour>
         Array<Contour> outline
         outline:Add(Square(0, 0, 1, 1))
         outline:Add(HoleSquare(0.4, 0.4, 0.6, 0.6))
+        return outline
+    end
 
+    // A 6 mm by 1 mm strip.
+    action StripOutline returns Array<Contour>
+        Array<Contour> outline
+        outline:Add(Square(0, 0, 6, 1))
+        return outline
+    end
+
+    action EdgesOf(Array<Contour> outline) returns OutlineEdges
         OutlineEdges edges
         edges:BuildEdges(outline)
         return edges
-    end
-
-    // A diagram with the output folder set to one used only by tests.
-    action NewDiagram(text folder) returns VoronoiDiagram
-        VoronoiDiagram diagram
-        diagram:SetWorkPath(folder)
-        return diagram
-    end
-
-    // Generates the diagram of the reference shape.
-    action GenerateReference(VoronoiDiagram diagram)
-        OutlineEdges edges = BuildReferenceEdges()
-        diagram:Generate(edges)
     end
 
     // True when directed edge j is the twin of directed edge k: cells, categories
@@ -106,49 +111,49 @@ class VoronoiDiagramTests
         return false
     end
 
-    // The categories Boost defines (voronoi_geometry_type.hpp).
-    action IsKnownCategory(integer c) returns boolean
-        return c = 0 or c = 1 or c = 2 or c = 8 or c = 9
+    // Even-odd point in outline, as SkeletalTrapezoidation tests it.
+    action Inside(Array<Contour> outline, number x, number y) returns boolean
+        boolean inside = false
+        integer c = 0
+        repeat while c < outline:GetSize()
+            Contour loop = outline:Get(c)
+            if loop:ContainsPoint(x, y)
+                inside = not inside
+            end
+            c = c + 1
+        end
+        return inside
+    end
+
+    // Distance from (x, y) to the outline segment `cell` (category 1: its start point).
+    action CellDistance(OutlineEdges edges, integer cell, integer category, number x, number y) returns number
+        number x0 = edges:ScaleDown(edges:x0:Get(cell))
+        number y0 = edges:ScaleDown(edges:y0:Get(cell))
+        number x1 = edges:ScaleDown(edges:x1:Get(cell))
+        number y1 = edges:ScaleDown(edges:y1:Get(cell))
+        if category = 1
+            return math:SquareRoot((x - x0) * (x - x0) + (y - y0) * (y - y0))
+        end
+        return math:SquareRoot(util:SegmentDistance2(x, y, x0, y0, x1, y1))
     end
 
     // ------------------------------------------------------------ tests
 
-    // The reference shape: 21 vertices, 40 directed edges.
-    action TestSquareWithHoleCounts
-        VoronoiDiagram diagram = NewDiagram("Outputs/voronoi_test")
-        GenerateReference(diagram)
+    action TestReferenceHasEdges
+        VoronoiDiagram diagram
+        diagram:Generate(EdgesOf(ReferenceOutline()))
 
-        Check(diagram:vertX:GetSize() = 21, "square with hole has 21 vertices")
-        Check(diagram:cell0:GetSize() = 40, "square with hole has 40 directed edges")
-    end
-
-    // The first edge of the reference output: e 0 8 3 9 6 0 1.
-    action TestFirstEdgeFields
-        VoronoiDiagram diagram = NewDiagram("Outputs/voronoi_test")
-        GenerateReference(diagram)
-
-        Check(diagram:cell0:Get(0) = 0, "edge 0 cell0 is segment 0")
-        Check(diagram:category0:Get(0) = 8, "edge 0 cell0 is a segment cell (initial)")
-        Check(diagram:cell1:Get(0) = 3, "edge 0 cell1 is segment 3")
-        Check(diagram:category1:Get(0) = 9, "edge 0 cell1 is a segment cell (reverse)")
-        Check(diagram:vertex0:Get(0) = 6, "edge 0 starts at vertex 6")
-        Check(diagram:vertex1:Get(0) = 0, "edge 0 ends at vertex 0")
-        Check(diagram:linear:Get(0) = 1, "edge 0 is straight")
-    end
-
-    // Vertex 0 is the origin, and vertex 1 is (0, 1) mm.
-    action TestVertexScaledToMillimetres
-        VoronoiDiagram diagram = NewDiagram("Outputs/voronoi_test")
-        GenerateReference(diagram)
-
-        Check(diagram:vertX:Get(0) = 0.0 and diagram:vertY:Get(0) = 0.0, "vertex 0 is at the origin")
-        Check(diagram:vertX:Get(1) = 0.0 and diagram:vertY:Get(1) = 1.0, "vertex 1 is at (0, 1) mm")
+        Check(not diagram:Failed(), "the reference shape builds: " + diagram:GetError())
+        Check(diagram:vertX:GetSize() > 0, "the reference shape has vertices")
+        Check(diagram:cell0:GetSize() > 0, "the reference shape has edges")
+        Check(diagram:cell0:GetSize() mod 2 = 0, "edges come in pairs")
+        Check(diagram:GetSampleCount() > 8, "the outline was sampled between its corners")
     end
 
     // Every directed edge has a partner that swaps its cells, categories and vertices.
     action TestEveryEdgeHasTwin
-        VoronoiDiagram diagram = NewDiagram("Outputs/voronoi_test")
-        GenerateReference(diagram)
+        VoronoiDiagram diagram
+        diagram:Generate(EdgesOf(ReferenceOutline()))
 
         boolean allPaired = true
         integer k = 0
@@ -162,29 +167,28 @@ class VoronoiDiagramTests
         Check(allPaired, "every directed edge has a twin")
     end
 
-    // Every category is one of the values Boost defines.
+    // Every category is a corner (1) or a segment (8).
     action TestCategoriesAreKnown
-        VoronoiDiagram diagram = NewDiagram("Outputs/voronoi_test")
-        GenerateReference(diagram)
+        VoronoiDiagram diagram
+        diagram:Generate(EdgesOf(ReferenceOutline()))
 
         boolean allKnown = true
         integer k = 0
         repeat while k < diagram:cell0:GetSize()
-            if not IsKnownCategory(diagram:category0:Get(k))
-                allKnown = false
-            end
-            if not IsKnownCategory(diagram:category1:Get(k))
+            integer c0 = diagram:category0:Get(k)
+            integer c1 = diagram:category1:Get(k)
+            if not (c0 = 1 or c0 = 8) or not (c1 = 1 or c1 = 8)
                 allKnown = false
             end
             k = k + 1
         end
-        Check(allKnown, "every category is one of 0, 1, 2, 8, 9")
+        Check(allKnown, "every category is 1 (corner) or 8 (segment)")
     end
 
-    // Cells are segments 0-7, vertices are -1 or valid, linear is 0 or 1.
+    // Cells are segments 0-7, vertices are valid.
     action TestIndicesAreInRange
-        VoronoiDiagram diagram = NewDiagram("Outputs/voronoi_test")
-        GenerateReference(diagram)
+        VoronoiDiagram diagram
+        diagram:Generate(EdgesOf(ReferenceOutline()))
 
         integer vertexCount = diagram:vertX:GetSize()
         boolean inRange = true
@@ -196,61 +200,183 @@ class VoronoiDiagramTests
             if diagram:cell1:Get(k) < 0 or diagram:cell1:Get(k) > 7
                 inRange = false
             end
-            if diagram:vertex0:Get(k) < -1 or diagram:vertex0:Get(k) >= vertexCount
+            if diagram:vertex0:Get(k) < 0 or diagram:vertex0:Get(k) >= vertexCount
                 inRange = false
             end
-            if diagram:vertex1:Get(k) < -1 or diagram:vertex1:Get(k) >= vertexCount
-                inRange = false
-            end
-            if diagram:linear:Get(k) < 0 or diagram:linear:Get(k) > 1
+            if diagram:vertex1:Get(k) < 0 or diagram:vertex1:Get(k) >= vertexCount
                 inRange = false
             end
             k = k + 1
         end
-        Check(inRange, "cells are segments 0-7, vertices are -1 or valid, linear is 0 or 1")
+        Check(inRange, "cells are segments 0-7 and vertices are valid")
     end
 
-    // A second Generate replaces the first, so the counts stay at 21 and 40.
+    // Every edge is straight, has two ends, and has some length.
+    action TestEdgesAreStraightAndBounded
+        VoronoiDiagram diagram
+        diagram:Generate(EdgesOf(ReferenceOutline()))
+
+        boolean ok = true
+        integer k = 0
+        repeat while k < diagram:cell0:GetSize()
+            if diagram:linear:Get(k) not= 1 or diagram:vertex0:Get(k) = diagram:vertex1:Get(k)
+                ok = false
+            end
+            k = k + 1
+        end
+        Check(ok, "every edge is straight, with two different ends")
+    end
+
+    // Only the skeleton is returned: no edge's midpoint is in the hole or outside the square.
+    action TestEdgesLieInsideTheShape
+        Array<Contour> outline = ReferenceOutline()
+        VoronoiDiagram diagram
+        diagram:Generate(EdgesOf(outline))
+
+        boolean ok = true
+        integer k = 0
+        repeat while k < diagram:cell0:GetSize()
+            integer a = diagram:vertex0:Get(k)
+            integer b = diagram:vertex1:Get(k)
+            number mx = (diagram:vertX:Get(a) + diagram:vertX:Get(b)) / 2.0
+            number my = (diagram:vertY:Get(a) + diagram:vertY:Get(b)) / 2.0
+            if not Inside(outline, mx, my)
+                ok = false
+            end
+            k = k + 1
+        end
+        Check(ok, "every edge's midpoint is inside the outline")
+    end
+
+    // True when directed edge k lies between segments a and b (either way round).
+    action Between(VoronoiDiagram diagram, integer k, integer a, integer b) returns boolean
+        integer c0 = diagram:cell0:Get(k)
+        integer c1 = diagram:cell1:Get(k)
+        return (c0 = a and c1 = b) or (c0 = b and c1 = a)
+    end
+
+    // The strip's skeleton between its long sides (segments 0 and 2) is its centre line, y = 0.5, to within the
+    // sampling error (spacing^2 / (8 * radius) = 0.1^2 / 4 = 0.0025 mm), and runs most of its 6 mm length.
+    action TestStripSkeletonIsTheCentreLine
+        VoronoiDiagram diagram
+        diagram:Generate(EdgesOf(StripOutline()))
+
+        number length = 0.0
+        boolean ok = true
+        integer k = 0
+        repeat while k < diagram:cell0:GetSize()
+            if Between(diagram, k, 0, 2)
+                integer a = diagram:vertex0:Get(k)
+                integer b = diagram:vertex1:Get(k)
+                if util:AbsNum(diagram:vertY:Get(a) - 0.5) > 0.0025 or util:AbsNum(diagram:vertY:Get(b) - 0.5) > 0.0025
+                    ok = false
+                end
+                number dx = diagram:vertX:Get(b) - diagram:vertX:Get(a)
+                number dy = diagram:vertY:Get(b) - diagram:vertY:Get(a)
+                length = length + math:SquareRoot(dx * dx + dy * dy) / 2.0     // each edge is listed twice
+            end
+            k = k + 1
+        end
+        Check(length > 4.5, "the strip's centre line runs most of its length")
+        Check(ok, "the strip's skeleton between its long sides runs along y = 0.5")
+    end
+
+    // On the strip's centre line each end is about equally far from the two long sides, and the mean of the two
+    // distances is half the strip's width (what SkeletalTrapezoidation uses as the radius).
+    action TestVerticesAreEquidistantFromBothSides
+        Array<Contour> outline = StripOutline()
+        OutlineEdges edges = EdgesOf(outline)
+        VoronoiDiagram diagram
+        diagram:Generate(edges)
+
+        integer checked = 0
+        boolean close = true
+        boolean meanExact = true
+        integer k = 0
+        repeat while k < diagram:cell0:GetSize()
+            if Between(diagram, k, 0, 2)
+                integer v = diagram:vertex0:Get(k)
+                number x = diagram:vertX:Get(v)
+                number y = diagram:vertY:Get(v)
+                number d0 = CellDistance(edges, diagram:cell0:Get(k), diagram:category0:Get(k), x, y)
+                number d1 = CellDistance(edges, diagram:cell1:Get(k), diagram:category1:Get(k), x, y)
+                checked = checked + 1
+                if util:AbsNum(d0 - d1) > 0.005
+                    close = false
+                end
+                if util:AbsNum((d0 + d1) / 2.0 - 0.5) > 0.0001
+                    meanExact = false
+                end
+            end
+            k = k + 1
+        end
+        Check(checked > 0, "the strip has edges between its long sides")
+        Check(close, "a centre-line vertex is within 0.005 mm of equally far from both sides")
+        Check(meanExact, "the mean distance to the two sides is the strip's half width")
+    end
+
+    // Runs of edges between the same two segments are joined into one straight edge, as an exact diagram has them,
+    // so the strip's skeleton is a handful of edges, not one every 0.1 mm.
+    action TestRunsAreJoined
+        VoronoiDiagram diagram
+        diagram:Generate(EdgesOf(StripOutline()))
+
+        integer between = 0
+        integer k = 0
+        repeat while k < diagram:cell0:GetSize()
+            if Between(diagram, k, 0, 2)
+                between = between + 1
+            end
+            k = k + 1
+        end
+        Check(between > 0 and between <= 4, "the strip's long sides share at most two edges (four directed)")
+        Check(diagram:cell0:GetSize() < 40, "the strip's whole skeleton is a few edges")
+    end
+
+    // A second Generate replaces the first.
     action TestRebuildReplacesResults
-        VoronoiDiagram diagram = NewDiagram("Outputs/voronoi_test")
-        GenerateReference(diagram)
-        GenerateReference(diagram)
+        VoronoiDiagram diagram
+        diagram:Generate(EdgesOf(ReferenceOutline()))
+        integer vertices = diagram:vertX:GetSize()
+        integer edgeCount = diagram:cell0:GetSize()
+        diagram:Generate(EdgesOf(ReferenceOutline()))
 
-        Check(diagram:vertX:GetSize() = 21, "second Generate leaves 21 vertices, not 42")
-        Check(diagram:cell0:GetSize() = 40, "second Generate leaves 40 edges, not 80")
+        Check(diagram:vertX:GetSize() = vertices, "a second Generate leaves the same number of vertices, not twice")
+        Check(diagram:cell0:GetSize() = edgeCount, "a second Generate leaves the same number of edges, not twice")
     end
 
-    // No edges means no bridge call and no results.
+    // No edges means no plugin call and no results.
     action TestEmptyInputGivesNothing
-        VoronoiDiagram diagram = NewDiagram("Outputs/voronoi_test")
+        VoronoiDiagram diagram
         OutlineEdges edges
         diagram:Generate(edges)
 
+        Check(not diagram:Failed(), "empty input is not a failure")
         Check(diagram:vertX:GetSize() = 0, "empty input gives no vertices")
         Check(diagram:cell0:GetSize() = 0, "empty input gives no edges")
     end
 
-    // With Boost off, the Quorum stub is reached and reports it isn't written.
-    action TestBoostOffFails
-        VoronoiDiagram diagram = NewDiagram("Outputs/voronoi_test")
-        diagram:SetBoost(false)
-
+    // A spacing of 0 is refused.
+    action TestSpacingMustBePositive
+        VoronoiDiagram diagram
         boolean caught = false
         check
-            GenerateReference(diagram)
+            diagram:SetSpacing(0)
         detect e is InvalidArgumentError
             caught = true
         end
-        Check(caught, "SetBoost(false) reaches the Quorum stub and fails")
+        Check(caught, "SetSpacing(0) is refused")
     end
 
-    // The work folder is created on demand.
-    action TestWorkFolderCreated
-        VoronoiDiagram diagram = NewDiagram("Outputs/voronoi_test_folder")
-        GenerateReference(diagram)
+    // Halving the spacing samples the outline about twice as often.
+    action TestSmallerSpacingUsesMoreSamples
+        VoronoiDiagram coarse
+        coarse:SetSpacing(0.1)
+        coarse:Generate(EdgesOf(StripOutline()))
+        VoronoiDiagram fine
+        fine:SetSpacing(0.05)
+        fine:Generate(EdgesOf(StripOutline()))
 
-        File folder
-        folder:SetPath("Outputs/voronoi_test_folder")
-        Check(folder:Exists(), "the work folder is created on demand")
+        Check(fine:GetSampleCount() > coarse:GetSampleCount() * 3 / 2, "half the spacing gives about twice the samples")
     end
 end

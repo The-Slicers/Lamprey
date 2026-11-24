@@ -16,7 +16,6 @@ use Libraries.Fabrication.Geometry.WideningScheme
 use Libraries.Fabrication.Geometry.ToolpathExtraction
 
 class AdaptivePath
-    boolean boost = true                // type of voronoi diagram generation to use
     boolean valid = false
     
     integer WallCount = 2
@@ -27,6 +26,9 @@ class AdaptivePath
     number highShare = 1.5              // share of a a widthe the widest bead has
     number retreatShare = 0.75          // the amount an end is pulled back
     number minFeatureShare = 0.25
+    number sampleShare = 0.25           // outline sample spacing for the voronoi diagram, as a share of a width
+    number widthSlack = 0.01            // a bead up to this share wider than HighWidth is printed at HighWidth
+                                        // (the sampled skeleton's radius can be a few micrometres over)
 
     number tolerance = 0.000001
     number snapDistance = 0.02          // how close two line ends have to be to become a point/join
@@ -49,7 +51,7 @@ class AdaptivePath
             return walls
         end
 
-        // build edges in format understood by boost's voronoi diagram program
+        // build the outline's segments (cells of the voronoi diagram)
         OutlineEdges edges
         edges:BuildEdges(outline)
         if edges:x0:GetSize() < 3
@@ -57,11 +59,19 @@ class AdaptivePath
             return walls
         end
 
-        // generating voronoi diagram + building skeletal trapezoidation
+        // generating voronoi diagram (JTS plugin, from the outline sampled every sampleShare widths)
+        // + building skeletal trapezoidation
         VoronoiDiagram voronoi
-        voronoi:SetBoost(boost)
-        voronoi:SetWorkPath("Outputs/voronoi_test")
+        voronoi:SetSpacing(sampleShare * Width)
         voronoi:Generate(edges)
+        if voronoi:Failed()
+            reason = "voronoi diagram failed: " + voronoi:GetError()
+            return walls
+        end
+        if voronoi:cell0:GetSize() = 0
+            reason = "voronoi diagram has no edges inside the outline"
+            return walls
+        end
         SkeletalTrapezoidation st
         st:Build(outline, edges, voronoi)
 
@@ -116,7 +126,7 @@ class AdaptivePath
                 integer k = from
                 repeat while k < to
                     integer s = tx:polySites:Get(k)
-                    run:AddPoint(tx:siteX:Get(s), tx:siteY:Get(s), tx:siteWidth:Get(s))
+                    run:AddPoint(tx:siteX:Get(s), tx:siteY:Get(s), Capped(tx:siteWidth:Get(s)))
                     k = k + 1
                 end
 
@@ -226,7 +236,7 @@ class AdaptivePath
             if tx:dotIndex:Get(d) < WallCount
 
                 // get half of line that can hold dot's area (pi w^2 / 4) 
-                number dotWidth = tx:dotWidth:Get(d)
+                number dotWidth = Capped(tx:dotWidth:Get(d))
                 number half = 3.141592653589793 * dotWidth / 8.0    // half of line
                 number limit = 0.95 * tx:dotRadius:Get(d)
                 if half > limit
@@ -345,6 +355,15 @@ class AdaptivePath
 
         valid = true    // walls passed
         return walls
+    end
+
+    // a width just over HighWidth (within widthSlack) is HighWidth: the sampled skeleton's radius can be a few
+    // micrometres over the true one, and a feature exactly HighWidth wide would otherwise fail the layer
+    private action Capped(number width) returns number
+        if width > HighWidth() and width <= HighWidth() * (1.0 + widthSlack)
+            return HighWidth()
+        end
+        return width
     end
 
     // calculates width of a strip
@@ -498,8 +517,10 @@ class AdaptivePath
         WallCount = wc
     end
 
-    action UseBoost(boolean useBoost)
-        boost = useBoost
+    // outline sample spacing for the voronoi diagram, as a share of the width (default 0.25)
+    // smaller is closer to the exact skeleton but slower
+    action SetSampleShare(number share)
+        sampleShare = share
     end
 
     action IsValid returns boolean

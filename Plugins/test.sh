@@ -6,8 +6,8 @@ cd "$(dirname "$0")"
 sh build.sh
 rm -rf test-classes
 mkdir test-classes
-javac -cp lamprey-plugins.jar -d test-classes test/PluginTests.java
+javac -cp lamprey-plugins.jar:jts-core-1.20.0.jar -d test-classes test/PluginTests.java
 status=0
-java -cp lamprey-plugins.jar:test-classes PluginTests || status=$?
+java -cp lamprey-plugins.jar:jts-core-1.20.0.jar:test-classes PluginTests || status=$?
 rm -rf test-classes
 exit $status

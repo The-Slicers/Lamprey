@@ -222,6 +222,10 @@ class SliceJob
         ConfigurePaths(profile, paths)
         paths:SetProgress(verbose)
         paths:Generate(contours, planeCount)
+        if paths:GetAdaptiveFallbackCount() > 0
+            Report("adaptive walls fell back to uniform walls on " + paths:GetAdaptiveFallbackCount() + " of "
+                + planeCount + " layers (verbose output gives each layer's reason)")
+        end
         Array<Contour> walls = paths:GetWalls()
         Array<Contour> skin = paths:GetSkin()
         Array<Contour> infill = paths:GetInfill()

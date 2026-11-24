@@ -309,7 +309,6 @@ class BeadPlacementTests
         edges:BuildEdges(contours)
 
         VoronoiDiagram diagram
-        diagram:SetWorkPath("Outputs/voronoi_test")
         diagram:Generate(edges)
 
         st:Build(contours, edges, diagram)

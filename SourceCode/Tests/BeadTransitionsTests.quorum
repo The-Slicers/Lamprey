@@ -217,7 +217,6 @@ class BeadTransitionsTests
         edges:BuildEdges(contours)
 
         VoronoiDiagram diagram
-        diagram:SetWorkPath("Outputs/voronoi_test")
         diagram:Generate(edges)
 
         st:Build(contours, edges, diagram)
@@ -343,6 +342,24 @@ class BeadTransitionsTests
 
     private action Near(number a, number b) returns boolean
         return a - b < 0.000001 and b - a < 0.000001
+    end
+
+    private action NearTo(number a, number b, number tolerance) returns boolean
+        return a - b <= tolerance and b - a <= tolerance
+    end
+
+    // The node with the biggest radius (-1 if there are none). The outline is sampled, so a square's centre is
+    // found this way rather than by its exact coordinates.
+    private action WidestNode(SkeletalTrapezoidation st) returns integer
+        integer best = -1
+        integer v = 0
+        repeat while v < st:xs:GetSize()
+            if best < 0 or st:rad:Get(v) > st:rad:Get(best)
+                best = v
+            end
+            v = v + 1
+        end
+        return best
     end
 
     // Index of a node whose radius is within 0.000001 of r, or -1.
@@ -685,8 +702,8 @@ class BeadTransitionsTests
         BeadTransitions bt
         BuildFor(st, cm, bt, BigSquareContours())
 
-        integer v = FindNode(st, 10.0, 10.0)
-        Check(v >= 0, "the square has a node at its centre")
+        integer v = WidestNode(st)
+        Check(v >= 0 and NearTo(st:xs:Get(v), 10.0, 0.01) and NearTo(st:ys:Get(v), 10.0, 0.01), "the square's widest node is at its centre")
         if v >= 0
             Check(bt:nodeCount:Get(v) = 50, "the centre of a 20 mm square quantizes to 50 beads")
         end
@@ -1530,7 +1547,7 @@ class BeadTransitionsTests
         bt:SetScheme(SchemeFor(4, -1.0))
         BuildFor(st, cm, bt, BigSquareContours())
 
-        integer v = FindNode(st, 10.0, 10.0)
+        integer v = WidestNode(st)
         Check(v >= 0 and bt:nodeCount:Get(v) = 4, "the shell scheme caps the square's centre at 4 beads")
     end
     // A sliver 0.16 mm long: radii 0.04, 0.07, 0.04 at 0.08 mm spacing, with widening (2 r_min = 0.1), give counts

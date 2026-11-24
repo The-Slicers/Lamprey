@@ -5,7 +5,7 @@
     "IOSAssets" : "media",
     "IOS_BUNDLE" : "org.quorumlanguage",
     "IOS_DEVICE" : "iPhone 14 Simulator",
-    "JarDependencies" : ["Plugins/lamprey-plugins.jar"],
+    "JarDependencies" : ["Plugins/lamprey-plugins.jar", "Plugins/jts-core-1.20.0.jar"],
     "Main" : "/SourceCode/Main.quorum",
     "Project Version" : "1.0",
     "ProjectName" : "Lamprey",

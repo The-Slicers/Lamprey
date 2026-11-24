@@ -21,6 +21,7 @@ class AdaptiveFillTests
         TestAdaptiveOnEveryPlane()
         TestInfillOnInteriorPlanes()
         TestFillStaysOutsideWalls()
+        TestFillDepthFollowsAdaptiveOverlap()
         TestBarPrintsOnEveryPlane()
         TestEllPrintsOnEveryPlane()
 
@@ -176,6 +177,64 @@ class AdaptiveFillTests
         if not LinesClearOfWalls(paths:GetInfill(), walls, need)
             output "KNOWN OPEN: an adaptive infill vertex lies deeper than the overlap in a wall band"
         end
+    end
+
+    // How close the bottom plane's solid fill comes to the square's sides: the smallest distance from a skin vertex
+    // on plane 0 to the outline (line ends, and the joins between them, lie on the fill area's edge).
+    private action SkinDepth(boolean adaptive) returns number
+        PathGenerator paths
+        paths:SetAdaptive(adaptive)
+        paths:SetLineWidth(0.4)
+        paths:SetWallCount(2)
+        paths:SetInfillDensity(0.2)
+        paths:SetInfillOverlap(0.25)
+        paths:SetAdaptiveFillOverlap(0.15)
+        paths:Generate(Stack(), planeCount)
+        if adaptive and paths:GetAdaptiveFallbackCount() > 0
+            return -1.0
+        end
+        number depth = 100.0
+        Array<Contour> skin = paths:GetSkin()
+        integer i = 0
+        repeat while i < skin:GetSize()
+            Contour line = skin:Get(i)
+            if line:planeIndex = 0
+                integer k = 0
+                repeat while k < line:GetSize()
+                    number x = line:xs:Get(k)
+                    number y = line:ys:Get(k)
+                    number d = x
+                    if 10.0 - x < d
+                        d = 10.0 - x
+                    end
+                    if y < d
+                        d = y
+                    end
+                    if 10.0 - y < d
+                        d = 10.0 - y
+                    end
+                    if d < depth
+                        depth = d
+                    end
+                    k = k + 1
+                end
+            end
+            i = i + 1
+        end
+        return depth
+    end
+
+    // Fill lines' centres start (wallCount + 0.5 - overlap) widths in: on adaptive planes with adaptiveFillOverlap
+    // (0.15 here: 2.35 * 0.4 = 0.94 mm), on uniform planes with infillOverlap (0.25: 2.25 * 0.4 = 0.9 mm). The two
+    // overlaps differ here on purpose, so the test shows which one each kind of plane used.
+    action TestFillDepthFollowsAdaptiveOverlap()
+        number adaptiveDepth = SkinDepth(true)
+        number uniformDepth = SkinDepth(false)
+        Check(adaptiveDepth >= 0.0, "the squares get adaptive walls on every plane")
+        Check(math:AbsoluteValue(adaptiveDepth - 0.94) < 0.005,
+              "adaptive fill starts 2.35 widths in (adaptiveFillOverlap 0.15), was " + adaptiveDepth)
+        Check(math:AbsoluteValue(uniformDepth - 0.9) < 0.005,
+              "uniform fill starts 2.25 widths in (infillOverlap 0.25), was " + uniformDepth)
     end
 
     // Ten identical bars, one per plane.

@@ -17,8 +17,8 @@ class CenterMarkingTests
 
     action Run returns integer
         TestArraySizesMatchTheSkeleton()
-        TestBeadCountKnownValues()
-        TestUntouchedNodeHasNoBeadCount()
+        TestBeadCountIsDiameterInWidths()
+        TestEveryNodeHasABeadCount()
         TestFeetAreNeverCentral()
         TestCentreOfSquareIsCentral()
         TestCentralEdgesHaveCentralInteriorEnds()
@@ -101,7 +101,6 @@ class CenterMarkingTests
         edges:BuildEdges(contours)
 
         VoronoiDiagram diagram
-        diagram:SetWorkPath("Outputs/voronoi_test")
         diagram:Generate(edges)
 
         st:Build(contours, edges, diagram)
@@ -109,29 +108,26 @@ class CenterMarkingTests
 
     // ------------------------------------------------------------ helpers
 
-    // Index of the node at (x, y), or -1 if there is none.
-    private action FindNode(SkeletalTrapezoidation st, number x, number y) returns integer
+    private action Near(number a, number b) returns boolean
+        return a - b < 0.000001 and b - a < 0.000001
+    end
+
+    private action NearTo(number a, number b, number tolerance) returns boolean
+        return a - b <= tolerance and b - a <= tolerance
+    end
+
+    // The node with the biggest radius (-1 if there are none). The outline is sampled, so a square's centre is
+    // found this way rather than by its exact coordinates.
+    private action WidestNode(SkeletalTrapezoidation st) returns integer
+        integer best = -1
         integer v = 0
         repeat while v < st:xs:GetSize()
-            if Near(st:xs:Get(v), x) and Near(st:ys:Get(v), y)
-                return v
+            if best < 0 or st:rad:Get(v) > st:rad:Get(best)
+                best = v
             end
             v = v + 1
         end
-        return -1
-    end
-
-    // True when the node at (x, y) exists and its bead count is expected, to one micrometre.
-    private action BeadIs(SkeletalTrapezoidation st, CenterMarking cm, number x, number y, number expected) returns boolean
-        integer v = FindNode(st, x, y)
-        if v < 0
-            return false
-        end
-        return Near(cm:beadCount:Get(v), expected)
-    end
-
-    private action Near(number a, number b) returns boolean
-        return a - b < 0.000001 and b - a < 0.000001
+        return best
     end
 
     // Length of kept edge e, in mm.
@@ -157,29 +153,41 @@ class CenterMarkingTests
         Check(cm:edgeCentral:GetSize() = st:cleanStart:GetSize(), "one central flag per edge")
     end
 
-    // Bead count is 2 * R / w*, with w* = 0.4 mm.
-    // (0, 0) lies on the outline: radius 0, so 0 beads.
-    // (0.2, 0.4) has radius 0.2: 2 * 0.2 / 0.4 = 1 bead.
-    // The diagonal node has radius 0.234314575: about 1.1715729 beads.
-    action TestBeadCountKnownValues()
+    // Bead count is 2 * R / w*, with w* = 0.4 mm, at every node that has a radius.
+    action TestBeadCountIsDiameterInWidths()
         SkeletalTrapezoidation st
         BuildFor(st, ReferenceContours())
         CenterMarking cm
         cm:Build(st)
 
-        Check(BeadIs(st, cm, 0.0, 0.0, 0.0), "outer corner has 0 beads")
-        Check(BeadIs(st, cm, 0.2, 0.4, 1.0), "(0.2, 0.4) has 1 bead")
-        Check(BeadIs(st, cm, 0.234314575, 0.234314575, 1.1715729), "diagonal node has about 1.1716 beads")
+        boolean ok = true
+        integer v = 0
+        repeat while v < st:xs:GetSize()
+            if st:rad:Get(v) >= 0.0 and not Near(cm:beadCount:Get(v), 2.0 * st:rad:Get(v) / 0.4)
+                ok = false
+            end
+            v = v + 1
+        end
+        Check(ok, "every node's bead count is 2 * radius / 0.4")
     end
 
-    // The hole centre is not on any edge and not on the outline, so it has no radius and no bead count.
-    action TestUntouchedNodeHasNoBeadCount()
+    // A sampled diagram keeps only the vertices its edges use, so every node has a radius and a bead count
+    // (0 for an outline foot).
+    action TestEveryNodeHasABeadCount()
         SkeletalTrapezoidation st
         BuildFor(st, ReferenceContours())
         CenterMarking cm
         cm:Build(st)
 
-        Check(BeadIs(st, cm, 0.5, 0.5, -1.0), "hole centre has no bead count (-1)")
+        boolean ok = true
+        integer v = 0
+        repeat while v < st:xs:GetSize()
+            if cm:beadCount:Get(v) < 0.0
+                ok = false
+            end
+            v = v + 1
+        end
+        Check(ok, "every node has a bead count")
     end
 
     // No outline foot is ever marked central. Feet have radius 0, and an unset node has -1.
@@ -207,8 +215,8 @@ class CenterMarkingTests
         CenterMarking cm
         cm:Build(st)
 
-        integer v = FindNode(st, 10.0, 10.0)
-        Check(v >= 0, "the square has a node at its centre")
+        integer v = WidestNode(st)
+        Check(v >= 0 and NearTo(st:xs:Get(v), 10.0, 0.01) and NearTo(st:ys:Get(v), 10.0, 0.01), "the square's widest node is at its centre")
 
         boolean central = false
         if v >= 0
@@ -270,35 +278,40 @@ class CenterMarkingTests
         Check(ok, "no short unmarked edge joins two central nodes")
     end
 
-        // The spine of a thin wedge, away from the apex and the wide end, is significant: its
-    // radius slope is about 0.259, below the threshold. Every such node must be central.
+    // The spine of a thin wedge (the skeleton between its two long sides, segments 0 and 2) is significant: its
+    // radius slope is sin 15 degrees, about 0.259, below the threshold. Every spine edge reaching past r = 0.2 (the
+    // sampled spine is one long edge from near the apex), and its ends inside the part, must be central. (Where the spine meets the wide end's branches, x = 10 / (1 + sin 15) = 7.94,
+    // the sampled skeleton has a few short branch edges; those are not spine and are not checked.)
     action TestWedgeSpineIsCentral()
         SkeletalTrapezoidation st
         BuildFor(st, WedgeContours())
         CenterMarking cm
         cm:Build(st)
 
-        integer spineNodes = 0
-        integer centralSpine = 0
-        integer v = 0
-        repeat while v < st:xs:GetSize()
-            number x = st:xs:Get(v)
-            number y = st:ys:Get(v)
-            if util:AbsNum(y) < 0.01 and x > 1.0 and x < 8.0 and st:rad:Get(v) > 0.0
-                spineNodes = spineNodes + 1
-                if cm:nodeCentral:Get(v) = 1
-                    centralSpine = centralSpine + 1
+        integer spineEdges = 0
+        boolean allCentral = true
+        integer e = 0
+        repeat while e < st:cleanStart:GetSize()
+            integer c0 = st:cleanCell0:Get(e)
+            integer c1 = st:cleanCell1:Get(e)
+            integer a = st:cleanStart:Get(e)
+            integer b = st:cleanEnd:Get(e)
+            boolean spine = (c0 = 0 and c1 = 2) or (c0 = 2 and c1 = 0)
+            if spine and (st:rad:Get(a) > 0.2 or st:rad:Get(b) > 0.2)
+                spineEdges = spineEdges + 1
+                if cm:edgeCentral:Get(e) not= 1
+                    allCentral = false
+                end
+                if (st:rad:Get(a) > 0.0 and cm:nodeCentral:Get(a) not= 1) or (st:rad:Get(b) > 0.0 and cm:nodeCentral:Get(b) not= 1)
+                    allCentral = false
                 end
             end
-            v = v + 1
+            e = e + 1
         end
-        Check(spineNodes > 0, "the wedge has spine nodes between the apex and the wide end")
-        Check(centralSpine = spineNodes, "every spine node of the wedge is central")
+        Check(spineEdges > 0, "the wedge has spine edges reaching past r = 0.2")
+        Check(allCentral, "every spine edge of the wedge, and its ends, is central")
     end
 
-    // A thin isosceles wedge: apex at the origin, opening to the right, apex angle 30 degrees.
-    // Its spine (y = 0) has radius slope sin(15 degrees) = 0.259, below cos(67.5 degrees) = 0.383,
-    // so the paper calls it significant (bisector angle 150 degrees).
     private action WedgeContours returns Array<Contour>
         Array<Contour> contours
         Contour c
