@@ -32,6 +32,7 @@ class AdaptivePath
                                         // (the sampled skeleton's radius can be a few micrometres over)
 
     number tolerance = 0.000001
+    number outsideTolerance = 0.005
     number snapDistance = 0.02          // how close two line ends have to be to become a point/join
     text reason = ""                    // reports issue if generation fails for a contour
 
@@ -311,8 +312,9 @@ class AdaptivePath
                     end
                     c = c + 1
                 end
-                if not inside
-                    reason = "wall point outside the shape"
+                if not inside and OutsideBy(outline, wall:xs:Get(pt), wall:ys:Get(pt)) > outsideTolerance
+                    reason = "wall point outside the shape at (" + wall:xs:Get(pt) + ", " + wall:ys:Get(pt) + "), bead "
+                        + wall:wallIndex + ", " + OutsideBy(outline, wall:xs:Get(pt), wall:ys:Get(pt)) + " mm out"
                     return walls
                 end
                 pt = pt + 1
@@ -510,6 +512,28 @@ class AdaptivePath
         end
         cut:keepShort = w:keepShort
         return cut
+    end
+
+        // distance from (x, y) to the nearest outline edge (mm)
+    private action OutsideBy(Array<Contour> outline, number x, number y) returns number
+        number best = -1.0
+        integer c = 0
+        repeat while c < outline:GetSize()
+            Contour loop = outline:Get(c)
+            integer n = loop:GetSize()
+            integer j = n - 1
+            integer k = 0
+            repeat while k < n
+                number d2 = util:SegmentDistance2(x, y, loop:xs:Get(j), loop:ys:Get(j), loop:xs:Get(k), loop:ys:Get(k))
+                if best < 0.0 or d2 < best
+                    best = d2
+                end
+                j = k
+                k = k + 1
+            end
+            c = c + 1
+        end
+        return math:SquareRoot(best)
     end
 
     action SetWidth(number w)

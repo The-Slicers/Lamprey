@@ -122,6 +122,7 @@
         "_coolingNote": "Bambu's slow_down_layer_time 8 and slow_down_min_speed 20. With 4 s, the hull and cabin layers printed in 3-4 s, too soon for the layer below to cool: rope-like walls and sagging overhangs.",
         "minLayerTime": 8,
         "minPrintSpeed": 20,
+        "overhangSpeed75": 30,
 
         "_fillNote": "Infill reaches 15% of a line width into the innermost adaptive wall, like Bambu's infill_wall_overlap.",
         "adaptiveFillOverlap": 0.15

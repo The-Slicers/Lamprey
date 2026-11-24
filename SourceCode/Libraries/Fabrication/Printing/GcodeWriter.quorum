@@ -2313,13 +2313,13 @@ class GcodeWriter
         end
 
         // slow-down factor: printing time stretched to fill what the
-        // overhead leaves of minLayerTime
+        // overhead leaves of minLayerTime. Overhang slowdown doesn't count, so a layer with
+        // slow overhangs still slows its other walls like its neighbours (no speed jump, no band)
         i = 0
         repeat while i <= top
             number printing = seconds:Get(i)
             number other = overhead:Get(i)
             number factor = 1.0
-            other = other + overhangTime:Get(i)
             if minLayerTime > 0 and printing > 0 and printing + other < minLayerTime
                 factor = printing / (minLayerTime - other)
                 slowedLayers = slowedLayers + 1
