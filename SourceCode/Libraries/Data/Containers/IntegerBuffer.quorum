@@ -203,11 +203,7 @@ class IntegerBuffer
         end
         Reserve(size)
         // Empty keeps old values in memory, so clear the slots being reused
-        integer i = count
-        repeat while i < size
-            items:Set(i, 0)
-            i = i + 1
-        end
+        items:Fill(0, count, 0)
         count = size
     end
 
