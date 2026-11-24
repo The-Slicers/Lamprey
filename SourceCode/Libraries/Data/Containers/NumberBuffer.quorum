@@ -1,6 +1,7 @@
 package Libraries.Data.Containers
 
 use Libraries.Containers.Number64BitArray
+use Libraries.Language.Errors.InvalidArgumentError
 use Libraries.Language.Errors.InvalidLocationError
 
 /*
@@ -208,6 +209,58 @@ class NumberBuffer
             i = i + 1
         end
         count = size
+    end
+
+    /*
+    Replaces all locations with the number value.
+
+    Attribute: Parameter value The new number.
+
+    Attribute: Example
+
+        use Libraries.Data.Containers.NumberBuffer
+
+        NumberBuffer ids
+        ids:SetSize(3)
+        ids:Fill(1) // 1, 1, 1
+    */
+    action Fill(number value)
+        items:Fill(value)
+    end
+
+    /*
+    Replaces all locations in the range with the number value.
+    The range is inclusive of the beginning and exclusive of the end,
+    and the range beginning must be less than the range end and within
+    the range of the array.
+
+    Attribute: Parameter from The start of the range.
+
+    Attribute: Parameter to The end of the range.
+
+    Attribute: Parameter value The new number.
+
+    Attribute: Example
+
+        use Libraries.Data.Containers.NumberBuffer
+
+        NumberBuffer ids
+        ids:SetSize(3)
+        ids:Fill(1) // 1, 1, 1
+    */
+    action Fill(integer from, integer to, number value)
+        if from < 0
+            Fail(from)
+        end
+        if to > count
+            Fail(to)
+        end
+        if (from >= to)
+            InvalidArgumentError error
+            alert(error)
+        end
+        
+        items:Fill(from, to, value)
     end
 
     /*
