@@ -1,0 +1,509 @@
+package Libraries.Fabrication.Geometry
+
+use Libraries.Containers.Array
+use Libraries.Containers.HashTable
+use Libraries.Fabrication.Geometry.SkeletalTrapezoidation
+use Libraries.Fabrication.Geometry.Bead
+use Libraries.Fabrication.Geometry.BeadPlacement
+use Libraries.Data.Containers.IntegerBuffer
+
+// turns the placed beads into lines
+class ToolpathExtraction
+    public boolean valid = true
+    number tolerance = 0.000000001
+
+    // sites
+    public Array<number> siteX
+    public Array<number> siteY
+    public Array<number> siteWidth
+    public Array<integer> siteIndex
+    public Array<integer> siteEdge
+    public Array<integer> siteRib
+
+    // chords
+    public Array<integer> segStart
+    public Array<integer> segEnd
+    public Array<integer> segIndex
+    public Array<boolean> segOdd
+
+    // polylines
+    public Array<integer> polyStart
+    public Array<integer> polySites
+    public Array<integer> polyIndex
+
+    // dots (beads that are single points)
+    public Array<number> dotX
+    public Array<number> dotY
+    public Array<number> dotWidth
+    public Array<number> dotRadius          // the node's radius (dot can't be over this)
+    public Array<integer> dotIndex
+
+    Array<IntegerBuffer> siteSegs           // chord that ends at this site
+    HashTable<text, integer> siteAt         // rib or edge
+    Array<integer> ribCanon
+    HashTable<text, integer> ribAt
+
+    // marked: 1 for each central edge (from BeadTransitions)
+    action Build(SkeletalTrapezoidation st, BeadPlacement bp, Array<integer> marked)
+        // reset
+        siteX:Empty()
+        siteY:Empty()
+        siteWidth:Empty()
+        siteIndex:Empty()
+        siteEdge:Empty()
+        siteRib:Empty()
+        siteSegs:Empty()
+        segStart:Empty()
+        segEnd:Empty()
+        segIndex:Empty()
+        segOdd:Empty()
+        polyStart:Empty()
+        polySites:Empty()
+        polyIndex:Empty()
+        ribCanon:Empty()
+        dotX:Empty()
+        dotY:Empty()
+        dotWidth:Empty()
+        dotRadius:Empty()
+        dotIndex:Empty()
+        HashTable<text, integer> sites
+        siteAt = sites
+
+        // error
+        valid = bp:valid
+        if not valid
+            return now
+        end
+
+        // not a mark for every edge
+        if marked:GetSize() < st:cleanStart:GetSize()
+            valid = false
+            return now
+        end
+
+        // ribs from the same node to the same foot count as one rib (the first one)
+        HashTable<text, integer> ribs
+        ribAt = ribs
+        HashTable<text, integer> pairs
+        integer r = 0
+        repeat while r < st:ribNode:GetSize()
+            // first rib with this node and foot
+            text pair = "" + st:ribNode:Get(r) + "_" + st:ribFoot:Get(r)
+            if not pairs:HasKey(pair)
+                pairs:Add(pair, r)
+            end
+            integer canon = pairs:GetValue(pair)
+            ribCanon:Add(canon)
+
+            // look the rib up by node and support
+            ribAt:Add(RibKey(st:ribNode:Get(r), st:ribCell:Get(r), st:ribCategory:Get(r)), canon)
+            r = r + 1
+        end
+
+        // sites on ribs: one per bead, where the bead crosses the rib
+        integer rr = 0
+        repeat while rr < st:ribNode:GetSize()
+            // only the first rib of each node and foot
+            if ribCanon:Get(rr) = rr
+                integer rn = st:ribNode:Get(rr)
+                integer rf = st:ribFoot:Get(rr)
+                number rv = st:rad:Get(rn)
+
+                // node inside the part, with beads
+                if rv > 0.0 and bp:placed:Get(rn) = 1
+                    // go through the node's beads
+                    integer rk = 0
+                    repeat while rk < bp:beadsAt:Get(rn)
+                        Bead rb = bp:beads:Get(bp:beadStart:Get(rn) + rk)
+                        number rloc = rb:location
+
+                        // just above the radius by rounding: take the radius
+                        if rloc > rv and rloc - rv < tolerance
+                            rloc = rv
+                        end
+
+                        // the bead crosses this rib
+                        if rloc > 0.0 and rloc <= rv
+                            // how far from the node toward the foot (0 to 1)
+                            number rt = (rv - rloc) / rv
+                            number rx = st:xs:Get(rn) + (st:xs:Get(rf) - st:xs:Get(rn)) * rt
+                            number ry = st:ys:Get(rn) + (st:ys:Get(rf) - st:ys:Get(rn)) * rt
+
+                            // add the site and remember it
+                            AddSite(rx, ry, rb:width, rk, -1, rr)
+                            siteAt:Add("R" + rr + "_" + rk, siteX:GetSize() - 1)
+                        end
+                        rk = rk + 1
+                    end
+                end
+            end
+            rr = rr + 1
+        end
+
+        // sites on unmarked edges: one per bead of the upper node, where the bead crosses the edge
+        integer e = 0
+        repeat while e < st:cleanStart:GetSize()
+            // only one edge of each twin pair (the lower number)
+            integer twin = st:cleanOpposite:Get(e)
+            boolean lower = true
+            if twin >= 0 and twin < e
+                lower = false
+            end
+
+            // only unmarked edges
+            if lower and marked:Get(e) = 0
+                // the upper (bigger radius) and lower ends
+                integer ea = st:cleanStart:Get(e)
+                integer eb = st:cleanEnd:Get(e)
+                integer upperNode = ea
+                integer lowerNode = eb
+                if st:rad:Get(eb) > st:rad:Get(ea)
+                    upperNode = eb
+                    lowerNode = ea
+                end
+                number rTop = st:rad:Get(upperNode)
+                number rBottom = st:rad:Get(lowerNode)
+
+                // upper node has beads, and the edge isn't flat
+                if bp:placed:Get(upperNode) = 1 and rTop > rBottom
+                    // go through the upper node's beads
+                    integer ek = 0
+                    repeat while ek < bp:beadsAt:Get(upperNode)
+                        Bead ebead = bp:beads:Get(bp:beadStart:Get(upperNode) + ek)
+                        number eloc = ebead:location
+
+                        // just above the radius by rounding: take the radius
+                        if eloc > rTop and eloc - rTop < tolerance
+                            eloc = rTop
+                        end
+
+                        // the bead crosses this edge (at the lower end it belongs to that node's ribs)
+                        if eloc > rBottom + tolerance and eloc <= rTop
+                            // how far from the upper end toward the lower end (0 to 1)
+                            number et = (rTop - eloc) / (rTop - rBottom)
+                            number ex = st:xs:Get(upperNode) + (st:xs:Get(lowerNode) - st:xs:Get(upperNode)) * et
+                            number ey = st:ys:Get(upperNode) + (st:ys:Get(lowerNode) - st:ys:Get(upperNode)) * et
+
+                            // add the site and remember it
+                            AddSite(ex, ey, ebead:width, ek, e, -1)
+                            siteAt:Add("E" + e + "_" + ek, siteX:GetSize() - 1)
+                        end
+                        ek = ek + 1
+                    end
+                end
+            end
+            e = e + 1
+        end
+
+        // chords: every trapezoid once
+        integer te = 0
+        repeat while te < st:cleanStart:GetSize()
+            // the edge's side 0
+            MakeTrapezoid(st, bp, marked, te, st:cleanCell0:Get(te), st:cleanCategory0:Get(te))
+
+            // no twin: do side 1 too (otherwise the twin's side 0 covers it)
+            if st:cleanOpposite:Get(te) < 0
+                MakeTrapezoid(st, bp, marked, te, st:cleanCell1:Get(te), st:cleanCategory1:Get(te))
+            end
+            te = te + 1
+        end
+
+        // polylines: chain the chords
+        // no chord used yet
+        Array<boolean> used
+        integer g = 0
+        repeat while g < segStart:GetSize()
+            used:Add(false)
+            g = g + 1
+        end
+
+        // first the open lines: start from a site with only one chord (a loose end)
+        integer cs = 0
+        repeat while cs < segStart:GetSize()
+            if not used:Get(cs)
+                if SiteDegree(segStart:Get(cs)) = 1
+                    WalkRun(segStart:Get(cs), cs, used)
+                elseif SiteDegree(segEnd:Get(cs)) = 1
+                    WalkRun(segEnd:Get(cs), cs, used)
+                end
+            end
+            cs = cs + 1
+        end
+
+        // then whatever is left: closed loops
+        integer cl = 0
+        repeat while cl < segStart:GetSize()
+            if not used:Get(cl)
+                WalkRun(segStart:Get(cl), cl, used)
+            end
+            cl = cl + 1
+        end
+
+        // dots: a centre bead on a local maximum is a single point
+        // per node: is it a local maximum, does it have an edge, is it on a marked edge
+        integer n = st:xs:GetSize()
+        Array<boolean> isMax
+        Array<boolean> hasEdge
+        Array<boolean> onMarked
+        integer dv = 0
+        repeat while dv < n
+            isMax:Add(true)
+            hasEdge:Add(false)
+            onMarked:Add(false)
+            dv = dv + 1
+        end
+
+        // go through edges
+        integer de = 0
+        repeat while de < st:cleanStart:GetSize()
+            integer da = st:cleanStart:Get(de)
+            integer db = st:cleanEnd:Get(de)
+
+            // both ends have an edge
+            hasEdge:Set(da, true)
+            hasEdge:Set(db, true)
+
+            // an end with a neighbour at least as high isn't a maximum
+            if st:rad:Get(db) >= st:rad:Get(da)
+                isMax:Set(da, false)
+            end
+            if st:rad:Get(da) >= st:rad:Get(db)
+                isMax:Set(db, false)
+            end
+
+            // ends of marked edges
+            if marked:Get(de) = 1
+                onMarked:Set(da, true)
+                onMarked:Set(db, true)
+            end
+            de = de + 1
+        end
+
+        // go through nodes
+        dv = 0
+        repeat while dv < n
+            // a local maximum, not on a marked edge, inside the part, with beads
+            if hasEdge:Get(dv) and isMax:Get(dv) and not onMarked:Get(dv) and st:rad:Get(dv) > 0.0 and bp:placed:Get(dv) = 1
+                // an odd count has a centre bead: record it as a dot
+                integer count = bp:beadsAt:Get(dv)
+                if count mod 2 = 1
+                    integer centre = count / 2
+                    Bead dbead = bp:beads:Get(bp:beadStart:Get(dv) + centre)
+                    dotX:Add(st:xs:Get(dv))
+                    dotY:Add(st:ys:Get(dv))
+                    dotWidth:Add(dbead:width)
+                    dotRadius:Add(st:rad:Get(dv))
+                    dotIndex:Add(centre)
+                end
+            end
+            dv = dv + 1
+        end
+    end
+
+    // lookup key for a rib
+    private action RibKey(integer node, integer cell, integer category) returns text
+        integer kind = category
+        if kind = 9
+            kind = 8
+        end
+        return "" + node + "_" + cell + "_" + kind
+    end
+
+    // the rib from node to (cell, category), -1 if none
+    private action RibIndex(integer node, integer cell, integer category) returns integer
+        text key = RibKey(node, cell, category)
+        if ribAt:HasKey(key)
+            return ribAt:GetValue(key)
+        end
+        return -1
+    end
+
+    // the site of bead k on a rib, -1 if is none
+    private action RibSite(integer rib, integer k) returns integer
+        if rib < 0
+            return -1
+        end
+        text key = "R" + rib + "_" + k
+        if siteAt:HasKey(key)
+            return siteAt:GetValue(key)
+        end
+        return -1
+    end
+
+    private action AddSite(number x, number y, number width, integer index, integer edge, integer rib)
+        siteX:Add(x)
+        siteY:Add(y)
+        siteWidth:Add(width)
+        siteIndex:Add(index)
+        siteEdge:Add(edge)
+        siteRib:Add(rib)
+        IntegerBuffer none
+        siteSegs:Add(none)
+    end
+
+    // the chords of one trapezoid: edge e, on the side of (cell, category)
+    private action MakeTrapezoid(SkeletalTrapezoidation st, BeadPlacement bp, Array<integer> marked,
+                                 integer e, integer cell, integer category)
+        // the two legs: ribs from the edge's ends to this side
+        integer nodeA = st:cleanStart:Get(e)
+        integer nodeB = st:cleanEnd:Get(e)
+        integer legA = RibIndex(nodeA, cell, category)
+        integer legB = RibIndex(nodeB, cell, category)
+
+        // the top: the edge itself (the lower number of the twin pair), none if marked
+        integer top = e
+        integer twin = st:cleanOpposite:Get(e)
+        if twin >= 0 and twin < e
+            top = twin
+        end
+        if marked:Get(top) = 1
+            top = -1
+        end
+
+        // the most beads either end has
+        integer count = bp:beadsAt:Get(nodeA)
+        if bp:beadsAt:Get(nodeB) > count
+            count = bp:beadsAt:Get(nodeB)
+        end
+
+        // go through bead indices
+        integer k = 0
+        repeat while k < count
+            // bead k's site on each leg
+            integer a = RibSite(legA, k)
+            integer b = RibSite(legB, k)
+
+            // bead k's site on the top
+            integer c = -1
+            if top >= 0
+                text key = "E" + top + "_" + k
+                if siteAt:HasKey(key)
+                    c = siteAt:GetValue(key)
+                end
+            end
+
+            // join two of them: both legs if we can, otherwise a leg and the top
+            if a >= 0 and b >= 0
+                AddChord(st, e, cell, category, a, b, k)
+            elseif a >= 0 and c >= 0
+                AddChord(st, e, cell, category, a, c, k)
+            elseif b >= 0 and c >= 0
+                AddChord(st, e, cell, category, b, c, k)
+            end
+            k = k + 1
+        end
+    end
+
+    // adds a chord from site a to site b for bead index
+    private action AddChord(SkeletalTrapezoidation st, integer e, integer cell, integer category,
+                            integer a, integer b, integer index)
+        // both sites in the same place: nothing to join
+        if SamePoint(siteX:Get(a), siteY:Get(a), siteX:Get(b), siteY:Get(b))
+            return now
+        end
+
+        // does the chord run along the edge itself? (a centre bead)
+        integer na = st:cleanStart:Get(e)
+        integer nb = st:cleanEnd:Get(e)
+        boolean alongEdge = (OnNode(st, a, na) and OnNode(st, b, nb)) or (OnNode(st, a, nb) and OnNode(st, b, na))
+
+        // a centre bead is made from both sides of the edge, so only one side keeps it
+        if alongEdge
+            boolean keep = false
+            // no twin: side 0 keeps it
+            if st:cleanOpposite:Get(e) < 0
+                keep = cell = st:cleanCell0:Get(e) and category = st:cleanCategory0:Get(e)
+            // twin: the side whose edge runs from the smaller (x, y) to the larger keeps it
+            else
+                number x0 = st:xs:Get(na)
+                number y0 = st:ys:Get(na)
+                number x1 = st:xs:Get(nb)
+                number y1 = st:ys:Get(nb)
+                keep = x0 < x1 or (x0 = x1 and y0 < y1)
+            end
+            if not keep
+                return now
+            end
+        end
+
+        // add chord
+        segStart:Add(a)
+        segEnd:Add(b)
+        segIndex:Add(index)
+        segOdd:Add(alongEdge)
+
+        // list it at both its sites
+        integer g = segStart:GetSize() - 1
+        Attach(a, g)
+        Attach(b, g)
+    end
+
+    // true if the two points are in the same place
+    private action SamePoint(number ax, number ay, number bx, number by) returns boolean
+        number dx = ax - bx
+        number dy = ay - by
+        return dx * dx + dy * dy < 0.000000000001
+    end
+
+    // true if site s is on node v
+    private action OnNode(SkeletalTrapezoidation st, integer s, integer v) returns boolean
+        return SamePoint(siteX:Get(s), siteY:Get(s), st:xs:Get(v), st:ys:Get(v))
+    end
+
+    // lists a chord at a site
+    private action Attach(integer site, integer seg)
+        IntegerBuffer list = siteSegs:Get(site)
+        list:Add(seg)
+    end
+
+    // how many chords end at a site
+    private action SiteDegree(integer site) returns integer
+        IntegerBuffer list = siteSegs:Get(site)
+        return list:GetSize()
+    end
+
+    // walks one polyline from startSite along firstSeg, chord by chord, until there is no unused chord
+    private action WalkRun(integer startSite, integer firstSeg, Array<boolean> used)
+        // start a new polyline
+        polyStart:Add(polySites:GetSize())
+        polyIndex:Add(segIndex:Get(firstSeg))
+        polySites:Add(startSite)
+        used:Set(firstSeg, true)
+
+        integer seg = firstSeg
+        integer site = startSite
+        boolean going = true
+        repeat while going
+            // go to the chord's other site
+            integer next = segEnd:Get(seg)
+            if next = site
+                next = segStart:Get(seg)
+            end
+            polySites:Add(next)
+            site = next
+
+            // find an unused chord at this site
+            // (where 3+ chords meet, a centre bead only goes on into another centre bead)
+            IntegerBuffer list = siteSegs:Get(site)
+            boolean junction = list:GetSize() > 2
+            boolean odd = segOdd:Get(seg)
+            integer nxt = -1
+            integer i = 0
+            repeat while i < list:GetSize() and nxt < 0
+                integer cand = list:Get(i)
+                if not used:Get(cand) and (not junction or segOdd:Get(cand) = odd)
+                    nxt = cand
+                end
+                i = i + 1
+            end
+
+            // none: the polyline ends here; otherwise take that chord
+            if nxt < 0
+                going = false
+            else
+                used:Set(nxt, true)
+                seg = nxt
+            end
+        end
+    end
+end

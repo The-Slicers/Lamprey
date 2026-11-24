@@ -1,0 +1,501 @@
+package Tests
+
+use Libraries.Containers.Array
+use Libraries.Compute.Math
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Geometry.OutlineEdges
+use Libraries.Fabrication.Geometry.VoronoiDiagram
+use Libraries.Fabrication.Geometry.GeometryUtilities
+use Libraries.Fabrication.Geometry.SkeletalTrapezoidation
+use Libraries.Fabrication.Geometry.CenterMarking
+use Libraries.Fabrication.Geometry.BeadTransitions
+use Libraries.Fabrication.Geometry.BeadPlacement
+use Libraries.Fabrication.Geometry.InwardDistributed
+use Libraries.Fabrication.Geometry.ToolpathExtraction
+use Libraries.Fabrication.Geometry.Bead
+
+/*
+Properties of ToolpathExtraction (paper 3.6) that must hold on every shape: a 10 mm square, the same
+square with a 4 mm hole, and an L. The square's outer bead must also close into a loop.
+*/
+class ToolpathExtractionTests
+    Math math
+    GeometryUtilities util
+
+    integer passed = 0
+    integer failed = 0
+    integer fixtureCount = 3
+
+    action Run returns integer
+        TestEverySiteLiesOnItsSource()
+        TestEverySiteIsAtItsBeadLocation()
+        TestSegmentsJoinOneBeadIndex()
+        TestNoSitesOnMarkedEdges()
+        TestPolylinesUseEachSegmentOnce()
+        TestSquareOuterBeadLoopCloses()
+        TestOneSitePerRib()
+        TestBarCentreBeadMadeOnce()
+        TestSmallSquareIsADot()
+
+        output "ToolpathExtraction tests: passed " + passed + ", failed " + failed
+        return failed
+    end
+
+    action Check(boolean condition, text name)
+        if condition
+            passed = passed + 1
+        else
+            failed = failed + 1
+            output "FAIL: " + name
+        end
+    end
+
+    // ------------------------------------------------------------ fixtures
+
+    private action Square returns Array<Contour>
+        Array<Contour> outline
+        Contour c
+        c:AddPoint(0.0, 0.0)
+        c:AddPoint(10.0, 0.0)
+        c:AddPoint(10.0, 10.0)
+        c:AddPoint(0.0, 10.0)
+        c:closed = true
+        outline:Add(c)
+        return outline
+    end
+
+    private action Holed returns Array<Contour>
+        Array<Contour> outline
+        Contour outer
+        outer:AddPoint(0.0, 0.0)
+        outer:AddPoint(10.0, 0.0)
+        outer:AddPoint(10.0, 10.0)
+        outer:AddPoint(0.0, 10.0)
+        outer:closed = true
+        outline:Add(outer)
+        Contour hole
+        hole:AddPoint(3.0, 3.0)
+        hole:AddPoint(3.0, 7.0)
+        hole:AddPoint(7.0, 7.0)
+        hole:AddPoint(7.0, 3.0)
+        hole:closed = true
+        outline:Add(hole)
+        return outline
+    end
+
+    private action Ell returns Array<Contour>
+        Array<Contour> outline
+        Contour c
+        c:AddPoint(0.0, 0.0)
+        c:AddPoint(10.0, 0.0)
+        c:AddPoint(10.0, 5.0)
+        c:AddPoint(5.0, 5.0)
+        c:AddPoint(5.0, 10.0)
+        c:AddPoint(0.0, 10.0)
+        c:closed = true
+        outline:Add(c)
+        return outline
+    end
+
+    // 10 mm by 0.6 mm bar: R = 0.3 along a marked spine, count 2, so bead 0 should form one closed loop
+    private action Bar returns Array<Contour>
+        Array<Contour> outline
+        Contour c
+        c:AddPoint(0.0, 0.0)
+        c:AddPoint(10.0, 0.0)
+        c:AddPoint(10.0, 0.6)
+        c:AddPoint(0.0, 0.6)
+        c:closed = true
+        outline:Add(c)
+        return outline
+    end
+
+    private action Fixture(integer which) returns Array<Contour>
+        if which = 0
+            return Square()
+        elseif which = 1
+            return Holed()
+        end
+        return Ell()
+    end
+
+    private action FixtureName(integer which) returns text
+        if which = 0
+            return "square"
+        elseif which = 1
+            return "square with hole"
+        end
+        return "L"
+    end
+
+    // ------------------------------------------------------------ helpers
+
+    // the same steps AdaptivePath runs before extraction
+    private action RunPipeline(SkeletalTrapezoidation st, CenterMarking cm, BeadTransitions bt,
+                               BeadPlacement bp, ToolpathExtraction tx, Array<Contour> contours)
+        OutlineEdges edges
+        edges:BuildEdges(contours)
+        VoronoiDiagram voronoi
+        voronoi:SetWorkPath("Outputs/voronoi_test")
+        voronoi:Generate(edges)
+        st:Build(contours, edges, voronoi)
+        cm:Build(st)
+        bt:Build(st, cm)
+        bt:SplitRampEnds(st, cm)
+        st:RepairTwins()
+        bt:SetFractionalCounts(st)
+        InwardDistributed scheme
+        bp:Build(st, bt, scheme)
+        tx:Build(st, bp, bt:edgeMarked)
+    end
+
+    // distance from (x, y) to the nearest segment of any loop
+    private action DistanceToOutline(Array<Contour> contours, number x, number y) returns number
+        number best = -1.0
+        integer c = 0
+        repeat while c < contours:GetSize()
+            Contour con = contours:Get(c)
+            integer n = con:GetSize()
+            integer i = 0
+            repeat while i < n
+                integer j = (i + 1) mod n
+                number d2 = util:SegmentDistance2(x, y, con:xs:Get(i), con:ys:Get(i), con:xs:Get(j), con:ys:Get(j))
+                if best < 0.0 or d2 < best
+                    best = d2
+                end
+                i = i + 1
+            end
+            c = c + 1
+        end
+        return math:SquareRoot(best)
+    end
+
+    // the node a site was made from: the rib's node, or the upper end of its medial edge
+    private action UpperNode(SkeletalTrapezoidation st, ToolpathExtraction tx, integer s) returns integer
+        integer r = tx:siteRib:Get(s)
+        if r >= 0
+            return st:ribNode:Get(r)
+        end
+        integer e = tx:siteEdge:Get(s)
+        integer a = st:cleanStart:Get(e)
+        integer b = st:cleanEnd:Get(e)
+        if st:rad:Get(b) > st:rad:Get(a)
+            return b
+        end
+        return a
+    end
+
+    private action RunEnd(ToolpathExtraction tx, integer p) returns integer
+        if p + 1 < tx:polyStart:GetSize()
+            return tx:polyStart:Get(p + 1)
+        end
+        return tx:polySites:GetSize()
+    end
+
+    private action JoinedBySegment(ToolpathExtraction tx, integer a, integer b) returns boolean
+        integer g = 0
+        repeat while g < tx:segStart:GetSize()
+            if tx:segStart:Get(g) = a and tx:segEnd:Get(g) = b
+                return true
+            end
+            if tx:segStart:Get(g) = b and tx:segEnd:Get(g) = a
+                return true
+            end
+            g = g + 1
+        end
+        return false
+    end
+
+    // ------------------------------------------------------------ holds (each builds its own pipeline)
+
+    // a site lies on its rib, or on its medial edge
+    private action SitesOnSourcesHold(Array<Contour> contours) returns boolean
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BeadPlacement bp
+        ToolpathExtraction tx
+        RunPipeline(st, cm, bt, bp, tx, contours)
+        if tx:siteX:GetSize() = 0
+            return false
+        end
+        integer s = 0
+        repeat while s < tx:siteX:GetSize()
+            integer a = 0
+            integer b = 0
+            integer r = tx:siteRib:Get(s)
+            if r >= 0
+                a = st:ribNode:Get(r)
+                b = st:ribFoot:Get(r)
+            else
+                integer e = tx:siteEdge:Get(s)
+                a = st:cleanStart:Get(e)
+                b = st:cleanEnd:Get(e)
+            end
+            if util:SegmentDistance2(tx:siteX:Get(s), tx:siteY:Get(s), st:xs:Get(a), st:ys:Get(a), st:xs:Get(b), st:ys:Get(b)) > 0.000000000001
+                return false
+            end
+            s = s + 1
+        end
+        return true
+    end
+
+    // a site sits at its bead's location from the outline (parabolic pieces are approximate to ~0.01 mm)
+    private action SitesAtBeadsHold(Array<Contour> contours) returns boolean
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BeadPlacement bp
+        ToolpathExtraction tx
+        RunPipeline(st, cm, bt, bp, tx, contours)
+        if tx:siteX:GetSize() = 0
+            return false
+        end
+        integer s = 0
+        repeat while s < tx:siteX:GetSize()
+            integer upper = UpperNode(st, tx, s)
+            Bead bead = bp:beads:Get(bp:beadStart:Get(upper) + tx:siteIndex:Get(s))
+            number d = DistanceToOutline(contours, tx:siteX:Get(s), tx:siteY:Get(s))
+            if util:AbsNum(d - bead:location) > 0.03
+                return false
+            end
+            s = s + 1
+        end
+        return true
+    end
+
+    // every segment joins two distinct sites of one bead index
+    private action SegmentsJoinHold(Array<Contour> contours) returns boolean
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BeadPlacement bp
+        ToolpathExtraction tx
+        RunPipeline(st, cm, bt, bp, tx, contours)
+        if tx:segStart:GetSize() = 0
+            return false
+        end
+        integer g = 0
+        repeat while g < tx:segStart:GetSize()
+            integer a = tx:segStart:Get(g)
+            integer b = tx:segEnd:Get(g)
+            if a = b
+                return false
+            end
+            if tx:siteIndex:Get(a) not= tx:siteIndex:Get(b)
+                return false
+            end
+            if tx:segIndex:Get(g) not= tx:siteIndex:Get(a)
+                return false
+            end
+            g = g + 1
+        end
+        return true
+    end
+
+    // no site lies on an edge the bead transitions marked central
+    private action NoSitesOnMarkedHold(Array<Contour> contours) returns boolean
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BeadPlacement bp
+        ToolpathExtraction tx
+        RunPipeline(st, cm, bt, bp, tx, contours)
+        integer s = 0
+        repeat while s < tx:siteX:GetSize()
+            integer e = tx:siteEdge:Get(s)
+            if e >= 0 and bt:edgeMarked:Get(e) = 1
+                return false
+            end
+            s = s + 1
+        end
+        return true
+    end
+
+    // each polyline's links are segments of its bead index, and every segment is used exactly once
+    private action PolylinesHold(Array<Contour> contours) returns boolean
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BeadPlacement bp
+        ToolpathExtraction tx
+        RunPipeline(st, cm, bt, bp, tx, contours)
+        if tx:polyStart:GetSize() = 0
+            return false
+        end
+        integer links = 0
+        integer p = 0
+        repeat while p < tx:polyStart:GetSize()
+            integer from = tx:polyStart:Get(p)
+            integer to = RunEnd(tx, p)
+            integer k = from
+            repeat while k + 1 < to
+                links = links + 1
+                if tx:siteIndex:Get(tx:polySites:Get(k)) not= tx:polyIndex:Get(p)
+                    return false
+                end
+                if not JoinedBySegment(tx, tx:polySites:Get(k), tx:polySites:Get(k + 1))
+                    return false
+                end
+                k = k + 1
+            end
+            p = p + 1
+        end
+        if links not= tx:segStart:GetSize()
+            return false
+        end
+        return true
+    end
+
+    // some polyline of bead index 0 has at least four sites and starts where it ends
+    private action OuterLoopCloses(Array<Contour> contours) returns boolean
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BeadPlacement bp
+        ToolpathExtraction tx
+        RunPipeline(st, cm, bt, bp, tx, contours)
+        integer p = 0
+        repeat while p < tx:polyStart:GetSize()
+            if tx:polyIndex:Get(p) = 0
+                integer from = tx:polyStart:Get(p)
+                integer to = RunEnd(tx, p)
+                if to - from >= 5 and tx:polySites:Get(from) = tx:polySites:Get(to - 1)
+                    return true
+                end
+            end
+            p = p + 1
+        end
+        return false
+    end
+
+    // ------------------------------------------------------------ tests
+
+    action TestEverySiteLiesOnItsSource()
+        integer f = 0
+        repeat while f < fixtureCount
+            Check(SitesOnSourcesHold(Fixture(f)), FixtureName(f) + ": every site lies on its rib or its medial edge")
+            f = f + 1
+        end
+    end
+
+    action TestEverySiteIsAtItsBeadLocation()
+        integer f = 0
+        repeat while f < fixtureCount
+            Check(SitesAtBeadsHold(Fixture(f)), FixtureName(f) + ": every site is at its bead's location from the outline")
+            f = f + 1
+        end
+    end
+
+    action TestSegmentsJoinOneBeadIndex()
+        integer f = 0
+        repeat while f < fixtureCount
+            Check(SegmentsJoinHold(Fixture(f)), FixtureName(f) + ": every segment joins two sites of one bead index")
+            f = f + 1
+        end
+    end
+
+    action TestNoSitesOnMarkedEdges()
+        integer f = 0
+        repeat while f < fixtureCount
+            Check(NoSitesOnMarkedHold(Fixture(f)), FixtureName(f) + ": no site lies on a marked edge")
+            f = f + 1
+        end
+    end
+
+    action TestPolylinesUseEachSegmentOnce()
+        integer f = 0
+        repeat while f < fixtureCount
+            Check(PolylinesHold(Fixture(f)), FixtureName(f) + ": polylines chain each segment once, within one bead index")
+            f = f + 1
+        end
+    end
+
+    action TestSquareOuterBeadLoopCloses()
+        Check(OuterLoopCloses(Square()), "the square's outer bead forms a closed loop")
+    end
+
+    // A support rib is one node and one foot. Merging duplicate records means no two sites of one bead share one rib.
+    private action OneSitePerRibHold(Array<Contour> contours) returns boolean
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BeadPlacement bp
+        ToolpathExtraction tx
+        RunPipeline(st, cm, bt, bp, tx, contours)
+        integer a = 0
+        repeat while a < tx:siteX:GetSize()
+            integer b = a + 1
+            repeat while b < tx:siteX:GetSize()
+                integer ra = tx:siteRib:Get(a)
+                integer rb = tx:siteRib:Get(b)
+                if ra >= 0 and rb >= 0 and tx:siteIndex:Get(a) = tx:siteIndex:Get(b)
+                    if st:ribNode:Get(ra) = st:ribNode:Get(rb) and st:ribFoot:Get(ra) = st:ribFoot:Get(rb)
+                        return false
+                    end
+                end
+                b = b + 1
+            end
+            a = a + 1
+        end
+        return true
+    end
+
+    action TestOneSitePerRib()
+        integer f = 0
+        repeat while f < fixtureCount
+            Check(OneSitePerRibHold(Fixture(f)), FixtureName(f) + ": no two sites of one bead share a support rib")
+            f = f + 1
+        end
+    end
+
+    // Paper 3.6: on the 0.6 mm bar the count is one bead, so its centre bead is a single open polyline along
+    // the spine, made once rather than once from each side of the spine.
+    action TestBarCentreBeadMadeOnce()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BeadPlacement bp
+        ToolpathExtraction tx
+        RunPipeline(st, cm, bt, bp, tx, Bar())
+        integer runs = 0
+        integer closedRuns = 0
+        integer p = 0
+        repeat while p < tx:polyStart:GetSize()
+            if tx:polyIndex:Get(p) = 0
+                runs = runs + 1
+                if tx:polySites:Get(tx:polyStart:Get(p)) = tx:polySites:Get(RunEnd(tx, p) - 1)
+                    closedRuns = closedRuns + 1
+                end
+            end
+            p = p + 1
+        end
+        Check(runs = 1 and closedRuns = 0, "the bar's centre bead is one open polyline")
+    end
+
+    // Paper 6.3: a 0.3 mm square has one bead (R = 0.15, b = 0.75 rounds to 1), whose centre sits on the single
+    // local maximum at the square's centre, so the bead is one dot there.
+    action TestSmallSquareIsADot()
+        Array<Contour> outline
+        Contour c
+        c:AddPoint(0.0, 0.0)
+        c:AddPoint(0.3, 0.0)
+        c:AddPoint(0.3, 0.3)
+        c:AddPoint(0.0, 0.3)
+        c:closed = true
+        outline:Add(c)
+
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BeadPlacement bp
+        ToolpathExtraction tx
+        RunPipeline(st, cm, bt, bp, tx, outline)
+
+        Check(tx:dotX:GetSize() = 1, "a 0.3 mm square's single bead is one dot")
+        if tx:dotX:GetSize() = 1
+            Check(util:AbsNum(tx:dotX:Get(0) - 0.15) < 0.000001 and util:AbsNum(tx:dotY:Get(0) - 0.15) < 0.000001,
+                  "the dot sits at the square's centre")
+        end
+    end
+end

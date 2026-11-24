@@ -55,11 +55,11 @@ class LampreyTests
         InwardDistributedTests inward
         failed = failed + inward:Run()
 
+        ToolpathExtractionTests extraction
+        failed = failed + extraction:Run()
+
 //        AdaptivePathTests adaptivePath
 //        failed = failed + adaptivePath:Run()
-
-//        ToolpathExtractionTests extraction
-//        failed = failed + extraction:Run()
 
         output "All tests: " + failed + " failed"
         return failed
