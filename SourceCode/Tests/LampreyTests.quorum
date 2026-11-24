@@ -4,35 +4,11 @@ class LampreyTests
     action Run returns integer
         integer failed = 0
 
-//        ContourTests contour
-//        failed = failed + contour:Run()
-//
-//        ContourSimplifierTests simplifier
-//        failed = failed + simplifier:Run()
-
-//        GeometryUtilitiesTests geometry
-//        failed = failed + geometry:Run()
-
-//        PathGeneratorBaselineTests baseline
-//        failed = failed + baseline:Run()
-
-//        PathGeneratorAdaptiveTests adaptive
-//        failed = failed + adaptive:Run()
-
-//        CoverageTests coverage
-//        failed = failed + coverage:Run()
-//
-//        ShapeTests shapes
-//        failed = failed + shapes:Run()
-//
         ContourWidthTests contourWidth
         failed = failed + contourWidth:Run()
 
         PathOrdererWidthTests orderWidth
         failed = failed + orderWidth:Run()
-
-//        AdaptiveFillTests adaptFill
-//        failed = failed + adaptFill:Run()
 
         OutlineEdgesTests outlineEdges
         failed = failed + outlineEdges:Run()
@@ -58,8 +34,17 @@ class LampreyTests
         ToolpathExtractionTests extraction
         failed = failed + extraction:Run()
 
-//        AdaptivePathTests adaptivePath
-//        failed = failed + adaptivePath:Run()
+        AdaptiveFillTests adaptFill
+        failed = failed + adaptFill:Run()
+
+        CoverageTests coverage
+        failed = failed + coverage:Run()
+
+        AdaptivePathTests adaptivePath
+        failed = failed + adaptivePath:Run()
+
+        ShapeTests shapes
+        failed = failed + shapes:Run()
 
         output "All tests: " + failed + " failed"
         return failed

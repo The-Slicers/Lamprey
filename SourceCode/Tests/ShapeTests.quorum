@@ -1,0 +1,348 @@
+package Tests
+
+use Libraries.Containers.Array
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Slicing.AdaptivePath
+use Libraries.Fabrication.Slicing.PathGenerator
+use Libraries.Compute.Math
+use Libraries.Fabrication.Geometry.GeometryUtilities
+
+/*
+Shape cases for the adaptive path, one per kind of geometry:
+  square       convex, must give a valid result
+  L            one reflex corner
+  thin bar     too thin for two walls, open runs at the ends
+  U            two reflex corners on the notch, a concave outline
+  hole         a square with a square hole (a second loop, reflex corners inside it)
+Each shape runs through AdaptivePath directly, and then through PathGenerator on
+ten stacked planes to check that every plane prints something (adaptive or fallback).
+
+Walls may be closed loops or open polylines (paper 3.6: the final toolpaths contain
+both polygons and polylines), so a valid result is checked for well-formed walls,
+not for closed ones.
+*/
+class ShapeTests
+    Math math
+    GeometryUtilities util
+
+    integer passed = 0
+    integer failed = 0
+    integer planeCount = 10
+
+    action Run returns integer
+        RunShape("square", Square(), true)
+        RunShape("L", Ell(), true)
+        RunShape("thin bar", Bar(), false)
+        RunShape("U", Ushape(), true)
+        RunShape("square with hole", Holed(), true)
+
+        RunFallback("square", Square())
+        RunFallback("L", Ell())
+        RunFallback("thin bar", Bar())
+        RunFallback("U", Ushape())
+        RunFallback("square with hole", Holed())
+
+        output "Shape tests: passed " + passed + ", failed " + failed
+        return failed
+    end
+
+    action Check(boolean condition, text name)
+        if condition
+            passed = passed + 1
+        else
+            failed = failed + 1
+            output "FAIL: " + name
+        end
+    end
+
+    // ------------------------------------------------------------ shapes
+
+    // 10 mm square, counter-clockwise
+    private action Square returns Array<Contour>
+        Array<Contour> outline
+        Contour c
+        c:AddPoint(0.0, 0.0)
+        c:AddPoint(10.0, 0.0)
+        c:AddPoint(10.0, 10.0)
+        c:AddPoint(0.0, 10.0)
+        c:closed = true
+        outline:Add(c)
+        return outline
+    end
+
+    // 10 mm square with its top-right 5 mm corner removed
+    private action Ell returns Array<Contour>
+        Array<Contour> outline
+        Contour c
+        c:AddPoint(0.0, 0.0)
+        c:AddPoint(10.0, 0.0)
+        c:AddPoint(10.0, 5.0)
+        c:AddPoint(5.0, 5.0)
+        c:AddPoint(5.0, 10.0)
+        c:AddPoint(0.0, 10.0)
+        c:closed = true
+        outline:Add(c)
+        return outline
+    end
+
+    // 10 mm by 0.6 mm bar, about 1.5 line widths
+    private action Bar returns Array<Contour>
+        Array<Contour> outline
+        Contour c
+        c:AddPoint(0.0, 0.0)
+        c:AddPoint(10.0, 0.0)
+        c:AddPoint(10.0, 0.6)
+        c:AddPoint(0.0, 0.6)
+        c:closed = true
+        outline:Add(c)
+        return outline
+    end
+
+    // 10 mm square with a notch 4 mm deep cut from the top, leaving two arms
+    private action Ushape returns Array<Contour>
+        Array<Contour> outline
+        Contour c
+        c:AddPoint(0.0, 0.0)
+        c:AddPoint(10.0, 0.0)
+        c:AddPoint(10.0, 10.0)
+        c:AddPoint(7.0, 10.0)
+        c:AddPoint(7.0, 3.0)
+        c:AddPoint(3.0, 3.0)
+        c:AddPoint(3.0, 10.0)
+        c:AddPoint(0.0, 10.0)
+        c:closed = true
+        outline:Add(c)
+        return outline
+    end
+
+    // 10 mm square with a 4 mm square hole in its middle (the hole runs clockwise)
+    private action Holed returns Array<Contour>
+        Array<Contour> outline
+        Contour outer
+        outer:AddPoint(0.0, 0.0)
+        outer:AddPoint(10.0, 0.0)
+        outer:AddPoint(10.0, 10.0)
+        outer:AddPoint(0.0, 10.0)
+        outer:closed = true
+        outline:Add(outer)
+
+        Contour hole
+        hole:AddPoint(3.0, 3.0)
+        hole:AddPoint(3.0, 7.0)
+        hole:AddPoint(7.0, 7.0)
+        hole:AddPoint(7.0, 3.0)
+        hole:closed = true
+        hole:isHole = true
+        outline:Add(hole)
+        return outline
+    end
+
+    // Ten copies of a shape, one per plane
+    private action Stacked(Array<Contour> shape) returns Array<Contour>
+        Array<Contour> planes
+        integer p = 0
+        repeat while p < planeCount
+            integer c = 0
+            repeat while c < shape:GetSize()
+                Contour source = shape:Get(c)
+                Contour copy = source:Copy()
+                copy:planeIndex = p
+                planes:Add(copy)
+                c = c + 1
+            end
+            p = p + 1
+        end
+        return planes
+    end
+
+    // ------------------------------------------------------------ checks
+
+    // AdaptivePath on one shape. mustBeValid is true only for shapes that are
+    // expected to pass today; for the others, the validity is reported, not asserted.
+    private action RunShape(text name, Array<Contour> outline, boolean mustBeValid)
+        AdaptivePath path
+        path:SetWidth(0.4)
+        path:SetWallCount(2)
+        Array<Contour> walls = path:Generate(outline)
+        output name + ": walls " + walls:GetSize() + ", valid " + path:IsValid() + ", reason: " + path:Reason()
+
+        Check(AllPointsInside(walls, outline), name + ": every wall point lies inside the shape")
+        Check(AllWidthsMatch(walls), name + ": every wall has one width per point")
+        Check(WidthsInRange(walls, path:LowWidth(), path:HighWidth()), name + ": every outer width is within the accepted range")
+        Check(AllIndexesSet(walls), name + ": every wall has a bead index")
+        Check(ValidMeansWellFormed(path, walls), name + ": a valid result has only well-formed walls")
+        if mustBeValid
+            Check(path:IsValid(), name + ": the result is valid")
+            Check(OuterWallOnItsBeads(walls, outline), name + ": outer wall sits on its beads, no chord cuts inside it")
+        end
+    end
+
+    // PathGenerator on stacked planes: every plane must print walls or fill.
+    private action RunFallback(text name, Array<Contour> outline)
+        PathGenerator paths
+        paths:SetAdaptive(true)
+        paths:SetLineWidth(0.4)
+        paths:SetWallCount(2)
+        paths:SetInfillDensity(0.2)
+        paths:Generate(Stacked(outline), planeCount)
+        output name + ": fallback planes " + paths:GetAdaptiveFallbackCount() + " of " + planeCount
+        Check(paths:GetWalls():GetSize() + paths:GetSkin():GetSize() + paths:GetInfill():GetSize() > 0,
+              name + ": the stacked shape prints walls or fill")
+    end
+
+    private action AllPointsInside(Array<Contour> walls, Array<Contour> outline) returns boolean
+        integer w = 0
+        repeat while w < walls:GetSize()
+            Contour wall = walls:Get(w)
+            integer i = 0
+            repeat while i < wall:GetSize()
+                if not InsideShape(outline, wall:xs:Get(i), wall:ys:Get(i))
+                    return false
+                end
+                i = i + 1
+            end
+            w = w + 1
+        end
+        return true
+    end
+
+    // even-odd over every loop, so a point inside a hole is outside the shape
+    private action InsideShape(Array<Contour> outline, number x, number y) returns boolean
+        boolean inside = false
+        integer c = 0
+        repeat while c < outline:GetSize()
+            Contour shape = outline:Get(c)
+            if shape:ContainsPoint(x, y)
+                inside = not inside
+            end
+            c = c + 1
+        end
+        return inside
+    end
+
+    private action AllWidthsMatch(Array<Contour> walls) returns boolean
+        integer w = 0
+        repeat while w < walls:GetSize()
+            Contour wall = walls:Get(w)
+            if not wall:IsAdaptive() or wall:ws:GetSize() not= wall:GetSize()
+                return false
+            end
+            w = w + 1
+        end
+        return true
+    end
+
+    // paper 3.4: only outer-wall widths are held to the typical range
+    private action WidthsInRange(Array<Contour> walls, number low, number high) returns boolean
+        integer w = 0
+        repeat while w < walls:GetSize()
+            Contour wall = walls:Get(w)
+            if wall:wallIndex = 0
+                integer i = 0
+                repeat while i < wall:GetSize()
+                    if wall:ws:Get(i) < low - 0.000001 or wall:ws:Get(i) > high + 0.000001
+                        return false
+                    end
+                    i = i + 1
+                end
+            end
+            w = w + 1
+        end
+        return true
+    end
+
+    private action AllIndexesSet(Array<Contour> walls) returns boolean
+        integer w = 0
+        repeat while w < walls:GetSize()
+            Contour wall = walls:Get(w)
+            if wall:wallIndex < 0
+                return false
+            end
+            w = w + 1
+        end
+        return true
+    end
+
+    // A valid result has at least one wall, and every wall is well formed: a closed loop has at least three
+    // points, an open polyline at least two. Open polylines are valid output (paper 3.6).
+    private action ValidMeansWellFormed(AdaptivePath path, Array<Contour> walls) returns boolean
+        if not path:IsValid()
+            return true
+        end
+        if walls:GetSize() = 0
+            return false
+        end
+        integer w = 0
+        repeat while w < walls:GetSize()
+            Contour wall = walls:Get(w)
+            if wall:closed and wall:GetSize() < 3
+                return false
+            end
+            if not wall:closed and wall:GetSize() < 2
+                return false
+            end
+            w = w + 1
+        end
+        return true
+    end
+
+    // distance from (x, y) to the nearest edge of any loop
+    private action DistanceToShape(Array<Contour> outline, number x, number y) returns number
+        number best = -1.0
+        integer c = 0
+        repeat while c < outline:GetSize()
+            Contour con = outline:Get(c)
+            integer n = con:GetSize()
+            integer i = 0
+            repeat while i < n
+                integer j = (i + 1) mod n
+                number d2 = util:SegmentDistance2(x, y, con:xs:Get(i), con:ys:Get(i), con:xs:Get(j), con:ys:Get(j))
+                if best < 0.0 or d2 < best
+                    best = d2
+                end
+                i = i + 1
+            end
+            c = c + 1
+        end
+        return math:SquareRoot(best)
+    end
+
+    // §3.6: a site of bead k lies at distance l_k from the outline, and for the outer bead l_0 is half its width.
+    // So every outer-wall point is half its width from the outline, and the midpoint of each chord is half the
+    // mean width from the outline. A chord that cuts inside the bead band fails the second check. Open polylines
+    // are checked along their segments only (no wrap-around segment).
+    private action OuterWallOnItsBeads(Array<Contour> walls, Array<Contour> outline) returns boolean
+        integer w = 0
+        repeat while w < walls:GetSize()
+            Contour wall = walls:Get(w)
+            if wall:wallIndex = 0
+                integer n = wall:GetSize()
+                integer segments = n - 1
+                if wall:closed
+                    segments = n
+                end
+                integer i = 0
+                repeat while i < n
+                    number d = DistanceToShape(outline, wall:xs:Get(i), wall:ys:Get(i))
+                    if util:AbsNum(d - wall:ws:Get(i) / 2.0) > 0.03
+                        return false
+                    end
+                    i = i + 1
+                end
+                integer s = 0
+                repeat while s < segments
+                    integer t = (s + 1) mod n
+                    number mx = (wall:xs:Get(s) + wall:xs:Get(t)) / 2.0
+                    number my = (wall:ys:Get(s) + wall:ys:Get(t)) / 2.0
+                    number wantMid = (wall:ws:Get(s) + wall:ws:Get(t)) / 4.0
+                    if DistanceToShape(outline, mx, my) < wantMid - 0.03
+                        return false
+                    end
+                    s = s + 1
+                end
+            end
+            w = w + 1
+        end
+        return true
+    end
+end

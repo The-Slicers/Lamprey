@@ -1,0 +1,401 @@
+package Tests
+
+use Libraries.Containers.Array
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Slicing.AdaptivePath
+
+/*
+Tests for AdaptivePath on a plain square, a thin bar and an L: walls come back,
+every wall carries one width per point, and the outer wall is index 0. Walls may
+be closed loops or open polylines (paper 3.6).
+*/
+class AdaptivePathTests
+    integer passed = 0
+    integer failed = 0
+
+    action Run returns integer
+        TestSquareGivesWalls()
+        TestWidthsMatchPoints()
+        TestOuterWallIsIndexZero()
+        TestWallCountIsSane()
+        TestOuterWallHasCorners()
+        TestWidthReachesBeads()
+        TestBarPointsStayInside()
+        TestBarValidityIsHonest()
+        TestEllPointsStayInside()
+        TestRingHasCentreBeadOnEverySide()
+        TestCentreBeadSurvivesRounding()
+
+        output "AdaptivePath tests: passed " + passed + ", failed " + failed
+        return failed
+    end
+
+    action Check(boolean condition, text name)
+        if condition
+            passed = passed + 1
+        else
+            failed = failed + 1
+            output "FAIL: " + name
+        end
+    end
+
+    // a 10 mm square, counter-clockwise
+    private action Square returns Array<Contour>
+        Array<Contour> outline
+        Contour c
+        c:AddPoint(0.0, 0.0)
+        c:AddPoint(10.0, 0.0)
+        c:AddPoint(10.0, 10.0)
+        c:AddPoint(0.0, 10.0)
+        c:closed = true
+        outline:Add(c)
+        return outline
+    end
+
+    private action Walls returns Array<Contour>
+        AdaptivePath path
+        path:SetWidth(0.4)
+        path:SetWallCount(2)
+        return path:Generate(Square())
+    end
+
+    // a square must give at least one wall
+    action TestSquareGivesWalls()
+        Array<Contour> walls = Walls()
+        Check(walls:GetSize() > 0, "a square gives at least one adaptive wall")
+    end
+
+    // every wall carries one width per point
+    action TestWidthsMatchPoints()
+        Array<Contour> walls = Walls()
+        boolean ok = true
+        integer w = 0
+        repeat while w < walls:GetSize()
+            Contour wall = walls:Get(w)
+            if not wall:IsAdaptive()
+                ok = false
+            end
+            if wall:ws:GetSize() not= wall:GetSize()
+                ok = false
+            end
+            w = w + 1
+        end
+        Check(ok, "every adaptive wall has one width per point")
+    end
+
+    // the outermost wall is index 0
+    action TestOuterWallIsIndexZero()
+        Array<Contour> walls = Walls()
+        boolean found = false
+        integer w = 0
+        repeat while w < walls:GetSize()
+            Contour wall = walls:Get(w)
+            if wall:wallIndex = 0
+                found = true
+            end
+            w = w + 1
+        end
+        Check(found, "the square has an outer wall with wallIndex 0")
+    end
+
+    // a square with two walls gives a few walls, not one per site
+    action TestWallCountIsSane()
+        Array<Contour> walls = Walls()
+        Check(walls:GetSize() > 0 and walls:GetSize() <= 4,
+            "a square gives a few walls, not one per site")
+    end
+
+    // the outer wall has the square's corners and encloses its area
+    action TestOuterWallHasCorners()
+        Array<Contour> walls = Walls()
+        integer best = 0
+        number area = 0.0
+        integer w = 0
+        repeat while w < walls:GetSize()
+            Contour wall = walls:Get(w)
+            if wall:wallIndex = 0 and wall:GetSize() > best
+                best = wall:GetSize()
+                area = wall:Area()
+            end
+            w = w + 1
+        end
+        Check(best >= 4, "the outer wall has at least four corners")
+        Check(area > 20.0, "the outer wall encloses most of the 10 mm square")
+    end
+
+    // the width set on AdaptivePath reaches the outer bead of the square
+    action TestWidthReachesBeads()
+        AdaptivePath path
+        path:SetWidth(0.5)
+        path:SetWallCount(2)
+        Array<Contour> walls = path:Generate(Square())
+        boolean ok = walls:GetSize() > 0
+        integer w = 0
+        repeat while w < walls:GetSize()
+            Contour wall = walls:Get(w)
+            if wall:wallIndex = 0
+                integer i = 0
+                repeat while i < wall:GetSize()
+                    if wall:ws:Get(i) < 0.45 or wall:ws:Get(i) > 0.55
+                        ok = false
+                    end
+                    i = i + 1
+                end
+            end
+            w = w + 1
+        end
+        Check(ok, "the outer wall prints at the width set by SetWidth(0.5)")
+    end
+
+    // a 10 mm by 0.6 mm bar: too thin for two walls
+    private action Bar returns Array<Contour>
+        Array<Contour> outline
+        Contour c
+        c:AddPoint(0.0, 0.0)
+        c:AddPoint(10.0, 0.0)
+        c:AddPoint(10.0, 0.6)
+        c:AddPoint(0.0, 0.6)
+        c:closed = true
+        outline:Add(c)
+        return outline
+    end
+
+    // true when a point lies inside the bar, allowing 0.001 mm for rounding on the edges
+    private action InsideBar(number x, number y) returns boolean
+        return x >= -0.001 and x <= 10.001 and y >= -0.001 and y <= 0.601
+    end
+
+    // true when every wall is well formed: a closed loop has at least three points, an open polyline at least two
+    private action AllWellFormed(Array<Contour> walls) returns boolean
+        integer w = 0
+        repeat while w < walls:GetSize()
+            Contour wall = walls:Get(w)
+            if wall:closed and wall:GetSize() < 3
+                return false
+            end
+            if not wall:closed and wall:GetSize() < 2
+                return false
+            end
+            w = w + 1
+        end
+        return true
+    end
+
+    // whatever the outcome, every point of every wall lies inside the bar and carries one width
+    action TestBarPointsStayInside()
+        AdaptivePath path
+        path:SetWidth(0.4)
+        path:SetWallCount(2)
+        Array<Contour> walls = path:Generate(Bar())
+
+        boolean inside = true
+        boolean widthsMatch = true
+        integer w = 0
+        repeat while w < walls:GetSize()
+            Contour wall = walls:Get(w)
+            if wall:ws:GetSize() not= wall:GetSize()
+                widthsMatch = false
+            end
+            integer i = 0
+            repeat while i < wall:GetSize()
+                if not InsideBar(wall:xs:Get(i), wall:ys:Get(i))
+                    inside = false
+                end
+                i = i + 1
+            end
+            w = w + 1
+        end
+        Check(inside, "every bar wall point lies inside the bar")
+        Check(widthsMatch, "every bar wall has one width per point")
+    end
+
+    // if the bar's walls are reported as valid, there is at least one and every one is well formed
+    // (open polylines are valid output, paper 3.6)
+    action TestBarValidityIsHonest()
+        AdaptivePath path
+        path:SetWidth(0.4)
+        path:SetWallCount(2)
+        Array<Contour> walls = path:Generate(Bar())
+        Check(not path:IsValid() or (walls:GetSize() > 0 and AllWellFormed(walls)),
+              "a bar reported valid has walls, each well formed")
+    end
+
+    // an L: a 10 mm square with its top-right 5 mm corner removed
+    private action Ell returns Array<Contour>
+        Array<Contour> outline
+        Contour c
+        c:AddPoint(0.0, 0.0)
+        c:AddPoint(10.0, 0.0)
+        c:AddPoint(10.0, 5.0)
+        c:AddPoint(5.0, 5.0)
+        c:AddPoint(5.0, 10.0)
+        c:AddPoint(0.0, 10.0)
+        c:closed = true
+        outline:Add(c)
+        return outline
+    end
+
+    // true when (x, y) is inside the L (with a little slack on its edges)
+    private action InsideEll(number x, number y) returns boolean
+        if x < -0.001 or y < -0.001 or x > 10.001 or y > 10.001
+            return false
+        end
+        if x > 5.001 and y > 5.001
+            return false
+        end
+        return true
+    end
+
+    // whatever the outcome, every wall point lies inside the L and carries one width
+    action TestEllPointsStayInside()
+        AdaptivePath path
+        path:SetWidth(0.4)
+        path:SetWallCount(2)
+        Array<Contour> walls = path:Generate(Ell())
+
+        boolean inside = true
+        boolean widthsMatch = true
+        integer w = 0
+        repeat while w < walls:GetSize()
+            Contour wall = walls:Get(w)
+            if wall:ws:GetSize() not= wall:GetSize()
+                widthsMatch = false
+            end
+            integer i = 0
+            repeat while i < wall:GetSize()
+                if not InsideEll(wall:xs:Get(i), wall:ys:Get(i))
+                    inside = false
+                end
+                i = i + 1
+            end
+            w = w + 1
+        end
+        Check(inside, "every L wall point lies inside the L")
+        Check(widthsMatch, "every L wall has one width per point")
+    end
+
+    // A square ring with 2.0 mm walls (outer 0..12, hole 2..10) and three walls: q(2.0) = 5 beads of 0.4 mm on
+    // every side, the middle one on the wall's centre line (1.0 mm in). Each side must have a wall point on its
+    // centre line near its middle. On 3dbenchy (layer 74, the box) one side lost this bead and left a 0.4 mm gap.
+    action TestRingHasCentreBeadOnEverySide()
+        Contour outer
+        outer:AddPoint(0, 0)
+        outer:AddPoint(12, 0)
+        outer:AddPoint(12, 12)
+        outer:AddPoint(0, 12)
+        outer:closed = true
+        Contour hole
+        hole:AddPoint(2, 2)
+        hole:AddPoint(2, 10)
+        hole:AddPoint(10, 10)
+        hole:AddPoint(10, 2)
+        hole:closed = true
+        hole:isHole = true
+        Array<Contour> outline
+        outline:Add(outer)
+        outline:Add(hole)
+
+        AdaptivePath path
+        path:SetWidth(0.4)
+        path:SetWallCount(3)
+        Array<Contour> walls = path:Generate(outline)
+
+        Check(path:IsValid(), "the 2 mm ring gives usable adaptive walls")
+        Check(HasPointNear(walls, 6.0, 1.0), "the bottom side has its centre bead")
+        Check(HasPointNear(walls, 6.0, 11.0), "the top side has its centre bead")
+        Check(HasPointNear(walls, 1.0, 6.0), "the left side has its centre bead")
+        Check(HasPointNear(walls, 11.0, 6.0), "the right side has its centre bead")
+    end
+
+    // true when some wall segment passes within 0.05 mm of (x, y)
+    private action HasPointNear(Array<Contour> walls, number x, number y) returns boolean
+        integer w = 0
+        repeat while w < walls:GetSize()
+            Contour c = walls:Get(w)
+            integer n = c:GetSize()
+            integer segments = n - 1
+            if c:closed
+                segments = n
+            end
+            integer s = 0
+            repeat while s < segments
+                integer t = (s + 1) mod n
+                number ax = c:xs:Get(s)
+                number ay = c:ys:Get(s)
+                number dx = c:xs:Get(t) - ax
+                number dy = c:ys:Get(t) - ay
+                number len2 = dx * dx + dy * dy
+                number u = 0.0
+                if len2 > 0.0
+                    u = ((x - ax) * dx + (y - ay) * dy) / len2
+                end
+                if u < 0.0
+                    u = 0.0
+                end
+                if u > 1.0
+                    u = 1.0
+                end
+                number px = ax + u * dx - x
+                number py = ay + u * dy - y
+                if px * px + py * py < 0.0025
+                    return true
+                end
+                s = s + 1
+            end
+            w = w + 1
+        end
+        return false
+    end
+
+
+    // Squares with walls from 1.85 to 2.15 mm (five beads with three walls), placed at the benchy's coordinates so
+    // the sums of widths don't come out exact. Every side must keep its centre bead: on 3dbenchy (layer 74, the box)
+    // the centre bead's location landed a rounding error above the node radius and lost its sites.
+    action TestCentreBeadSurvivesRounding()
+        integer missing = 0
+        integer step = 0
+        repeat while step <= 30
+            number d = 1.85 + 0.01 * cast(number, step)
+            number x0 = 109.179
+            number y0 = 121.997
+            number s = 12.0
+            Contour outer
+            outer:AddPoint(x0, y0)
+            outer:AddPoint(x0 + s, y0)
+            outer:AddPoint(x0 + s, y0 + s)
+            outer:AddPoint(x0, y0 + s)
+            outer:closed = true
+            Contour hole
+            hole:AddPoint(x0 + d, y0 + d)
+            hole:AddPoint(x0 + d, y0 + s - d)
+            hole:AddPoint(x0 + s - d, y0 + s - d)
+            hole:AddPoint(x0 + s - d, y0 + d)
+            hole:closed = true
+            hole:isHole = true
+            Array<Contour> outline
+            outline:Add(outer)
+            outline:Add(hole)
+
+            AdaptivePath path
+            path:SetWidth(0.4)
+            path:SetWallCount(3)
+            Array<Contour> walls = path:Generate(outline)
+            number mid = s / 2.0
+            number c = d / 2.0
+            if not HasPointNear(walls, x0 + mid, y0 + c)
+                missing = missing + 1
+            end
+            if not HasPointNear(walls, x0 + mid, y0 + s - c)
+                missing = missing + 1
+            end
+            if not HasPointNear(walls, x0 + c, y0 + mid)
+                missing = missing + 1
+            end
+            if not HasPointNear(walls, x0 + s - c, y0 + mid)
+                missing = missing + 1
+            end
+            step = step + 1
+        end
+        Check(missing = 0, "every side of 31 offset squares keeps its centre bead (" + missing + " missing)")
+    end
+end

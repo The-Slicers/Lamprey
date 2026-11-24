@@ -1,0 +1,547 @@
+package Tests
+
+use Libraries.Containers.Array
+use Libraries.Compute.Math
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Geometry.GeometryUtilities
+use Libraries.Fabrication.Slicing.PathGenerator
+use Libraries.Data.Containers.IntegerBuffer
+use Libraries.Data.Containers.NumberBuffer
+
+/*
+Over- and underfill, measured as in paper Appendix C, for uniform and adaptive walls.
+
+Each extrusion segment covers a band from its start width to its end width, plus a round cap of its start
+width at its start and none at its end (the next segment's start cap covers the joint). The last point of an
+open path gets a cap too (Fig. 20). The area is counted on a grid of `cell` mm:
+  overfill  = every cell covered k >= 2 times adds k - 1 (a cell covered three times counts twice)
+  underfill = cells inside the outline that nothing covers
+  outside   = cells outside the outline that something covers (beads widened past a thin feature)
+All three are given as a percentage of the outline's area. The paper's figures, over its data set, are
+0.30% over / 0.24% under for inward distributed and 1.63% / 1.62% for uniform.
+
+Two comparisons per shape, on one plane:
+  beads only  walls only, as many as fit (wallCount 50), no fill: the paper's comparison
+  as printed  2 walls plus solid fill (density 1): what the slicer prints in a solid region
+The numbers are reported, not asserted, apart from a check that the grid measures the shape's area.
+*/
+class CoverageTests
+    Math math
+    GeometryUtilities util
+
+    integer passed = 0
+    integer failed = 0
+    number lineWidth = 0.4
+    number cell = 0.02
+    number margin = 0.5
+    integer manyWalls = 50
+
+    // the grid
+    number gridX0 = 0.0
+    number gridY0 = 0.0
+    integer gridNX = 0
+    integer gridNY = 0
+    IntegerBuffer hits
+    IntegerBuffer insideCell
+
+    // the last measurement, in percent of the outline's area
+    number lastOver = 0.0
+    number lastUnder = 0.0
+    number lastOutside = 0.0
+    number lastArea = 0.0
+    integer lastFallbacks = 0
+    // per cell: the last path that covered it, and where along that path (mm)
+    IntegerBuffer lastPath
+    NumberBuffer lastPos
+    // a path covering a cell again within this far along itself is the same coverage, not overfill
+    number selfReach = 0.6
+
+    action Run returns integer
+        Compare("square", Square())
+        Compare("L", Ell())
+        Compare("U", Ushape())
+        Compare("square with hole", Holed())
+        Compare("wedge", Wedge())
+        Compare("step bar", StepBar())
+        Compare("strip 0.5", Strip(0.5))
+        Compare("strip 0.6", Strip(0.6))
+        Compare("strip 0.7", Strip(0.7))
+        Compare("strip 0.9", Strip(0.9))
+        Compare("strip 1.1", Strip(1.1))
+        Compare("strip 1.3", Strip(1.3))
+        Compare("strip 1.5", Strip(1.5))
+
+        output "Coverage tests: passed " + passed + ", failed " + failed
+        return failed
+    end
+
+    action Check(boolean condition, text name)
+        if condition
+            passed = passed + 1
+        else
+            failed = failed + 1
+            output "FAIL: " + name
+        end
+    end
+
+    // ------------------------------------------------------------ comparison
+
+    private action Compare(text name, Array<Contour> outline)
+        number area = OutlineArea(outline)
+
+        Measure(outline, Paths(outline, false, manyWalls, false))
+        Check(util:AbsNum(lastArea - area) < 0.02 * area, name + ": the grid measures the outline's area")
+        text uniformBeads = Summary()
+        Measure(outline, Paths(outline, true, manyWalls, false))
+        text adaptiveBeads = Summary() + Fallbacks()
+        output name + " beads only:  uniform " + uniformBeads + "  |  adaptive " + adaptiveBeads
+
+        Measure(outline, Paths(outline, false, 2, true))
+        text uniformPrinted = Summary()
+        Measure(outline, Paths(outline, true, 2, true))
+        text adaptivePrinted = Summary() + Fallbacks()
+        output name + " as printed:  uniform " + uniformPrinted + "  |  adaptive " + adaptivePrinted
+    end
+
+    private action Summary returns text
+        return "over " + Percent(lastOver) + "% under " + Percent(lastUnder) + "% outside " + Percent(lastOutside) + "%"
+    end
+
+    private action Fallbacks returns text
+        if lastFallbacks > 0
+            return " (fell back to uniform)"
+        end
+        return ""
+    end
+
+    // The paths PathGenerator makes for one plane of the outline: walls only, or walls with solid fill.
+    private action Paths(Array<Contour> outline, boolean adaptive, integer wallCount, boolean withFill) returns Array<Contour>
+        PathGenerator paths
+        paths:SetAdaptive(adaptive)
+        paths:SetLineWidth(lineWidth)
+        paths:SetWallCount(wallCount)
+        if withFill
+            paths:SetInfillDensity(1.0)
+        else
+            paths:SetInfillDensity(0.0)
+            paths:SetGapFill(false)
+        end
+        paths:Generate(OnePlane(outline), 1)
+        lastFallbacks = paths:GetAdaptiveFallbackCount()
+
+        Array<Contour> drawn
+        AddAll(paths:GetWalls(), drawn)
+        if withFill
+            AddAll(paths:GetSkin(), drawn)
+            AddAll(paths:GetInfill(), drawn)
+            AddAll(paths:GetTopSurface(), drawn)
+        end
+        return drawn
+    end
+
+    private action AddAll(Array<Contour> from, Array<Contour> to)
+        integer i = 0
+        repeat while i < from:GetSize()
+            to:Add(from:Get(i))
+            i = i + 1
+        end
+    end
+
+    private action OnePlane(Array<Contour> outline) returns Array<Contour>
+        Array<Contour> plane
+        integer c = 0
+        repeat while c < outline:GetSize()
+            Contour source = outline:Get(c)
+            Contour copy = source:Copy()
+            copy:planeIndex = 0
+            copy:isHole = source:isHole
+            plane:Add(copy)
+            c = c + 1
+        end
+        return plane
+    end
+
+    // ------------------------------------------------------------ measurement
+
+    private action Measure(Array<Contour> outline, Array<Contour> drawn)
+        SetupGrid(outline)
+
+        integer p = 0
+        repeat while p < drawn:GetSize()
+            Contour path = drawn:Get(p)
+            integer n = path:GetSize()
+            if n >= 2
+                integer segments = n - 1
+                if path:closed
+                    segments = n
+                end
+                number total = 0.0
+                integer s = 0
+                repeat while s < segments
+                    total = total + SegmentLength(path, s, (s + 1) mod n)
+                    s = s + 1
+                end
+                number along = 0.0
+                s = 0
+                repeat while s < segments
+                    integer t = (s + 1) mod n
+                    boolean endCap = not path:closed and s = segments - 1
+                    StampSegment(path, p, s, t, endCap, along, total)
+                    along = along + SegmentLength(path, s, t)
+                    s = s + 1
+                end
+            end
+            p = p + 1
+        end
+
+        integer insideCount = 0
+        integer under = 0
+        integer over = 0
+        integer outside = 0
+        integer i = 0
+        repeat while i < hits:GetSize()
+            integer k = hits:Get(i)
+            if insideCell:Get(i) = 1
+                insideCount = insideCount + 1
+                if k = 0
+                    under = under + 1
+                end
+            elseif k >= 1
+                outside = outside + 1
+            end
+            if k >= 2
+                over = over + k - 1
+            end
+            i = i + 1
+        end
+
+        number unit = cell * cell
+        lastArea = cast(number, insideCount) * unit
+        lastOver = 0.0
+        lastUnder = 0.0
+        lastOutside = 0.0
+        if insideCount > 0
+            lastOver = 100.0 * cast(number, over) / cast(number, insideCount)
+            lastUnder = 100.0 * cast(number, under) / cast(number, insideCount)
+            lastOutside = 100.0 * cast(number, outside) / cast(number, insideCount)
+        end
+    end
+
+    // A grid over the outline's bounding box plus a margin, with every cell's hit count at 0 and whether its
+    // centre lies inside the outline (even-odd over every loop, so holes count).
+    private action SetupGrid(Array<Contour> outline)
+        number lowX = 0.0
+        number lowY = 0.0
+        number highX = 0.0
+        number highY = 0.0
+        boolean any = false
+        integer c = 0
+        repeat while c < outline:GetSize()
+            Contour con = outline:Get(c)
+            integer v = 0
+            repeat while v < con:GetSize()
+                number x = con:xs:Get(v)
+                number y = con:ys:Get(v)
+                if not any
+                    lowX = x
+                    highX = x
+                    lowY = y
+                    highY = y
+                    any = true
+                end
+                lowX = util:Min2(lowX, x)
+                highX = util:Max2(highX, x)
+                lowY = util:Min2(lowY, y)
+                highY = util:Max2(highY, y)
+                v = v + 1
+            end
+            c = c + 1
+        end
+        gridX0 = lowX - margin
+        gridY0 = lowY - margin
+        gridNX = cast(integer, (highX - lowX + 2.0 * margin) / cell) + 1
+        gridNY = cast(integer, (highY - lowY + 2.0 * margin) / cell) + 1
+
+        hits:Empty()
+        lastPath:Empty()
+        lastPos:Empty()
+        insideCell:Empty()
+        integer iy = 0
+        repeat while iy < gridNY
+            number y = gridY0 + (cast(number, iy) + 0.5) * cell
+            integer ix = 0
+            repeat while ix < gridNX
+                number x = gridX0 + (cast(number, ix) + 0.5) * cell
+                hits:Add(0)
+                lastPath:Add(-1)
+                lastPos:Add(0.0)
+                if InsideShape(outline, x, y)
+                    insideCell:Add(1)
+                else
+                    insideCell:Add(0)
+                end
+                ix = ix + 1
+            end
+            iy = iy + 1
+        end
+    end
+
+    // Covers every cell the segment from point a to point b of path `which` reaches (paper Appendix C).
+    // `along` is the path length before this segment, `total` the whole path's length.
+    private action StampSegment(Contour path, integer which, integer a, integer b, boolean endCap,
+                                number along, number total)
+        number ax = path:xs:Get(a)
+        number ay = path:ys:Get(a)
+        number bx = path:xs:Get(b)
+        number by = path:ys:Get(b)
+        number dx = bx - ax
+        number dy = by - ay
+        number len2 = dx * dx + dy * dy
+        if len2 <= 0.0
+            return now
+        end
+        number len = math:SquareRoot(len2)
+        number wa = WidthAt(path, a)
+        number wb = WidthAt(path, b)
+        number reach = util:Max2(wa, wb) / 2.0
+
+        integer x0 = CellOf(util:Min2(ax, bx) - reach, gridX0, gridNX)
+        integer x1 = CellOf(util:Max2(ax, bx) + reach, gridX0, gridNX)
+        integer y0 = CellOf(util:Min2(ay, by) - reach, gridY0, gridNY)
+        integer y1 = CellOf(util:Max2(ay, by) + reach, gridY0, gridNY)
+
+        integer iy = y0
+        repeat while iy <= y1
+            number y = gridY0 + (cast(number, iy) + 0.5) * cell
+            integer ix = x0
+            repeat while ix <= x1
+                number x = gridX0 + (cast(number, ix) + 0.5) * cell
+                if Covers(x, y, ax, ay, dx, dy, len2, wa, wb, endCap)
+                    number u = ((x - ax) * dx + (y - ay) * dy) / len2
+                    if u < 0.0
+                        u = 0.0
+                    end
+                    if u > 1.0
+                        u = 1.0
+                    end
+                    Hit(iy * gridNX + ix, which, along + u * len, total, path:closed)
+                end
+                ix = ix + 1
+            end
+            iy = iy + 1
+        end
+    end
+
+    // Counts a cover of cell `index` by path `which` at position `pos` along it, unless the same path already
+    // covered the cell within selfReach of that position (a joint between its own segments, not an overlap).
+    // On a closed path the distance is taken the shorter way round.
+    private action Hit(integer index, integer which, number pos, number total, boolean closed)
+        if lastPath:Get(index) = which
+            number gap = util:AbsNum(pos - lastPos:Get(index))
+            if closed and total - gap < gap
+                gap = total - gap
+            end
+            if gap <= selfReach
+                return now
+            end
+        end
+        hits:Set(index, hits:Get(index) + 1)
+        lastPath:Set(index, which)
+        lastPos:Set(index, pos)
+    end
+
+    private action SegmentLength(Contour path, integer a, integer b) returns number
+        number dx = path:xs:Get(b) - path:xs:Get(a)
+        number dy = path:ys:Get(b) - path:ys:Get(a)
+        return math:SquareRoot(dx * dx + dy * dy)
+    end
+
+    // The band of the segment (width interpolated along it, end excluded), its start cap, and its end cap
+    // when it ends an open path.
+    private action Covers(number x, number y, number ax, number ay, number dx, number dy, number len2,
+                          number wa, number wb, boolean endCap) returns boolean
+        number u = ((x - ax) * dx + (y - ay) * dy) / len2
+        if u >= 0.0 and u < 1.0
+            number px = ax + u * dx - x
+            number py = ay + u * dy - y
+            number half = (wa + u * (wb - wa)) / 2.0
+            return px * px + py * py <= half * half
+        end
+        if u < 0.0
+            number sx = x - ax
+            number sy = y - ay
+            return sx * sx + sy * sy <= wa * wa / 4.0
+        end
+        if endCap
+            number ex = x - (ax + dx)
+            number ey = y - (ay + dy)
+            return ex * ex + ey * ey <= wb * wb / 4.0
+        end
+        return false
+    end
+
+    private action CellOf(number v, number origin, integer count) returns integer
+        integer i = util:FloorToInt((v - origin) / cell)
+        if i < 0
+            return 0
+        end
+        if i > count - 1
+            return count - 1
+        end
+        return i
+    end
+
+    private action WidthAt(Contour path, integer i) returns number
+        if path:IsAdaptive()
+            return path:ws:Get(i)
+        end
+        return lineWidth
+    end
+
+    private action InsideShape(Array<Contour> outline, number x, number y) returns boolean
+        boolean inside = false
+        integer c = 0
+        repeat while c < outline:GetSize()
+            Contour shape = outline:Get(c)
+            if shape:ContainsPoint(x, y)
+                inside = not inside
+            end
+            c = c + 1
+        end
+        return inside
+    end
+
+    // outer loops add, holes take away (mm^2)
+    private action OutlineArea(Array<Contour> outline) returns number
+        number total = 0.0
+        integer c = 0
+        repeat while c < outline:GetSize()
+            Contour loop = outline:Get(c)
+            if loop:isHole
+                total = total - loop:Area()
+            else
+                total = total + loop:Area()
+            end
+            c = c + 1
+        end
+        return total
+    end
+
+    // a percentage with two decimals
+    private action Percent(number value) returns text
+        integer hundredths = cast(integer, value * 100.0 + 0.5)
+        integer whole = hundredths / 100
+        integer rest = hundredths mod 100
+        text tail = "" + rest
+        if rest < 10
+            tail = "0" + rest
+        end
+        return "" + whole + "." + tail
+    end
+
+    // ------------------------------------------------------------ shapes
+
+    private action Square returns Array<Contour>
+        Array<Contour> outline
+        Contour c
+        c:AddPoint(0.0, 0.0)
+        c:AddPoint(10.0, 0.0)
+        c:AddPoint(10.0, 10.0)
+        c:AddPoint(0.0, 10.0)
+        c:closed = true
+        outline:Add(c)
+        return outline
+    end
+
+    private action Ell returns Array<Contour>
+        Array<Contour> outline
+        Contour c
+        c:AddPoint(0.0, 0.0)
+        c:AddPoint(10.0, 0.0)
+        c:AddPoint(10.0, 5.0)
+        c:AddPoint(5.0, 5.0)
+        c:AddPoint(5.0, 10.0)
+        c:AddPoint(0.0, 10.0)
+        c:closed = true
+        outline:Add(c)
+        return outline
+    end
+
+    private action Ushape returns Array<Contour>
+        Array<Contour> outline
+        Contour c
+        c:AddPoint(0.0, 0.0)
+        c:AddPoint(10.0, 0.0)
+        c:AddPoint(10.0, 10.0)
+        c:AddPoint(7.0, 10.0)
+        c:AddPoint(7.0, 3.0)
+        c:AddPoint(3.0, 3.0)
+        c:AddPoint(3.0, 10.0)
+        c:AddPoint(0.0, 10.0)
+        c:closed = true
+        outline:Add(c)
+        return outline
+    end
+
+    private action Holed returns Array<Contour>
+        Array<Contour> outline
+        Contour outer
+        outer:AddPoint(0.0, 0.0)
+        outer:AddPoint(10.0, 0.0)
+        outer:AddPoint(10.0, 10.0)
+        outer:AddPoint(0.0, 10.0)
+        outer:closed = true
+        outline:Add(outer)
+        Contour hole
+        hole:AddPoint(3.0, 3.0)
+        hole:AddPoint(3.0, 7.0)
+        hole:AddPoint(7.0, 7.0)
+        hole:AddPoint(7.0, 3.0)
+        hole:closed = true
+        hole:isHole = true
+        outline:Add(hole)
+        return outline
+    end
+
+    // a 30 degree wedge, 10 mm long: every width from 0 to 5.4 mm
+    private action Wedge returns Array<Contour>
+        Array<Contour> outline
+        Contour c
+        c:AddPoint(0.0, 0.0)
+        c:AddPoint(10.0, -2.67949)
+        c:AddPoint(10.0, 2.67949)
+        c:closed = true
+        outline:Add(c)
+        return outline
+    end
+
+    // 1.2 mm wide for x in 0..5, then 0.6 mm for x in 5..10
+    private action StepBar returns Array<Contour>
+        Array<Contour> outline
+        Contour c
+        c:AddPoint(0.0, 0.0)
+        c:AddPoint(5.0, 0.0)
+        c:AddPoint(5.0, 0.3)
+        c:AddPoint(10.0, 0.3)
+        c:AddPoint(10.0, 0.9)
+        c:AddPoint(5.0, 0.9)
+        c:AddPoint(5.0, 1.2)
+        c:AddPoint(0.0, 1.2)
+        c:closed = true
+        outline:Add(c)
+        return outline
+    end
+
+    // a 10 mm strip of the given width: uniform walls fit it exactly only at multiples of 2 line widths
+    private action Strip(number width) returns Array<Contour>
+        Array<Contour> outline
+        Contour c
+        c:AddPoint(0.0, 0.0)
+        c:AddPoint(10.0, 0.0)
+        c:AddPoint(10.0, width)
+        c:AddPoint(0.0, width)
+        c:closed = true
+        outline:Add(c)
+        return outline
+    end
+end
