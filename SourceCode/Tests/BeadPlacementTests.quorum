@@ -1,0 +1,410 @@
+package Tests
+
+use Libraries.Containers.Array
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Geometry.OutlineEdges
+use Libraries.Fabrication.Geometry.VoronoiDiagram
+use Libraries.Fabrication.Geometry.SkeletalTrapezoidation
+use Libraries.Fabrication.Geometry.CenterMarking
+use Libraries.Fabrication.Geometry.BeadTransitions
+use Libraries.Fabrication.Geometry.BeadPlacement
+use Libraries.Fabrication.Geometry.InwardDistributed
+use Libraries.Fabrication.Geometry.Bead
+use Libraries.Fabrication.Geometry.GeometryUtilities
+
+class BeadPlacementTests
+    GeometryUtilities util
+
+    integer passed = 0
+    integer failed = 0
+
+    action Run returns integer
+        TestBlendOfOneAndTwoBeadsAtHalf()
+        TestBlendAtZeroIsLowBeading()
+        TestPlacementMatchesSchemeForWholeCount()
+        TestPlacementSizesAgree()
+        TestStaleCountsAreRefused()
+        TestWholeCountWidthsSumToDiameter()
+        TestFractionalAboveOneSumsToDiameter()
+        TestFractionalBelowOneCoversFraction()
+        TestPlacedNodeWithZeroBeadsIsDistinct()
+        TestUnmarkedNodesTakeBeadingFromAbove()
+        TestConflictingBeadingsBlend()
+        TestUpwardOnlyBeadingIsNotPushedDown()
+
+        output "BeadPlacement tests: passed " + passed + ", failed " + failed
+        return failed
+    end
+
+    action Check(boolean condition, text name)
+        if condition
+            passed = passed + 1
+        else
+            failed = failed + 1
+            output "FAIL: " + name
+        end
+    end
+
+    private action Near(number a, number b) returns boolean
+        return a - b < 0.000001 and b - a < 0.000001
+    end
+
+    // One bead at r = 0.5: width 1.0, location 0.5.
+    private action OneBead() returns Array<Bead>
+        InwardDistributed scheme
+        return scheme:Beads(1, 0.5)
+    end
+
+    // Two beads at r = 0.5, w* = 0.4: discrepancy 0.2, equal weights, widths 0.5 and 0.5,
+    // locations 0.25 and 0.75.
+    private action TwoBeadsAtHalf() returns Array<Bead>
+        InwardDistributed scheme
+        return scheme:Beads(2, 0.5)
+    end
+
+    // Blend at t = 0.5 with r = 0.5. The missing bead on the low side is zero width at the centre line.
+    //   bead 0: width (1.0 + 0.5) / 2 = 0.75,  location (0.5 + 0.25) / 2 = 0.375
+    //   bead 1: width (0.0 + 0.5) / 2 = 0.25,  location (0.5 + 0.75) / 2 = 0.625
+    action TestBlendOfOneAndTwoBeadsAtHalf()
+        BeadPlacement bp
+        Array<Bead> low = OneBead()
+        Array<Bead> high = TwoBeadsAtHalf()
+        Array<Bead> blended = bp:BlendBeads(low, high, 0.5, 0.5)
+
+        Check(blended:GetSize() = 2, "blending a 1-bead and a 2-bead beading gives 2 beads")
+
+        Bead first = blended:Get(0)
+        Bead second = blended:Get(1)
+        Check(Near(first:width, 0.75), "outer blended width is 0.75")
+        Check(Near(first:location, 0.375), "outer blended location is 0.375")
+        Check(Near(second:width, 0.25), "inner blended width treats the missing bead as zero width")
+        Check(Near(second:location, 0.625), "inner blended location is 0.625")
+    end
+
+    // At t = 0 the blend is the low beading, and its missing inner bead sits on the centre line
+    // with zero width.
+    action TestBlendAtZeroIsLowBeading()
+        BeadPlacement bp
+        Array<Bead> low = OneBead()
+        Array<Bead> high = TwoBeadsAtHalf()
+        Array<Bead> blended = bp:BlendBeads(low, high, 0.0, 0.5)
+
+        Bead outer = blended:Get(0)
+        Bead inner = blended:Get(1)
+        Check(Near(outer:width, 1.0), "at t = 0 the outer width is the low beading's width")
+        Check(Near(outer:location, 0.5), "at t = 0 the outer location is the low beading's location")
+        Check(Near(inner:width, 0.0), "at t = 0 the missing inner bead has zero width")
+        Check(Near(inner:location, 0.5), "at t = 0 the missing inner bead sits on the centre line")
+    end
+
+    // A whole count is the scheme's beading, unchanged: each node whose count is a whole number carries
+    // exactly that many beads.
+    action TestPlacementMatchesSchemeForWholeCount()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BeadPlacement bp
+        InwardDistributed scheme
+        BuildWedge(st, cm, bt)
+        bt:SetFractionalCounts(st)
+        bp:Build(st, bt, scheme)
+
+        Check(bp:valid, "placement runs when the counts match the skeleton")
+
+        boolean ok = true
+        integer v = 0
+        repeat while v < st:xs:GetSize()
+            number count = bt:beadAt:Get(v)
+            if count >= 0.0 and bt:nodeMarked:Get(v) = 1
+                integer whole = cast(integer, count)
+                if Near(count, cast(number, whole)) and bp:beadsAt:Get(v) not= whole
+                    ok = false
+                end
+            end
+            v = v + 1
+        end
+        Check(ok, "a node with a whole count carries exactly that many beads")
+    end
+
+    // The bead arrays have one entry per node.
+    action TestPlacementSizesAgree()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BeadPlacement bp
+        InwardDistributed scheme
+        BuildWedge(st, cm, bt)
+        bt:SetFractionalCounts(st)
+        bp:Build(st, bt, scheme)
+
+        Check(bp:beadStart:GetSize() = st:xs:GetSize(), "one bead start per node")
+        Check(bp:beadsAt:GetSize() = st:xs:GetSize(), "one bead count per node")
+        Check(bp:placed:GetSize() = st:xs:GetSize(), "one placed flag per node")
+    end
+
+    // A count array that does not match the skeleton is refused, and no beads are placed.
+    action TestStaleCountsAreRefused()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BeadPlacement bp
+        InwardDistributed scheme
+        BuildWedge(st, cm, bt)
+        bt:beadAt:Empty()
+        bp:Build(st, bt, scheme)
+
+        Check(not bp:valid, "a stale count array is refused")
+        Check(bp:beads:GetSize() = 0, "a refused placement places no beads")
+    end
+
+    // Whole counts: on the wedge, every placed node with a whole count of at least one bead has widths
+    // summing to 2r, as the scheme guarantees for a single beading.
+    action TestWholeCountWidthsSumToDiameter()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BeadPlacement bp
+        InwardDistributed scheme
+        BuildWedge(st, cm, bt)
+        bt:SetFractionalCounts(st)
+        bp:Build(st, bt, scheme)
+
+        boolean ok = true
+        boolean any = false
+        integer v = 0
+        repeat while v < st:xs:GetSize()
+            number count = bt:beadAt:Get(v)
+            integer whole = cast(integer, count)
+            if bp:placed:Get(v) = 1 and bt:nodeMarked:Get(v) = 1 and count >= 1.0 and Near(count, cast(number, whole))
+                any = true
+                number sum = 0.0
+                integer k = 0
+                repeat while k < bp:beadsAt:Get(v)
+                    Bead b = bp:beads:Get(bp:beadStart:Get(v) + k)
+                    sum = sum + b:width
+                    k = k + 1
+                end
+                if not Near(sum, 2.0 * st:rad:Get(v))
+                    ok = false
+                end
+            end
+            v = v + 1
+        end
+        Check(any, "the wedge has at least one node with a whole count of one bead or more")
+        Check(ok, "whole-count widths sum to 2r")
+    end
+
+    // Fractional counts between one and two: the blend of a one-bead and a two-bead beading still covers
+    // the whole diameter, because both sides sum to 2r. So the sum is 2r wherever the count is at least one.
+    action TestFractionalAboveOneSumsToDiameter()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BeadPlacement bp
+        InwardDistributed scheme
+        BuildWedge(st, cm, bt)
+        bt:SetFractionalCounts(st)
+        bp:Build(st, bt, scheme)
+
+        boolean ok = true
+        boolean any = false
+        integer v = 0
+        repeat while v < st:xs:GetSize()
+            number count = bt:beadAt:Get(v)
+            if bp:placed:Get(v) = 1 and bt:nodeMarked:Get(v) = 1 and count > 1.0 and count < cast(number, cast(integer, count)) + 1.0 - 0.000001
+                integer whole = cast(integer, count)
+                if not Near(count, cast(number, whole))
+                    any = true
+                    number sum = 0.0
+                    integer k = 0
+                    repeat while k < bp:beadsAt:Get(v)
+                        Bead b = bp:beads:Get(bp:beadStart:Get(v) + k)
+                        sum = sum + b:width
+                        k = k + 1
+                    end
+                    if not Near(sum, 2.0 * st:rad:Get(v))
+                        ok = false
+                    end
+                end
+            end
+            v = v + 1
+        end
+        Check(ok, "fractional counts above one bead sum to 2r")
+    end
+
+    // Fractional counts below one bead: the placed widths sum to t * 2r, where t is the fraction. This is the
+    // libArachne left_over behaviour: the uncovered band is not a bead, so the sum is the covered fraction.
+    action TestFractionalBelowOneCoversFraction()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BeadPlacement bp
+        InwardDistributed scheme
+        BuildWedge(st, cm, bt)
+        bt:SetFractionalCounts(st)
+        bp:Build(st, bt, scheme)
+
+        boolean ok = true
+        boolean any = false
+        integer v = 0
+        repeat while v < st:xs:GetSize()
+            number count = bt:beadAt:Get(v)
+            if bp:placed:Get(v) = 1 and bt:nodeMarked:Get(v) = 1 and count > 0.0 and count < 1.0
+                any = true
+                number sum = 0.0
+                integer k = 0
+                repeat while k < bp:beadsAt:Get(v)
+                    Bead b = bp:beads:Get(bp:beadStart:Get(v) + k)
+                    sum = sum + b:width
+                    k = k + 1
+                end
+                if not Near(sum, count * 2.0 * st:rad:Get(v))
+                    ok = false
+                end
+            end
+            v = v + 1
+        end
+        Check(ok, "fractional counts below one bead cover the fraction t of 2r")
+    end
+
+    // A node with count 0 is placed but carries no beads, which is distinct from an unplaced node.
+    action TestPlacedNodeWithZeroBeadsIsDistinct()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BeadPlacement bp
+        InwardDistributed scheme
+        BuildWedge(st, cm, bt)
+        bt:SetFractionalCounts(st)
+
+        integer target = -1
+        integer v = 0
+        repeat while v < st:xs:GetSize() and target < 0
+            if bt:beadAt:Get(v) >= 1.0 and bt:nodeMarked:Get(v) = 1
+                target = v
+            end
+            v = v + 1
+        end
+        Check(target >= 0, "the wedge has a node with a whole count to clear")
+
+        if target >= 0
+            bt:beadAt:Set(target, 0.0)
+            bp:Build(st, bt, scheme)
+            Check(bp:placed:Get(target) = 1, "a node with count 0 is still placed")
+            Check(bp:beadsAt:Get(target) = 0, "a node with count 0 carries no beads")
+        end
+    end
+
+    // Builds the wedge through centre marking and bead transitions, shared by the tests above.
+    private action BuildWedge(SkeletalTrapezoidation st, CenterMarking cm, BeadTransitions bt)
+        Array<Contour> contours
+        Contour c
+        c:AddPoint(0, 0)
+        c:AddPoint(10, -2.67949)
+        c:AddPoint(10, 2.67949)
+        c:closed = true
+        contours:Add(c)
+
+        OutlineEdges edges
+        edges:BuildEdges(contours)
+
+        VoronoiDiagram diagram
+        diagram:SetWorkPath("Outputs/voronoi_test")
+        diagram:Generate(edges)
+
+        st:Build(contours, edges, diagram)
+        cm:Build(st)
+        bt:Build(st, cm)
+        bt:SplitRampEnds(st, cm)
+        st:RepairTwins()
+    end
+
+    // Three nodes 0.1 mm apart on the x axis with radii r0, r1, r2, joined by unmarked edges; m0..m2 say which
+    // nodes are marked. Counts are q = floor(2R / 0.4 + 1/2).
+    private action BuildChain(SkeletalTrapezoidation st, BeadTransitions bt, number r0, number r1, number r2,
+                              integer m0, integer m1, integer m2)
+        st:xs:Add(0.0)
+        st:xs:Add(0.1)
+        st:xs:Add(0.2)
+        st:ys:Add(0.0)
+        st:ys:Add(0.0)
+        st:ys:Add(0.0)
+        st:rad:Add(r0)
+        st:rad:Add(r1)
+        st:rad:Add(r2)
+        ChainEdge(st, 0, 1, 1)
+        ChainEdge(st, 1, 0, 0)
+        ChainEdge(st, 1, 2, 3)
+        ChainEdge(st, 2, 1, 2)
+        integer v = 0
+        repeat while v < 3
+            number r = st:rad:Get(v)
+            bt:beadAt:Add(cast(number, util:FloorToInt(2.0 * r / 0.4 + 0.5)))
+            bt:beadRadius:Add(r)
+            v = v + 1
+        end
+        bt:nodeMarked:Add(m0)
+        bt:nodeMarked:Add(m1)
+        bt:nodeMarked:Add(m2)
+        integer e = 0
+        repeat while e < 4
+            bt:edgeMarked:Add(0)
+            e = e + 1
+        end
+    end
+
+    private action ChainEdge(SkeletalTrapezoidation st, integer from, integer to, integer twin)
+        st:cleanStart:Add(from)
+        st:cleanEnd:Add(to)
+        st:cleanOpposite:Add(twin)
+    end
+
+    // Paper 3.5: unmarked nodes below a marked one take its beading. Node 0 (R = 1.0, five beads of 0.4 mm) is
+    // marked; nodes 1 and 2 below it are not, so both carry its beading.
+    action TestUnmarkedNodesTakeBeadingFromAbove()
+        SkeletalTrapezoidation st
+        BeadTransitions bt
+        BeadPlacement bp
+        InwardDistributed scheme
+        BuildChain(st, bt, 1.0, 0.5, 0.2, 1, 0, 0)
+        bp:Build(st, bt, scheme)
+
+        Check(bp:beadsAt:Get(2) = 5, "an unmarked node takes the bead count of the marked node above it")
+        Bead b = bp:beads:Get(bp:beadStart:Get(2))
+        Check(Near(b:width, 0.4) and Near(b:location, 0.2), "and its beads, unchanged")
+    end
+
+    // Paper 3.5, Fig. 9: unmarked node 1 gets node 0's beading on the way up (one 0.3 mm bead at 0.15) and node
+    // 2's on the way down (five 0.4 mm beads). Each source is 0.1 mm away, so the blend is half and half:
+    // the outer bead is (0.3 + 0.4) / 2 = 0.35 wide at (0.15 + 0.2) / 2 = 0.175.
+    action TestConflictingBeadingsBlend()
+        SkeletalTrapezoidation st
+        BeadTransitions bt
+        BeadPlacement bp
+        InwardDistributed scheme
+        BuildChain(st, bt, 0.15, 0.4, 1.0, 1, 0, 1)
+        bp:Build(st, bt, scheme)
+
+        Bead b = bp:beads:Get(bp:beadStart:Get(1))
+        Check(Near(b:width, 0.35), "beadings meeting from above and below blend over t_beading: width")
+        Check(Near(b:location, 0.175), "beadings meeting from above and below blend over t_beading: location")
+        Check(bp:beadsAt:Get(2) = 5, "a marked node keeps its own beading")
+    end
+
+    // Paper 3.5: an unmarked node gets "the beading of the marked node on top of the ramp". Node 1 (R = 0.4,
+    // unmarked) only receives node 0's one-bead beading from below, so it must not pass that beading down to
+    // node 2 (Arachne: a propagated-down beading is never upward-propagated only). Node 2 (R = 0.35) gets nothing
+    // from above, so it keeps a beading of its own: count floor(2 * 0.35 / 0.4 + 1/2) = floor(2.25) = 2. The old
+    // code copied node 0's single bead down instead.
+    action TestUpwardOnlyBeadingIsNotPushedDown()
+        SkeletalTrapezoidation st
+        BeadTransitions bt
+        BeadPlacement bp
+        InwardDistributed scheme
+        BuildChain(st, bt, 0.15, 0.4, 0.35, 1, 0, 0)
+        bp:Build(st, bt, scheme)
+
+        Check(bp:beadsAt:Get(1) = 1, "a node reached only from below keeps the beading it received")
+        Check(bp:beadsAt:Get(2) = 2, "a beading that only came up from below is not pushed down to the node below")
+    end
+end

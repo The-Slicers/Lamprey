@@ -1,0 +1,395 @@
+package Libraries.Fabrication.Geometry
+
+use Libraries.Containers.Array
+use Libraries.Compute.Math
+use Libraries.Fabrication.Geometry.GeometryUtilities
+use Libraries.Fabrication.Geometry.SkeletalTrapezoidation
+use Libraries.Fabrication.Geometry.BeadTransitions
+use Libraries.Fabrication.Geometry.BeadingScheme
+use Libraries.Fabrication.Geometry.Bead
+
+class BeadPlacement
+    // storing the final stuff
+    public Array<Bead> beads
+    public Array<integer> beadStart
+    public Array<integer> beadsAt
+    public Array<integer> placed    // if node has no beading, is 0
+    public boolean valid = true
+
+    // array for processing
+    Array<Array<Bead>> nodeBeads
+    Array<boolean> has              
+    Array<number> toBottom          // if bead came from below, how far up it went
+    Array<number> fromTop           // if bead went down, how far it went
+    Array<boolean> upOnly           // beading came only from below
+
+    // skeleton edges (undirected)
+    // where the beads travel along
+    Array<integer> slotLow
+    Array<integer> slotHigh
+    Array<number> slotLength
+    Array<number> slotTop
+    Array<integer> slotMarked
+
+    GeometryUtilities util
+    Math math
+
+    // produces a beading for each skeleton node (list of beads across the feature at the node)
+    // i.e. turns bead counts from previous stages into bead widths and locations (distance from outline)
+    action Build(SkeletalTrapezoidation st, BeadTransitions bt, BeadingScheme scheme)
+        // reset
+        beads:Empty()
+        beadStart:Empty()
+        beadsAt:Empty()
+        placed:Empty()
+        valid = true
+
+        // one bead count per node (otherwise indicates error)
+        integer n = st:xs:GetSize()
+        if bt:beadAt:GetSize() not= n or bt:beadRadius:GetSize() not= n
+            valid = false
+            return now
+        end
+
+        // reset
+        nodeBeads:Empty()
+        has:Empty()
+        toBottom:Empty()
+        fromTop:Empty()
+        upOnly:Empty()
+        Array<boolean> source
+
+        // go through nodes
+        integer v = 0
+        repeat while v < n
+
+            // find marked nodes (default to marked if not marked)
+            boolean marked = true
+            if v < bt:nodeMarked:GetSize()
+                marked = bt:nodeMarked:Get(v) = 1
+            end
+            
+            // marked nodes compute their own beading + become sources
+            boolean own = marked and bt:beadAt:Get(v) >= 0.0
+            source:Add(own)
+            Array<Bead> list
+            if own
+                list = BeadsForCount(scheme, bt:beadAt:Get(v), bt:beadRadius:Get(v))
+            end
+            nodeBeads:Add(list)     // store the beading
+            has:Add(own)
+            toBottom:Add(0.0)
+            fromTop:Add(0.0)
+            upOnly:Add(false)
+            v = v + 1
+        end
+
+        // reset slopes (undirected edges that have ends with different radii) the bead walks
+        slotLow:Empty()
+        slotHigh:Empty()
+        slotLength:Empty()
+        slotTop:Empty()
+        slotMarked:Empty()
+
+        // go through edges
+        integer e = 0
+        repeat while e < st:cleanStart:GetSize()
+            // only go through each edge once (not its twin too, use the lower index one)
+            integer twin = st:cleanOpposite:Get(e)
+            if twin < 0 or twin > e
+                integer ea = st:cleanStart:Get(e)
+                integer eb = st:cleanEnd:Get(e)
+                number ra = st:rad:Get(ea)
+                number rb = st:rad:Get(eb)
+
+                // check that both ends of the edge has different a radius
+                if ra >= 0.0 and rb >= 0.0 and ra not= rb
+                    integer lowEnd = ea
+                    integer highEnd = eb
+                    if ra > rb
+                        lowEnd = eb
+                        highEnd = ea
+                    end
+
+                    // find length of edge
+                    number dx = st:xs:Get(eb) - st:xs:Get(ea)
+                    number dy = st:ys:Get(eb) - st:ys:Get(ea)
+
+                    // store edge 
+                    slotLow:Add(lowEnd)                 // end with lower radius
+                    slotHigh:Add(highEnd)               // end with higher radius
+                    slotLength:Add(math:SquareRoot(dx * dx + dy * dy))
+                    slotTop:Add(st:rad:Get(highEnd))
+                    integer mark = 0
+                    if e < bt:edgeMarked:GetSize()
+                        mark = bt:edgeMarked:Get(e)
+                    end
+                    slotMarked:Add(mark)
+                end
+            end
+            e = e + 1
+        end
+
+        // sorting kept edges (slopes) by their larger radius (lower rads top rads first)
+        Array<integer> slots
+        integer s = 0
+        repeat while s < slotLow:GetSize()
+            slots:Add(s)
+            s = s + 1
+        end
+        Array<integer> order = SortByKey(slots)
+
+        // upward beading propagation (beading goes up edge/slope)
+        // go through sorted unmarked edges (smallest -> largest rads)
+        integer ku = 0
+        repeat while ku < order:GetSize()
+            integer su = order:Get(ku)
+            integer upLow = slotLow:Get(su)
+            integer upHigh = slotHigh:Get(su)
+
+            // if higher end doesn't have beading + isn't a source but lower end has beading, beading should climb to higher end
+            if not source:Get(upHigh) and not has:Get(upHigh) and has:Get(upLow)
+                nodeBeads:Set(upHigh, nodeBeads:Get(upLow))
+                has:Set(upHigh, true)
+                upOnly:Set(upHigh, true)                                        // beading came from below
+                toBottom:Set(upHigh, toBottom:Get(upLow) + slotLength:Get(su))  // update distance
+                fromTop:Set(upHigh, 0.0)
+            end
+            ku = ku + 1
+        end
+
+        // downward beading propagation (beading goes down edge/slope)
+        number transitionLength = scheme:preferredWidth
+        integer kd = order:GetSize() - 1
+        repeat while kd >= 0
+            integer sd = order:Get(kd)
+            integer downLow = slotLow:Get(sd)
+            integer downHigh = slotHigh:Get(sd)
+
+            // if low end doesn't have beading + isn't a source but higher end has beading (beading did NOT come from below), beading should climb to lower end
+            if slotMarked:Get(sd) = 0 and not source:Get(downLow) and has:Get(downHigh) and not upOnly:Get(downHigh)
+                number length = slotLength:Get(sd)
+                Array<Bead> top = nodeBeads:Get(downHigh)
+
+                // skeleton branch goes to a corner
+                // no beading yet, node takes beading from above
+                if not has:Get(downLow)
+                    nodeBeads:Set(downLow, top)
+                    upOnly:Set(downLow, false)
+                    has:Set(downLow, true)
+                    fromTop:Set(downLow, fromTop:Get(downHigh) + length)
+                    toBottom:Set(downLow, 0.0)
+
+                // node has beading from below (node is between two sources)
+                // blend below and top beadings 
+                elseif toBottom:Get(downLow) > 0.0
+                    // distance of the blend (is at most the transition length)
+                    number total = fromTop:Get(downHigh) + length + toBottom:Get(downLow)
+                    number span = total
+                    if transitionLength < span
+                        span = transitionLength
+                    end
+
+                    // calculate how much top beading node should have
+                    // ratioTop = (distance from lower src) / min(dist between sources, nozzle width (i.e. transition length))
+                    number ratioTop = 1.0
+                    if span > 0.0
+                        ratioTop = toBottom:Get(downLow) / span
+                    end
+
+                    // far from lower source, so top beading is used
+                    if ratioTop >= 1.0
+                        nodeBeads:Set(downLow, top)
+                        fromTop:Set(downLow, fromTop:Get(downHigh) + length)
+
+                    // blend top and bottom beadings
+                    else
+                        // base beads is beadings with greater total width
+                        Array<Bead> bottom = nodeBeads:Get(downLow)
+                        Array<Bead> baseBeads = bottom
+                        if TotalWidth(top) > TotalWidth(bottom)
+                            baseBeads = top
+                        end
+
+                        // building new blended beading
+                        Array<Bead> mixed
+                        integer bi = 0
+                        repeat while bi < baseBeads:GetSize()
+                            Bead baseBead = baseBeads:Get(bi)
+                            Bead mixedBead
+
+                            // calculate weighted average for bead weight and location
+                            mixedBead:width = baseBead:width
+                            mixedBead:location = baseBead:location
+
+                            // add beads until correct length reached
+                            if bi < top:GetSize() and bi < bottom:GetSize()
+                                Bead topBead = top:Get(bi)
+                                Bead bottomBead = bottom:Get(bi)
+                                mixedBead:width = ratioTop * topBead:width + (1.0 - ratioTop) * bottomBead:width
+                                mixedBead:location = ratioTop * topBead:location + (1.0 - ratioTop) * bottomBead:location
+                            end
+
+                            mixed:Add(mixedBead)
+                            bi = bi + 1
+                        end
+                        nodeBeads:Set(downLow, mixed)
+                        fromTop:Set(downLow, 0.0)
+                    end
+                    upOnly:Set(downLow, false)
+                    toBottom:Set(downLow, 0.0)
+                end
+                // node keeps the beading it got from above
+            end
+            kd = kd - 1
+        end
+
+        // node did not get propagated but has a bead count
+        // (this is for isolated, unmarked nodes to prevent gaps)
+        v = 0
+        repeat while v < n
+            if not has:Get(v) and bt:beadAt:Get(v) >= 0.0
+                // computes its own beading
+                nodeBeads:Set(v, BeadsForCount(scheme, bt:beadAt:Get(v), bt:beadRadius:Get(v)))
+                has:Set(v, true)
+            end
+            v = v + 1
+        end
+
+        // flatten nodes
+        v = 0
+        repeat while v < n
+            if has:Get(v)
+                AddNode(nodeBeads:Get(v), 1)
+            else
+                Array<Bead> none
+                AddNode(none, 0)
+            end
+            v = v + 1
+        end
+    end
+
+    // merge sort to organize edges by their highest radius (orderer from lowest to highest to radii)
+    private action SortByKey(Array<integer> items) returns Array<integer>
+        // base case
+        if items:GetSize() <= 1
+            return items
+        end
+
+        // find relation to middle
+        integer mid = items:GetSize() / 2
+        Array<integer> left
+        Array<integer> right
+        integer i = 0
+        repeat while i < items:GetSize()
+            if i < mid
+                left:Add(items:Get(i))
+            else
+                right:Add(items:Get(i))
+            end
+            i = i + 1
+        end
+
+        // split
+        Array<integer> a = SortByKey(left)
+        Array<integer> b = SortByKey(right)
+        Array<integer> out
+
+        // sort
+        integer x = 0
+        integer y = 0
+        repeat while x < a:GetSize() or y < b:GetSize()
+            boolean takeLeft = false
+            if y >= b:GetSize()
+                takeLeft = true
+            elseif x < a:GetSize()
+                takeLeft = slotTop:Get(a:Get(x)) <= slotTop:Get(b:Get(y))
+            end
+            if takeLeft
+                out:Add(a:Get(x))
+                x = x + 1
+            else
+                out:Add(b:Get(y))
+                y = y + 1
+            end
+        end
+        return out
+    end
+
+    // appends a node's beading to list
+    private action AddNode(Array<Bead> list, integer isPlaced)
+        beadStart:Add(beads:GetSize())
+        beadsAt:Add(list:GetSize())
+        placed:Add(isPlaced)
+        integer i = 0
+        repeat while i < list:GetSize()
+            Bead b = list:Get(i)
+            beads:Add(b)
+            i = i + 1
+        end
+    end
+
+    // The beads for a count at radius r: the scheme's beading for a whole count; for a fractional count along a
+    // transition ramp (paper Eq. 7), a blend of the beadings for its floor and floor + 1.
+    private action BeadsForCount(BeadingScheme scheme, number count, number r) returns Array<Bead>
+        integer lo = util:FloorToInt(count)
+        number t = count - cast(number, lo)
+        if t < 0.000001
+            return scheme:Beads(lo, r)
+        end
+        Array<Bead> low = scheme:Beads(lo, r)
+        Array<Bead> high = scheme:Beads(lo + 1, r)
+        return BlendBeads(low, high, t, r)
+    end
+
+    // takes two beadings and blends them together
+    // uses t from higher and 1-t from lower beading
+    public action BlendBeads(Array<Bead> low, Array<Bead> high, number t, number r) returns Array<Bead>
+        // amount of beads result should have
+        Array<Bead> out
+        integer size = low:GetSize()
+        if high:GetSize() > size
+            size = high:GetSize()
+        end
+
+        // blend two beads from same index to get resulting bead
+        integer i = 0
+        repeat while i < size
+            number wLow = 0.0
+            number lLow = r
+            number wHigh = 0.0
+            number lHigh = r
+            
+            if i < low:GetSize()
+                Bead a = low:Get(i)
+                wLow = a:width
+                lLow = a:location
+            end
+            if i < high:GetSize()
+                Bead b = high:Get(i)
+                wHigh = b:width
+                lHigh = b:location
+            end
+
+            // blending via linear interpolation
+            Bead blended
+            blended:width = (1.0 - t) * wLow + t * wHigh
+            blended:location = (1.0 - t) * lLow + t * lHigh
+            out:Add(blended)
+            i = i + 1
+        end
+        return out
+    end
+
+    // calculate total beading width
+    private action TotalWidth(Array<Bead> list) returns number
+        number total = 0.0
+        integer i = 0
+        repeat while i < list:GetSize()
+            Bead b = list:Get(i)
+            total = total + b:width
+            i = i + 1
+        end
+        return total
+    end
+end

@@ -46,11 +46,11 @@ class LampreyTests
         CenterMarkingTests centre
         failed = failed + centre:Run()
 
-//        BeadTransitionsTests transitions
-//        failed = failed + transitions:Run()
+        BeadTransitionsTests transitions
+        failed = failed + transitions:Run()
 
-//        BeadPlacementTests placement
-//        failed = failed + placement:Run()
+        BeadPlacementTests placement
+        failed = failed + placement:Run()
 
         InwardDistributedTests inward
         failed = failed + inward:Run()

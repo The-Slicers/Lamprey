@@ -1,0 +1,1550 @@
+package Tests
+
+use Libraries.Containers.Array
+use Libraries.Compute.Math
+use Libraries.Fabrication.Geometry.Contour
+use Libraries.Fabrication.Geometry.OutlineEdges
+use Libraries.Fabrication.Geometry.VoronoiDiagram
+use Libraries.Fabrication.Geometry.GeometryUtilities
+use Libraries.Fabrication.Geometry.SkeletalTrapezoidation
+use Libraries.Fabrication.Geometry.CenterMarking
+use Libraries.Fabrication.Geometry.BeadTransitions
+use Libraries.Fabrication.Geometry.WideningScheme
+
+use Libraries.Fabrication.Geometry.BeadingScheme
+use Libraries.Fabrication.Geometry.InwardDistributed
+use Libraries.Fabrication.Geometry.ShellScheme
+
+class BeadTransitionsTests
+    Math math
+    GeometryUtilities util
+
+    integer passed = 0
+    integer failed = 0
+
+    action Run returns integer
+        // existing checks
+        TestNodeCountSizes()
+        TestQuantizationKnownValue()
+        TestNodesQuantizeByRule()
+        TestWedgeHasTransitions()
+        TestAnchorCountsStraddle()
+        TestAnchorPositionsLieOnEdge()
+        TestNoBackAndForthBumpSurvives()
+        TestBumpIsFlattened()
+        TestPitIsFilled()
+        TestSustainedTransitionSurvives()
+        TestRampIsCentredOnAnchor()
+        TestRampPastEndIsFlagged()
+        TestChainEndDiscardsAnchorWhenNeighbourUnmarked()
+        TestChainEndKeepsAnchorWhenNeighbourMarked()
+        TestOpenEndDiscardsAnchor()
+        TestRampEndsAreNodes()
+        TestRampCountsInterpolateToHalfAtAnchor()
+        TestRampNodesAreRecorded()
+        TestRampCountsWalkAcrossRamp()
+        TestChainEndRampEndIsNode()
+        TestReindexedAnchorsLieOnCurrentEdges()
+        TestChainEndRampHasCounts()
+        TestUnmarkedNodeTakesCountAbove()
+        TestTinyIslandKeepsItsBead()
+
+        // invariant battery, run on every shape
+        RunBattery(WedgeContours(), "wedge")
+        RunBattery(BigSquareContours(), "square")
+        RunBattery(DumbbellContours(), "dumbbell")
+        RunBattery(StepBarContours(), "step bar")
+        RunBattery(TShapeContours(), "T shape")
+        RunBattery(StadiumContours(), "stadium")
+
+        // hand-derived cases
+        TestFarEndDisagreementKeepsBump()
+        TestBumpInsideReachIsFlattened()
+        TestBumpBeyondReachIsKept()
+        TestQuantizeRoundsHalfUp()
+        TestUncountedNeighbourGivesNoAnchor()
+        TestFlatRadiusGivesNoAnchor()
+        TestStepBarTransitionAtJunction()
+        TestConstantWidthStadiumHasNoTransition()
+        TestTShapeHasThreeWayJunction()
+        TestShortNeighbourLeavesRampUnresolved()
+
+        // robustness
+        TestBuildClearsFractionalState()
+        TestSplitRampEndsRunsOnce()
+        TestNozzleWidthAgrees()
+        TestEmptySkeletonIsSafe()
+        TestMarkedJumpDiagnostic()
+        TestWideningCounts()
+        
+        // meta-scheme nodes (paper 4)
+        TestMetaSchemeNodeOffRamp()
+        TestMetaSchemeNodesOnWedge()
+        TestNoMetaSchemeNodesByDefault()
+
+        TestBumpAcrossTwoNodesIsFlattened()
+        TestLongBumpAcrossTwoNodesIsKept()
+        TestChainEndTakesOtherCount()
+        TestShellCapsCounts()
+
+        output "BeadTransitions tests: passed " + passed + ", failed " + failed
+        return failed
+    end
+
+    action Check(boolean condition, text name)
+        if condition
+            passed = passed + 1
+        else
+            failed = failed + 1
+            output "FAIL: " + name
+        end
+    end
+
+    // ------------------------------------------------------------ fixtures
+
+    // Counter-clockwise square from (x0, y0) to (x1, y1), in millimetres.
+    private action Square(number x0, number y0, number x1, number y1) returns Contour
+        Contour c
+        c:AddPoint(x0, y0)
+        c:AddPoint(x1, y0)
+        c:AddPoint(x1, y1)
+        c:AddPoint(x0, y1)
+        c:closed = true
+        return c
+    end
+
+    // A plain 20 mm square. Its centre (10, 10) has radius 10 mm, so 50 beads at w* = 0.4 mm.
+    private action BigSquareContours returns Array<Contour>
+        Array<Contour> contours
+        contours:Add(Square(0, 0, 20, 20))
+        return contours
+    end
+
+    // A thin isosceles wedge, apex at the origin, apex angle 30 degrees. Its spine is significant
+    // (slope 0.259) and its radius grows steadily from the apex, so the bead count changes along
+    // one marked chain.
+    private action WedgeContours returns Array<Contour>
+        Array<Contour> contours
+        Contour c
+        c:AddPoint(0, 0)
+        c:AddPoint(10, -2.67949)
+        c:AddPoint(10, 2.67949)
+        c:closed = true
+        contours:Add(c)
+        return contours
+    end
+
+    // Two 2 mm by 4 mm blocks joined by a 0.4 mm neck. The blocks are about 1 mm in radius and
+    // the neck about 0.2 mm, so the bead count changes along the edges between them.
+    private action DumbbellContours returns Array<Contour>
+        Array<Contour> contours
+        Contour c
+        c:AddPoint(0, 0)
+        c:AddPoint(2, 0)
+        c:AddPoint(2, 1.8)
+        c:AddPoint(3, 1.8)
+        c:AddPoint(3, 0)
+        c:AddPoint(5, 0)
+        c:AddPoint(5, 4)
+        c:AddPoint(3, 4)
+        c:AddPoint(3, 2.2)
+        c:AddPoint(2, 2.2)
+        c:AddPoint(2, 4)
+        c:AddPoint(0, 4)
+        c:closed = true
+        contours:Add(c)
+        return contours
+    end
+
+    // Width 1.2 mm for x in 0..5, then 0.6 mm for x in 5..10. The spine radius falls from 0.6 to
+    // 0.3 at the step, so the counts go from 3 to 2 across the junction.
+    private action StepBarContours returns Array<Contour>
+        Array<Contour> contours
+        Contour c
+        c:AddPoint(0, 0)
+        c:AddPoint(5, 0)
+        c:AddPoint(5, 0.3)
+        c:AddPoint(10, 0.3)
+        c:AddPoint(10, 0.9)
+        c:AddPoint(5, 0.9)
+        c:AddPoint(5, 1.2)
+        c:AddPoint(0, 1.2)
+        c:closed = true
+        contours:Add(c)
+        return contours
+    end
+
+    // A 10 mm bar, 1 mm wide, with a 2 mm stem rising from its middle. The junction has three branches.
+    private action TShapeContours returns Array<Contour>
+        Array<Contour> contours
+        Contour c
+        c:AddPoint(0, 0)
+        c:AddPoint(10, 0)
+        c:AddPoint(10, 1)
+        c:AddPoint(6, 1)
+        c:AddPoint(6, 5)
+        c:AddPoint(4, 5)
+        c:AddPoint(4, 1)
+        c:AddPoint(0, 1)
+        c:closed = true
+        contours:Add(c)
+        return contours
+    end
+
+    // A 2 mm wide stadium: straight sides from x = 0 to x = 10, with semicircular ends of radius 1 mm.
+    // The ends are polylines, so they give curved medial edges. Its straight part has constant radius.
+    private action StadiumContours returns Array<Contour>
+        Array<Contour> contours
+        Contour c
+        c:AddPoint(0, -1)
+        c:AddPoint(10, -1)
+        c:AddPoint(10.7071, -0.7071)
+        c:AddPoint(11, 0)
+        c:AddPoint(10.7071, 0.7071)
+        c:AddPoint(10, 1)
+        c:AddPoint(0, 1)
+        c:AddPoint(-0.7071, 0.7071)
+        c:AddPoint(-1, 0)
+        c:AddPoint(-0.7071, -0.7071)
+        c:closed = true
+        contours:Add(c)
+        return contours
+    end
+
+    // Builds the skeleton, then centre marking, then bead transitions, into the given objects.
+    private action BuildFor(SkeletalTrapezoidation st, CenterMarking cm, BeadTransitions bt, Array<Contour> contours)
+        OutlineEdges edges
+        edges:BuildEdges(contours)
+
+        VoronoiDiagram diagram
+        diagram:SetWorkPath("Outputs/voronoi_test")
+        diagram:Generate(edges)
+
+        st:Build(contours, edges, diagram)
+        cm:Build(st)
+        bt:Build(st, cm)
+    end
+
+    // Builds one hand-made path with the given node spacing. Radii r0, r1, r2 at x = 0, s, 2s.
+    // Bead counts come from b = 2R / 0.4. Every node and edge is central.
+    private action BuildSpacedPath(SkeletalTrapezoidation st, CenterMarking cm, number spacing,
+                                   number r0, number r1, number r2)
+        st:xs:Add(0.0)
+        st:xs:Add(spacing)
+        st:xs:Add(2.0 * spacing)
+        st:ys:Add(0.0)
+        st:ys:Add(0.0)
+        st:ys:Add(0.0)
+        st:rad:Add(r0)
+        st:rad:Add(r1)
+        st:rad:Add(r2)
+
+        AddPathEdge(st, 0, 1, 1)
+        AddPathEdge(st, 1, 0, 0)
+        AddPathEdge(st, 1, 2, 3)
+        AddPathEdge(st, 2, 1, 2)
+
+        integer v = 0
+        repeat while v < 3
+            cm:nodeCentral:Add(1)
+            cm:beadCount:Add(2.0 * st:rad:Get(v) / 0.4)
+            v = v + 1
+        end
+        integer e = 0
+        repeat while e < 4
+            cm:edgeCentral:Add(1)
+            e = e + 1
+        end
+    end
+
+    // The spacing 0.5 path used by the original tests.
+    private action BuildPath(SkeletalTrapezoidation st, CenterMarking cm, number r0, number r1, number r2)
+        BuildSpacedPath(st, cm, 0.5, r0, r1, r2)
+    end
+
+    // The path from BuildPath with a fourth node at x = neighbourX (radius 0.29), joined to node 0.
+    // The new edges are marked or unmarked as neighbourMarked says. The count-1 anchor on edge 0
+    // sits 0.0455 mm from node 0, so its ramp runs past node 0 onto that neighbour.
+    private action BuildChainPathAt(SkeletalTrapezoidation st, CenterMarking cm, boolean neighbourMarked,
+                                    number neighbourX)
+        st:xs:Add(0.0)
+        st:xs:Add(0.5)
+        st:xs:Add(1.0)
+        st:xs:Add(neighbourX)
+        st:ys:Add(0.0)
+        st:ys:Add(0.0)
+        st:ys:Add(0.0)
+        st:ys:Add(0.0)
+        st:rad:Add(0.29)
+        st:rad:Add(0.4)
+        st:rad:Add(0.6)
+        st:rad:Add(0.29)
+
+        AddPathEdge(st, 0, 1, 1)
+        AddPathEdge(st, 1, 0, 0)
+        AddPathEdge(st, 1, 2, 3)
+        AddPathEdge(st, 2, 1, 2)
+        AddPathEdge(st, 3, 0, 5)
+        AddPathEdge(st, 0, 3, 4)
+
+        integer v = 0
+        repeat while v < 4
+            cm:nodeCentral:Add(1)
+            cm:beadCount:Add(2.0 * st:rad:Get(v) / 0.4)
+            v = v + 1
+        end
+
+        integer e = 0
+        repeat while e < 4
+            cm:edgeCentral:Add(1)
+            e = e + 1
+        end
+        if neighbourMarked
+            cm:edgeCentral:Add(1)
+            cm:edgeCentral:Add(1)
+        else
+            cm:edgeCentral:Add(0)
+            cm:edgeCentral:Add(0)
+        end
+    end
+
+    // The chain path with the neighbour at x = -0.5 mm, long enough to hold the whole overhang.
+    private action BuildChainPath(SkeletalTrapezoidation st, CenterMarking cm, boolean neighbourMarked)
+        BuildChainPathAt(st, cm, neighbourMarked, -0.5)
+    end
+
+    // Adds one directed edge to a hand-built skeleton, filling every edge array so splitting and
+    // pairing can read them. The cells are placeholders: these tests check the bead transition
+    // arithmetic, not the cell geometry, so every edge is a straight line-to-line edge.
+    private action AddPathEdge(SkeletalTrapezoidation st, integer from, integer to, integer twin)
+        st:cleanStart:Add(from)
+        st:cleanEnd:Add(to)
+        st:cleanOpposite:Add(twin)
+        st:cleanCell0:Add(0)
+        st:cleanCategory0:Add(8)
+        st:cleanCell1:Add(0)
+        st:cleanCategory1:Add(8)
+        st:cleanLinear:Add(1)
+    end
+
+    // ------------------------------------------------------------ helpers
+
+    // Index of the node at (x, y), or -1 if there is none.
+    private action FindNode(SkeletalTrapezoidation st, number x, number y) returns integer
+        integer v = 0
+        repeat while v < st:xs:GetSize()
+            if Near(st:xs:Get(v), x) and Near(st:ys:Get(v), y)
+                return v
+            end
+            v = v + 1
+        end
+        return -1
+    end
+
+    private action Near(number a, number b) returns boolean
+        return a - b < 0.000001 and b - a < 0.000001
+    end
+
+    // Index of a node whose radius is within 0.000001 of r, or -1.
+    private action NodeWithRadius(SkeletalTrapezoidation st, number r) returns integer
+        integer v = 0
+        repeat while v < st:rad:GetSize()
+            if Near(st:rad:Get(v), r)
+                return v
+            end
+            v = v + 1
+        end
+        return -1
+    end
+
+    // The node shared by edges e1 and e2, or -1 when they share none.
+    private action SharedNodeOf(SkeletalTrapezoidation st, integer e1, integer e2) returns integer
+        if st:cleanStart:Get(e1) = st:cleanStart:Get(e2) or st:cleanStart:Get(e1) = st:cleanEnd:Get(e2)
+            return st:cleanStart:Get(e1)
+        end
+        if st:cleanEnd:Get(e1) = st:cleanStart:Get(e2) or st:cleanEnd:Get(e1) = st:cleanEnd:Get(e2)
+            return st:cleanEnd:Get(e1)
+        end
+        return -1
+    end
+
+    // The node at the other end of edge e from node v.
+    private action FarNodeOf(SkeletalTrapezoidation st, integer e, integer v) returns integer
+        if st:cleanStart:Get(e) = v
+            return st:cleanEnd:Get(e)
+        end
+        return st:cleanStart:Get(e)
+    end
+
+    // Distance along anchor i's edge from the anchor to node v, in mm.
+    private action ReachTo(SkeletalTrapezoidation st, BeadTransitions bt, integer i, integer v) returns number
+        integer e = bt:anchorEdge:Get(i)
+        integer a = st:cleanStart:Get(e)
+        integer b = st:cleanEnd:Get(e)
+        number dx = st:xs:Get(b) - st:xs:Get(a)
+        number dy = st:ys:Get(b) - st:ys:Get(a)
+        number len = math:SquareRoot(dx * dx + dy * dy)
+        if a = v
+            return bt:anchorT:Get(i) * len
+        end
+        return (1.0 - bt:anchorT:Get(i)) * len
+    end
+
+    // True when the anchors include one on edge e at whole count n.
+    private action HasAnchorOn(BeadTransitions bt, integer e, integer n) returns boolean
+        integer i = 0
+        repeat while i < bt:anchorEdge:GetSize()
+            if bt:anchorEdge:Get(i) = e and bt:anchorCount:Get(i) = n
+                return true
+            end
+            i = i + 1
+        end
+        return false
+    end
+
+    // Anchors with whole count n.
+    private action CountAnchorsAt(BeadTransitions bt, integer n) returns integer
+        integer count = 0
+        integer i = 0
+        repeat while i < bt:anchorEdge:GetSize()
+            if bt:anchorCount:Get(i) = n
+                count = count + 1
+            end
+            i = i + 1
+        end
+        return count
+    end
+
+    // Anchors whose x lies strictly between lo and hi.
+    private action CountAnchorsInBand(BeadTransitions bt, number lo, number hi) returns integer
+        integer count = 0
+        integer i = 0
+        repeat while i < bt:anchorX:GetSize()
+            if bt:anchorX:Get(i) > lo and bt:anchorX:Get(i) < hi
+                count = count + 1
+            end
+            i = i + 1
+        end
+        return count
+    end
+
+    // True when two same-count anchors on different edges share a node, lie closer than
+    // backAndForthDistance through it, have agreeing far ends, and the shared node still differs
+    // from them. That is exactly the bump the filter must remove. Disagreeing far ends are kept on
+    // purpose, so they do not count as surviving bumps.
+    private action BumpSurvives(SkeletalTrapezoidation st, BeadTransitions bt) returns boolean
+        integer i = 0
+        repeat while i < bt:anchorEdge:GetSize()
+            integer j = i + 1
+            repeat while j < bt:anchorEdge:GetSize()
+                integer ei = bt:anchorEdge:Get(i)
+                integer ej = bt:anchorEdge:Get(j)
+                if bt:anchorCount:Get(i) = bt:anchorCount:Get(j) and ei not= ej
+                    integer v = SharedNodeOf(st, ei, ej)
+                    if v >= 0
+                        number reach = ReachTo(st, bt, i, v) + ReachTo(st, bt, j, v)
+                        integer farI = FarNodeOf(st, ei, v)
+                        integer farJ = FarNodeOf(st, ej, v)
+                        if reach < bt:backAndForthDistance
+                            if bt:nodeCount:Get(farI) = bt:nodeCount:Get(farJ) and bt:nodeCount:Get(v) not= bt:nodeCount:Get(farI)
+                                return true
+                            end
+                        end
+                    end
+                end
+                j = j + 1
+            end
+            i = i + 1
+        end
+        return false
+    end
+
+    // Invariants that must hold on any shape once Build has run, before any split.
+    private action CheckBuilt(SkeletalTrapezoidation st, CenterMarking cm, BeadTransitions bt, text label)
+        boolean onMarked = true
+        boolean inside = true
+        boolean straddles = true
+        boolean unique = true
+        integer i = 0
+        repeat while i < bt:anchorEdge:GetSize()
+            integer e = bt:anchorEdge:Get(i)
+            integer n = bt:anchorCount:Get(i)
+            integer qa = bt:nodeCount:Get(st:cleanStart:Get(e))
+            integer qb = bt:nodeCount:Get(st:cleanEnd:Get(e))
+            if cm:edgeCentral:Get(e) = 0
+                onMarked = false
+            end
+            if bt:anchorT:Get(i) < 0.0 or bt:anchorT:Get(i) > 1.0
+                inside = false
+            end
+            if not ((qa <= n and n < qb) or (qb <= n and n < qa))
+                straddles = false
+            end
+            integer j = i + 1
+            repeat while j < bt:anchorEdge:GetSize()
+                if bt:anchorEdge:Get(j) = e and bt:anchorCount:Get(j) = n
+                    unique = false
+                end
+                j = j + 1
+            end
+            i = i + 1
+        end
+        Check(onMarked, label + ": every anchor lies on a marked edge")
+        Check(inside, label + ": every anchor lies within its edge")
+        Check(straddles, label + ": every anchor's count straddles its edge's end counts")
+        Check(unique, label + ": no edge carries two anchors at the same count")
+        Check(not BumpSurvives(st, bt), label + ": no back-and-forth bump survives")
+    end
+
+    // Invariants that must hold once the ramps are split, paired, and given counts.
+    private action CheckSplit(SkeletalTrapezoidation st, BeadTransitions bt, text label)
+        boolean counts = true
+        boolean spans = true
+        integer i = 0
+        repeat while i < bt:anchorEdge:GetSize()
+            integer low = bt:rampLowNode:Get(i)
+            integer high = bt:rampHighNode:Get(i)
+            if bt:rampFits:Get(i) = 1 and low >= 0 and high >= 0
+                if bt:beadAt:Get(low) not= cast(number, bt:anchorCount:Get(i))
+                    counts = false
+                end
+                if bt:beadAt:Get(high) not= cast(number, bt:anchorCount:Get(i) + 1)
+                    counts = false
+                end
+                number dx = st:xs:Get(high) - st:xs:Get(low)
+                number dy = st:ys:Get(high) - st:ys:Get(low)
+                if not Near(math:SquareRoot(dx * dx + dy * dy), bt:nozzleWidth)
+                    spans = false
+                end
+            end
+            i = i + 1
+        end
+
+        boolean paired = true
+        boolean nonDegenerate = true
+        integer j = 0
+        repeat while j < st:cleanStart:GetSize()
+            integer t = st:cleanOpposite:Get(j)
+            if t < 0
+                paired = false
+            elseif st:cleanOpposite:Get(t) not= j or not st:AreTwins(j, t)
+                paired = false
+            end
+            number ex = st:xs:Get(st:cleanEnd:Get(j)) - st:xs:Get(st:cleanStart:Get(j))
+            number ey = st:ys:Get(st:cleanEnd:Get(j)) - st:ys:Get(st:cleanStart:Get(j))
+            if ex * ex + ey * ey < 0.000000000001
+                nonDegenerate = false
+            end
+            j = j + 1
+        end
+
+        Check(bt:unresolvedRamps = 0, label + ": every kept ramp has both end nodes")
+        Check(counts, label + ": ramp ends carry n and n + 1")
+        Check(spans, label + ": ramp ends are w* apart")
+        Check(paired, label + ": every edge has a twin that points back")
+        Check(nonDegenerate, label + ": no zero-length edges after splitting")
+    end
+
+    // The full battery on one shape: invariants after Build, then after splitting and counting.
+    private action RunBattery(Array<Contour> contours, text label)
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildFor(st, cm, bt, contours)
+        CheckBuilt(st, cm, bt, label)
+        bt:SplitRampEnds(st, cm)
+        st:RepairTwins()
+        bt:SetFractionalCounts(st)
+        CheckSplit(st, bt, label)
+    end
+
+    // ------------------------------------------------------------ tests on the wedge
+
+    // One quantized count per node, and one anchor record per field.
+    action TestNodeCountSizes()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildFor(st, cm, bt, WedgeContours())
+
+        Check(bt:nodeCount:GetSize() = st:xs:GetSize(), "one quantized count per node")
+        Check(bt:anchorEdge:GetSize() = bt:anchorT:GetSize(), "anchor edge and position arrays agree")
+        Check(bt:anchorEdge:GetSize() = bt:anchorCount:GetSize(), "anchor edge and count arrays agree")
+        Check(bt:anchorEdge:GetSize() = bt:anchorX:GetSize(), "anchor edge and x arrays agree")
+        Check(bt:anchorEdge:GetSize() = bt:anchorY:GetSize(), "anchor edge and y arrays agree")
+    end
+
+    // Every node with a bead count is quantized by floor(b + 1/2); every node without one is -1.
+    action TestNodesQuantizeByRule()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildFor(st, cm, bt, WedgeContours())
+
+        boolean ok = true
+        integer v = 0
+        repeat while v < st:xs:GetSize()
+            if cm:beadCount:Get(v) >= 0.0
+                if bt:nodeCount:Get(v) not= util:FloorToInt(cm:beadCount:Get(v) + 0.5)
+                    ok = false
+                end
+            else
+                if bt:nodeCount:Get(v) not= -1
+                    ok = false
+                end
+            end
+            v = v + 1
+        end
+        Check(ok, "every node with a bead count is quantized by floor(b + 1/2), others are -1")
+    end
+
+    // The wedge's spine is a marked chain whose radius grows steadily, so its bead count changes
+    // along it. If this fails, no transition survives on a marked chain.
+    action TestWedgeHasTransitions()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildFor(st, cm, bt, WedgeContours())
+
+        Check(bt:anchorEdge:GetSize() > 0, "the wedge has at least one bead transition on its marked spine")
+    end
+
+    // Each anchor lies between two nodes whose quantized counts straddle its count n.
+    action TestAnchorCountsStraddle()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildFor(st, cm, bt, WedgeContours())
+
+        boolean ok = true
+        integer i = 0
+        repeat while i < bt:anchorEdge:GetSize()
+            integer e = bt:anchorEdge:Get(i)
+            integer qa = bt:nodeCount:Get(st:cleanStart:Get(e))
+            integer qb = bt:nodeCount:Get(st:cleanEnd:Get(e))
+            integer lo = qa
+            integer hi = qb
+            if qb < qa
+                lo = qb
+                hi = qa
+            end
+            integer n = bt:anchorCount:Get(i)
+            if not (lo <= n and n < hi)
+                ok = false
+            end
+            i = i + 1
+        end
+        Check(ok, "every anchor's count lies between its edge's quantized end counts")
+    end
+
+    // Each anchor's stored position is start + t * (end - start), and t is within the edge.
+    action TestAnchorPositionsLieOnEdge()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildFor(st, cm, bt, WedgeContours())
+
+        boolean ok = true
+        integer i = 0
+        repeat while i < bt:anchorEdge:GetSize()
+            integer e = bt:anchorEdge:Get(i)
+            integer a = st:cleanStart:Get(e)
+            integer b = st:cleanEnd:Get(e)
+            number t = bt:anchorT:Get(i)
+
+            if t < 0.0 or t > 1.0
+                ok = false
+            end
+
+            number ex = st:xs:Get(a) + (st:xs:Get(b) - st:xs:Get(a)) * t
+            number ey = st:ys:Get(a) + (st:ys:Get(b) - st:ys:Get(a)) * t
+            if util:AbsNum(bt:anchorX:Get(i) - ex) > 0.000001 or util:AbsNum(bt:anchorY:Get(i) - ey) > 0.000001
+                ok = false
+            end
+            i = i + 1
+        end
+        Check(ok, "every anchor lies on its edge, at the stored position along it")
+    end
+
+    // After flattening, no bump survives on the wedge.
+    action TestNoBackAndForthBumpSurvives()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildFor(st, cm, bt, WedgeContours())
+
+        Check(not BumpSurvives(st, bt), "no back-and-forth bump survives flattening")
+    end
+
+    // ------------------------------------------------------------ tests on the 20 mm square
+
+    // The centre of the 20 mm square has radius 10 mm, so b = 2 * 10 / 0.4 = 50 and q = 50.
+    action TestQuantizationKnownValue()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildFor(st, cm, bt, BigSquareContours())
+
+        integer v = FindNode(st, 10.0, 10.0)
+        Check(v >= 0, "the square has a node at its centre")
+        if v >= 0
+            Check(bt:nodeCount:Get(v) = 50, "the centre of a 20 mm square quantizes to 50 beads")
+        end
+    end
+
+    // ------------------------------------------------------------ hand-built path tests
+
+    // Bump: radii 0.2, 0.4, 0.2 give counts 1, 2, 1. The two count-1 anchors share node 1 with reach
+    // 0.5 mm < 1 mm and agreeing far ends, so node 1 takes count 1 and no anchors remain.
+    action TestBumpIsFlattened()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildPath(st, cm, 0.2, 0.4, 0.2)
+        bt:Build(st, cm)
+
+        Check(bt:nodeCount:Get(1) = 1, "the peak of a bump takes its neighbours' count")
+        Check(bt:anchorEdge:GetSize() = 0, "the bump's two anchors are removed")
+    end
+
+    // Pit: radii 0.4, 0.2, 0.4 give counts 2, 1, 2. Node 1 takes the far-end count 2, and no anchors remain.
+    action TestPitIsFilled()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildPath(st, cm, 0.4, 0.2, 0.4)
+        bt:Build(st, cm)
+
+        Check(bt:nodeCount:Get(1) = 2, "the floor of a pit takes its neighbours' count")
+        Check(bt:anchorEdge:GetSize() = 0, "the pit's two anchors are removed")
+    end
+
+    // Sustained change: radii 0.2, 0.4, 0.6 give counts 1, 2, 3. The anchors cross different counts,
+    // so they are not a pair and nothing is flattened.
+    action TestSustainedTransitionSurvives()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildPath(st, cm, 0.2, 0.4, 0.6)
+        bt:Build(st, cm)
+
+        Check(bt:nodeCount:Get(0) = 1 and bt:nodeCount:Get(1) = 2 and bt:nodeCount:Get(2) = 3,
+              "a sustained change keeps its counts 1, 2, 3")
+        Check(bt:anchorEdge:GetSize() = 2, "a sustained change keeps its two anchors")
+    end
+
+    // The ramp is centred on its anchor with length w* = 0.4 mm. Both edges are 0.5 mm and both
+    // anchors sit at their midpoints, so both ramps run from 0.05 to 0.45 mm and fit.
+    action TestRampIsCentredOnAnchor()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildPath(st, cm, 0.2, 0.4, 0.6)
+        bt:Build(st, cm)
+
+        Check(bt:rampStart:GetSize() = 2, "one ramp per anchor")
+
+        boolean startOk = true
+        boolean endOk = true
+        boolean fitsOk = true
+        integer i = 0
+        repeat while i < bt:rampStart:GetSize()
+            if not Near(bt:rampStart:Get(i), 0.05)
+                startOk = false
+            end
+            if not Near(bt:rampEnd:Get(i), 0.45)
+                endOk = false
+            end
+            if bt:rampFits:Get(i) not= 1
+                fitsOk = false
+            end
+            i = i + 1
+        end
+        Check(startOk, "each ramp starts 0.05 mm along its edge")
+        Check(endOk, "each ramp ends 0.45 mm along its edge")
+        Check(fitsOk, "each ramp fits on its edge")
+    end
+
+    // The count-1 anchor on edge 0 runs past node 0 onto a marked neighbour, so it is kept and its
+    // ramp is flagged. The midpoint ramp on edge 2 fits.
+    action TestRampPastEndIsFlagged()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildChainPath(st, cm, true)
+        bt:Build(st, cm)
+
+        Check(bt:rampFits:GetSize() = 2, "one ramp per kept anchor")
+        Check(bt:rampFits:Get(0) = 0, "the ramp near node 0 is flagged as not fitting")
+        Check(util:AbsNum(bt:rampStart:Get(0) - (-0.1545454545)) < 0.0001,
+              "the flagged ramp starts at -0.15455 mm")
+        Check(bt:rampFits:Get(1) = 1, "the midpoint ramp fits its edge")
+    end
+
+    // The ramp of the count-1 anchor on edge 0 runs past node 0 onto an unmarked edge, so the chain
+    // ends there and the anchor is discarded (paper 3.4).
+    action TestChainEndDiscardsAnchorWhenNeighbourUnmarked()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildChainPath(st, cm, false)
+        bt:Build(st, cm)
+
+        Check(not HasAnchorOn(bt, 0, 1), "a ramp that runs past an unmarked chain end is discarded")
+    end
+
+    // The same ramp continues onto a marked neighbour, so the anchor is kept.
+    action TestChainEndKeepsAnchorWhenNeighbourMarked()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildChainPath(st, cm, true)
+        bt:Build(st, cm)
+
+        Check(HasAnchorOn(bt, 0, 1), "a ramp that runs onto a marked neighbour keeps its anchor")
+    end
+
+    // Node 0 is an open end: no marked edge continues past it, so the count-1 anchor is discarded.
+    action TestOpenEndDiscardsAnchor()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildPath(st, cm, 0.29, 0.4, 0.6)
+        bt:Build(st, cm)
+
+        Check(not HasAnchorOn(bt, 0, 1), "a ramp at an open end is discarded")
+    end
+
+    // After splitting, every fitting ramp on the wedge has a node at each end, and twins still pair.
+    action TestRampEndsAreNodes()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildFor(st, cm, bt, WedgeContours())
+        bt:SplitRampEnds(st, cm)
+        st:RepairTwins()
+
+        number half = bt:nozzleWidth / 2.0
+        integer checked = 0
+        boolean allNodes = true
+        integer i = 0
+        repeat while i < bt:anchorEdge:GetSize()
+            if bt:rampFits:Get(i) = 1
+                checked = checked + 1
+                integer e = bt:anchorEdge:Get(i)
+                integer a = st:cleanStart:Get(e)
+                integer b = st:cleanEnd:Get(e)
+                number dx = st:xs:Get(b) - st:xs:Get(a)
+                number dy = st:ys:Get(b) - st:ys:Get(a)
+                number len = math:SquareRoot(dx * dx + dy * dy)
+                number ux = dx / len
+                number uy = dy / len
+                number ax = bt:anchorX:Get(i)
+                number ay = bt:anchorY:Get(i)
+
+                if FindNode(st, ax - half * ux, ay - half * uy) < 0
+                    allNodes = false
+                end
+                if FindNode(st, ax + half * ux, ay + half * uy) < 0
+                    allNodes = false
+                end
+            end
+            i = i + 1
+        end
+
+        boolean allPaired = true
+        integer j = 0
+        repeat while j < st:cleanStart:GetSize()
+            integer t = st:cleanOpposite:Get(j)
+            if t < 0 or st:cleanOpposite:Get(t) not= j
+                allPaired = false
+            end
+            j = j + 1
+        end
+
+        Check(checked > 0, "the wedge has fitting ramps to check")
+        Check(allNodes, "both ends of every fitting ramp are nodes")
+        Check(allPaired, "every edge still has a twin that points back after splitting")
+        Check(bt:nodeCount:GetSize() = st:xs:GetSize(), "every node has an entry in nodeCount")
+    end
+
+    // Each fitting ramp runs from count n at its low end to n + 1 at its high end, and the count at
+    // the anchor is n + 1/2 (paper Eq. 7).
+    action TestRampCountsInterpolateToHalfAtAnchor()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildFor(st, cm, bt, WedgeContours())
+        bt:SplitRampEnds(st, cm)
+        st:RepairTwins()
+        bt:SetFractionalCounts(st)
+
+        integer checked = 0
+        boolean countsOk = true
+        boolean midOk = true
+        boolean spanOk = true
+        integer i = 0
+        repeat while i < bt:anchorEdge:GetSize()
+            integer low = bt:rampLowNode:Get(i)
+            integer high = bt:rampHighNode:Get(i)
+            if low >= 0 and high >= 0
+                checked = checked + 1
+                if bt:beadAt:Get(low) not= cast(number, bt:anchorCount:Get(i))
+                    countsOk = false
+                end
+                if bt:beadAt:Get(high) not= cast(number, bt:anchorCount:Get(i) + 1)
+                    countsOk = false
+                end
+                number mid = (bt:beadAt:Get(low) + bt:beadAt:Get(high)) / 2.0
+                if not Near(mid, cast(number, bt:anchorCount:Get(i)) + 0.5)
+                    midOk = false
+                end
+                number dx = st:xs:Get(high) - st:xs:Get(low)
+                number dy = st:ys:Get(high) - st:ys:Get(low)
+                if not Near(math:SquareRoot(dx * dx + dy * dy), bt:nozzleWidth)
+                    spanOk = false
+                end
+            end
+            i = i + 1
+        end
+
+        Check(checked > 0, "the wedge has fitting ramps to check")
+        Check(countsOk, "a ramp runs from count n at its low end to n + 1 at its high end")
+        Check(midOk, "the count at the anchor is n + 1/2")
+        Check(spanOk, "the two ends of every ramp are w* apart")
+    end
+
+    // The kept chain-end ramp's outer end must become a node on the neighbouring edge, at (-0.15455, 0).
+    action TestChainEndRampEndIsNode()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildChainPath(st, cm, true)
+        bt:Build(st, cm)
+
+        Check(HasAnchorOn(bt, 0, 1), "the kept chain-end anchor exists before splitting")
+        bt:SplitRampEnds(st, cm)
+        st:RepairTwins()
+
+        Check(st:NodeIndexAt(-0.15454545, 0.0) >= 0,
+              "the outer end of the kept ramp is a node on the neighbouring edge")
+    end
+
+    // After splitting and reindexing, every anchor's edge is a current edge and its anchor lies on it.
+    action TestReindexedAnchorsLieOnCurrentEdges()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildFor(st, cm, bt, WedgeContours())
+        bt:SplitRampEnds(st, cm)
+        st:RepairTwins()
+
+        boolean inRange = true
+        boolean onEdge = true
+        integer i = 0
+        repeat while i < bt:anchorEdge:GetSize()
+            integer e = bt:anchorEdge:Get(i)
+            if e < 0 or e >= st:cleanStart:GetSize()
+                inRange = false
+            else
+                integer a = st:cleanStart:Get(e)
+                integer b = st:cleanEnd:Get(e)
+                number ex = st:xs:Get(a) + (st:xs:Get(b) - st:xs:Get(a)) * bt:anchorT:Get(i)
+                number ey = st:ys:Get(a) + (st:ys:Get(b) - st:ys:Get(a)) * bt:anchorT:Get(i)
+                if not Near(ex, bt:anchorX:Get(i)) or not Near(ey, bt:anchorY:Get(i))
+                    onEdge = false
+                end
+            end
+            i = i + 1
+        end
+
+        Check(bt:anchorEdge:GetSize() > 0, "the wedge still has anchors after reindexing")
+        Check(inRange, "every anchor's edge is a current edge")
+        Check(onEdge, "every anchor lies on its edge at its stored position")
+    end
+
+    // The kept chain-end ramp runs from x = -0.15455 (count 1) to x = 0.24545 (count 2). Both ends
+    // must be nodes with those counts.
+    action TestChainEndRampHasCounts()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildChainPath(st, cm, true)
+        bt:Build(st, cm)
+        bt:SplitRampEnds(st, cm)
+        st:RepairTwins()
+        bt:SetFractionalCounts(st)
+
+        integer outer = st:NodeIndexAt(-0.15454545, 0.0)
+        integer inner = st:NodeIndexAt(0.24545454, 0.0)
+        Check(outer >= 0 and inner >= 0, "both ends of the kept chain-end ramp are nodes")
+        if outer >= 0 and inner >= 0
+            Check(bt:beadAt:Get(outer) = 1.0, "the outer end of the chain-end ramp has count 1")
+            Check(bt:beadAt:Get(inner) = 2.0, "the inner end of the chain-end ramp has count 2")
+        end
+    end
+
+    // ------------------------------------------------------------ hand-derived cases
+
+    // Same bump, but node 2 is forced to count 0, so the far ends (1 and 0) disagree. The filter
+    // must keep the bump: both count-1 anchors on edges 0 and 2 survive.
+//    action TestFarEndDisagreementKeepsBump()
+//        SkeletalTrapezoidation st
+//        CenterMarking cm
+//        BeadTransitions bt
+//        BuildSpacedPath(st, cm, 0.5, 0.2, 0.4, 0.2)
+//        cm:beadCount:Set(2, 0.0)
+//        bt:Build(st, cm)
+//
+//        Check(CountAnchorsAt(bt, 1) = 2, "a bump with disagreeing far ends is kept")
+//    end
+
+    // Peak at node 1, anchors 0.8 mm apart through it: inside the 1 mm reach, so flattened.
+    action TestBumpInsideReachIsFlattened()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildSpacedPath(st, cm, 0.8, 0.2, 0.4, 0.2)
+        bt:Build(st, cm)
+
+        Check(CountAnchorsAt(bt, 1) = 0, "a bump within the reach is flattened")
+    end
+
+    // Same peak at 1.2 mm spacing: reach 1.2 mm exceeds the 1 mm limit, so the bump is kept.
+    action TestBumpBeyondReachIsKept()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildSpacedPath(st, cm, 1.2, 0.2, 0.4, 0.2)
+        bt:Build(st, cm)
+
+        Check(CountAnchorsAt(bt, 1) = 2, "a bump beyond the reach is kept")
+    end
+
+    // floor(b + 1/2) with b = 0.5, 1.5, 2.5 gives 1, 2, 3, so exact halves round up.
+    action TestQuantizeRoundsHalfUp()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildSpacedPath(st, cm, 0.5, 0.2, 0.2, 0.2)
+        cm:beadCount:Set(0, 0.5)
+        cm:beadCount:Set(1, 1.5)
+        cm:beadCount:Set(2, 2.5)
+        bt:Build(st, cm)
+
+        Check(bt:nodeCount:Get(0) = 1 and bt:nodeCount:Get(1) = 2 and bt:nodeCount:Get(2) = 3,
+              "b = 0.5, 1.5, 2.5 quantize to 1, 2, 3")
+    end
+
+    // Node 0 has no count, so edges 0 and 1 carry no anchor. The count-2 transition on edge 2
+    // (node 1 to node 2, counts 2 and 3) still survives.
+    action TestUncountedNeighbourGivesNoAnchor()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildSpacedPath(st, cm, 0.5, 0.2, 0.4, 0.6)
+        cm:beadCount:Set(0, -1.0)
+        bt:Build(st, cm)
+
+        integer onEdgeZero = 0
+        integer i = 0
+        repeat while i < bt:anchorEdge:GetSize()
+            if bt:anchorEdge:Get(i) = 0 or bt:anchorEdge:Get(i) = 1
+                onEdgeZero = onEdgeZero + 1
+            end
+            i = i + 1
+        end
+        Check(onEdgeZero = 0, "an edge touching an uncounted node carries no anchor")
+        Check(CountAnchorsAt(bt, 2) = 1, "the count-2 transition elsewhere survives")
+    end
+
+    // Equal end radii give no transition, even where the bead counts differ.
+    action TestFlatRadiusGivesNoAnchor()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildSpacedPath(st, cm, 0.5, 0.3, 0.3, 0.3)
+        cm:beadCount:Set(0, 1.0)
+        cm:beadCount:Set(1, 2.0)
+        cm:beadCount:Set(2, 1.0)
+        bt:Build(st, cm)
+
+        Check(bt:anchorEdge:GetSize() = 0, "equal end radii give no anchor")
+    end
+
+    // The step bar's count-2 transition lies where the radius crosses 0.5, inside the junction x in 4..6.
+    action TestStepBarTransitionAtJunction()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildFor(st, cm, bt, StepBarContours())
+
+        integer junction = 0
+        integer i = 0
+        repeat while i < bt:anchorEdge:GetSize()
+            if bt:anchorCount:Get(i) = 2 and bt:anchorX:Get(i) > 4.0 and bt:anchorX:Get(i) < 6.0
+                junction = junction + 1
+            end
+            i = i + 1
+        end
+        Check(junction >= 1, "the step has its count-2 transition inside the junction")
+    end
+
+    // A constant-width stadium has the same radius everywhere, so its bead count never changes and
+    // no transition is placed anywhere, including on its rounded ends.
+    action TestConstantWidthStadiumHasNoTransition()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildFor(st, cm, bt, StadiumContours())
+
+        Check(bt:anchorEdge:GetSize() = 0, "a constant-width stadium has no bead transition")
+    end
+
+    // The T's junction has three branches, so some node has three outgoing directed edges.
+    action TestTShapeHasThreeWayJunction()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildFor(st, cm, bt, TShapeContours())
+
+        boolean found = false
+        integer v = 0
+        repeat while v < st:xs:GetSize()
+            integer degree = 0
+            integer e = 0
+            repeat while e < st:cleanStart:GetSize()
+                if st:cleanStart:Get(e) = v
+                    degree = degree + 1
+                end
+                e = e + 1
+            end
+            if degree >= 3
+                found = true
+            end
+            v = v + 1
+        end
+        Check(found, "the T has a node where three branches meet")
+    end
+
+    // Records the current limit: the neighbour (x = -0.1) is shorter than the 0.1545 mm overhang, so
+    // the outer end of the kept ramp has no node and is counted as unresolved. When the search
+    // continues past a short neighbour, change the expected value to 0.
+    action TestShortNeighbourLeavesRampUnresolved()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildChainPathAt(st, cm, true, -0.1)
+        bt:Build(st, cm)
+        bt:SplitRampEnds(st, cm)
+        st:RepairTwins()
+        bt:SetFractionalCounts(st)
+
+        //Check(bt:unresolvedRamps = 1, "a neighbour shorter than the overhang leaves one ramp unresolved")
+        Check(bt:unresolvedRamps = 0, "a chain end closer than w*/2 takes the count across it, so no ramp is left unresolved")
+    end
+
+    // ------------------------------------------------------------ robustness
+
+    // A second Build must start clean: no fractional counts or ramp nodes from the last run.
+    action TestBuildClearsFractionalState()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildFor(st, cm, bt, WedgeContours())
+        bt:SplitRampEnds(st, cm)
+        st:RepairTwins()
+        bt:SetFractionalCounts(st)
+
+        BuildFor(st, cm, bt, WedgeContours())
+        Check(bt:beadAt:GetSize() = 0, "Build clears beadAt")
+        Check(bt:rampLowNode:GetSize() = 0, "Build clears rampLowNode")
+        Check(bt:rampHighNode:GetSize() = 0, "Build clears rampHighNode")
+    end
+
+    // A second SplitRampEnds must change nothing.
+    action TestSplitRampEndsRunsOnce()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildFor(st, cm, bt, WedgeContours())
+        bt:SplitRampEnds(st, cm)
+        integer afterFirst = st:cleanStart:GetSize()
+        bt:SplitRampEnds(st, cm)
+
+        Check(st:cleanStart:GetSize() = afterFirst, "a second SplitRampEnds changes nothing")
+    end
+
+    // Bead transitions takes its nozzle width from centre marking, so after a build the two agree.
+    action TestNozzleWidthAgrees()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildFor(st, cm, bt, WedgeContours())
+
+        Check(bt:nozzleWidth = cm:nozzleWidth, "bead transitions and centre marking use one nozzle width")
+    end
+
+    // With no skeleton at all, nothing is produced and nothing fails.
+    action TestEmptySkeletonIsSafe()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        cm:Build(st)
+        bt:Build(st, cm)
+        bt:SplitRampEnds(st, cm)
+
+        Check(bt:anchorEdge:GetSize() = 0, "an empty skeleton gives no anchors")
+    end
+
+    // The ramp must be a chain of nodes, not two ends. Its recorded low and high nodes must exist for
+    // every fitting anchor, so the count tests above actually run.
+    action TestRampNodesAreRecorded()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildFor(st, cm, bt, WedgeContours())
+        bt:SplitRampEnds(st, cm)
+        st:RepairTwins()
+        bt:SetFractionalCounts(st)
+
+        Check(bt:rampLowNode:GetSize() = bt:anchorEdge:GetSize(), "one recorded low node per anchor")
+        Check(bt:rampHighNode:GetSize() = bt:anchorEdge:GetSize(), "one recorded high node per anchor")
+    end
+
+    // Along each fitting ramp the count runs linearly from n to n + 1 over w*, with n + 1/2 at the
+    // anchor (paper Eq. 7). The three nodes sit at anchor - w*/2, the anchor, and anchor + w*/2.
+    action TestRampCountsWalkAcrossRamp()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildFor(st, cm, bt, WedgeContours())
+        bt:SplitRampEnds(st, cm)
+        st:RepairTwins()
+        bt:SetFractionalCounts(st)
+
+        number half = bt:nozzleWidth / 2.0
+        integer checked = 0
+        boolean ok = true
+        integer i = 0
+        repeat while i < bt:anchorEdge:GetSize()
+            if bt:rampFits:Get(i) = 1
+                checked = checked + 1
+                integer a = bt:rampNodeA:Get(i)
+                integer b = bt:rampNodeB:Get(i)
+                number dx = st:xs:Get(b) - st:xs:Get(a)
+                number dy = st:ys:Get(b) - st:ys:Get(a)
+                number len = math:SquareRoot(dx * dx + dy * dy)
+                number ux = dx / len
+                number uy = dy / len
+                number px = bt:anchorX:Get(i)
+                number py = bt:anchorY:Get(i)
+
+                integer lo = st:NodeIndexAt(px - half * ux, py - half * uy)
+                integer mid = st:NodeIndexAt(px, py)
+                integer hi = st:NodeIndexAt(px + half * ux, py + half * uy)
+                if lo < 0 or mid < 0 or hi < 0
+                    ok = false
+                else
+                    number n = cast(number, bt:anchorCount:Get(i))
+                    number low = n
+                    number high = n + 1.0
+                    if st:rad:Get(a) > st:rad:Get(b)
+                        low = n + 1.0
+                        high = n
+                    end
+                    if not Near(bt:beadAt:Get(lo), low)
+                        ok = false
+                    end
+                    if not Near(bt:beadAt:Get(hi), high)
+                        ok = false
+                    end
+                    if not Near(bt:beadAt:Get(mid), n + 0.5)
+                        ok = false
+                    end
+                end
+            end
+            i = i + 1
+        end
+
+        Check(checked > 0, "the wedge has fitting ramps to walk")
+        Check(ok, "each fitting ramp runs n to n + 1 across w*, with n + 1/2 at its anchor")
+    end
+
+    // An unmarked node takes the count of the marked node above it (paper 3.5). Marked nodes keep their own.
+    action TestUnmarkedNodeTakesCountAbove()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildSpacedPath(st, cm, 0.5, 0.2, 0.4, 0.6)
+        cm:nodeCentral:Set(0, 0)
+        bt:Build(st, cm)
+
+        Check(bt:propCount:Get(0) = 2, "an unmarked node takes the count of the marked node above it")
+        Check(bt:propCount:Get(1) = 2, "a marked node keeps its own count")
+        Check(bt:propCount:Get(2) = 3, "the top marked node keeps its own count")
+    end
+
+    // Arachne invariant (debugCheckDecorationConsistency): after transitions, a marked edge never changes
+    // bead count without a ramp. Ramp nodes are 0.2 mm apart over w* = 0.4 mm, so neighbours on a ramp
+    // differ by 0.5; a larger difference is a jump with no transition, and its extra bead dangles.
+    private action MarkedJumps(Array<Contour> contours) returns integer
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildFor(st, cm, bt, contours)
+        bt:SplitRampEnds(st, cm)
+        st:RepairTwins()
+        bt:SetFractionalCounts(st)
+        integer jumps = 0
+        integer e = 0
+        repeat while e < st:cleanStart:GetSize()
+            integer t = st:cleanOpposite:Get(e)
+            if bt:edgeMarked:Get(e) = 1 and (t < 0 or t > e)
+                number ca = bt:beadAt:Get(st:cleanStart:Get(e))
+                number cb = bt:beadAt:Get(st:cleanEnd:Get(e))
+                if ca >= 0.0 and cb >= 0.0 and util:AbsNum(ca - cb) > 0.5001
+                    jumps = jumps + 1
+                end
+            end
+            e = e + 1
+        end
+        return jumps
+    end
+
+    action TestMarkedJumpDiagnostic()
+      Check(MarkedJumps(WedgeContours()) = 0, "wedge: no marked edge changes count without a ramp")
+      Check(MarkedJumps(BigSquareContours()) = 0, "square: no marked edge changes count without a ramp")
+      Check(MarkedJumps(DumbbellContours()) = 0, "dumbbell: no marked edge changes count without a ramp")
+      Check(MarkedJumps(StepBarContours()) = 0, "step bar: no marked edge changes count without a ramp")
+      Check(MarkedJumps(TShapeContours()) = 0, "T shape: no marked edge changes count without a ramp")
+      Check(MarkedJumps(StadiumContours()) = 0, "stadium: no marked edge changes count without a ramp")
+    end
+
+    // Widening (paper 4) with r_min = 0.05: radius 0.08 (d = 0.16) gets one bead, 0.04 (d = 0.08) none,
+    // 0.32 (d = 0.64) keeps the plain count of 2. Nodes are 5 mm apart, so the two count-0 anchors around
+    // node 1 are more than the 1 mm back-and-forth distance apart and the pit is not filled.
+    action TestWideningCounts()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildSpacedPath(st, cm, 5.0, 0.08, 0.04, 0.32)
+        bt:SetScheme(SchemeFor(-1, 0.1))
+        bt:Build(st, cm)
+
+        Check(bt:nodeCount:Get(0) = 1, "widening gives a 0.16 mm feature one bead")
+        Check(bt:nodeCount:Get(1) = 0, "widening gives a 0.08 mm feature no bead")
+        Check(bt:nodeCount:Get(2) = 2, "widening leaves a 0.64 mm feature at its plain count")
+    end
+
+        // ------------------------------------------------------------ meta-scheme nodes (paper 4)
+
+    // Shell with M = 2 on the path with radii 0.2, 0.4, 0.6 (0.5 mm spacing). The shell radii are
+    // M w*/2 = 0.4, (M + 1/2) w*/2 = 0.5 and (M + 1) w*/2 = 0.6. Only 0.5 lies strictly inside an edge:
+    // at x = 0.75 on edge 2, whose ends both have count 2 (3 capped to 2) and no ramp. The new node must
+    // have radius 0.5, count 2, and be marked so it gets its own beading.
+    action TestMetaSchemeNodeOffRamp()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildSpacedPath(st, cm, 0.5, 0.2, 0.4, 0.6)
+        bt:SetScheme(SchemeFor(2, -1.0))
+        bt:Build(st, cm)
+        bt:SplitRampEnds(st, cm)
+        st:RepairTwins()
+        bt:SetFractionalCounts(st)
+
+        Check(bt:extraNodes:GetSize() = 1, "one meta-scheme node on the M = 2 path")
+        integer v = FindNode(st, 0.75, 0.0)
+        Check(v >= 0, "the meta-scheme node lies where the radius crosses 0.5")
+        if v >= 0
+            Check(Near(st:rad:Get(v), 0.5), "the meta-scheme node has radius 0.5")
+            Check(Near(bt:beadAt:Get(v), 2.0), "off a ramp the meta-scheme node takes its neighbours' count")
+            Check(bt:nodeMarked:Get(v) = 1, "the meta-scheme node is marked, so it gets its own beading")
+        end
+    end
+
+    // Shell (M = 4) and widening (r_min = 0.05) on the wedge. Its spine is one straight marked edge from
+    // R = 0 to about 2.06, so it crosses r_min and the shell radii 0.8, 0.9 and 1.0. Each needs a node.
+    // The three shell nodes lie above the last ramp (3 to 4, R 0.648 to 0.752) and below the cap, so
+    // they carry count 4. The r_min node lies near the apex and only needs a count.
+    action TestMetaSchemeNodesOnWedge()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        bt:SetScheme(SchemeFor(4, 0.1))
+        BuildFor(st, cm, bt, WedgeContours())
+        bt:SplitRampEnds(st, cm)
+        st:RepairTwins()
+        bt:SetFractionalCounts(st)
+
+        integer rMin = NodeWithRadius(st, 0.05)
+        Check(rMin >= 0, "wedge: a node at R = r_min")
+        if rMin >= 0
+            Check(bt:beadAt:Get(rMin) >= 0.0, "wedge: the r_min node has a count")
+        end
+
+        Array<number> shell
+        shell:Add(0.8)
+        shell:Add(0.9)
+        shell:Add(1.0)
+        integer i = 0
+        repeat while i < shell:GetSize()
+            integer v = NodeWithRadius(st, shell:Get(i))
+            Check(v >= 0, "wedge: a node at R = " + shell:Get(i))
+            if v >= 0
+                Check(Near(bt:beadAt:Get(v), 4.0), "wedge: the node at R = " + shell:Get(i) + " has count 4")
+            end
+            i = i + 1
+        end
+    end
+
+    // With the meta-schemes off (the defaults), no extra nodes are added.
+    action TestNoMetaSchemeNodesByDefault()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildFor(st, cm, bt, WedgeContours())
+        bt:SplitRampEnds(st, cm)
+
+        Check(bt:extraNodes:GetSize() = 0, "no meta-scheme nodes when widening and shell are off")
+    end
+
+        // Counts 1, 2, 0: the count-1 crossings either side of node 1 are opposite and 0.5 mm apart, so node 1 takes the
+    // surrounding count 1 even though the far ends disagree (paper 3.4 asks only for opposite crossings within 1 mm).
+    action TestFarEndDisagreementKeepsBump()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildSpacedPath(st, cm, 0.5, 0.2, 0.4, 0.2)
+        cm:beadCount:Set(2, 0.0)
+        bt:Build(st, cm)
+
+        Check(bt:nodeCount:Get(1) = 1 and CountAnchorsAt(bt, 1) = 0,
+              "a short bump is flattened even when its far ends disagree")
+    end
+
+        // A four-node path with the given spacing and radii; every node and edge is central.
+    private action BuildPath4(SkeletalTrapezoidation st, CenterMarking cm, number spacing,
+                              number r0, number r1, number r2, number r3)
+        integer v = 0
+        repeat while v < 4
+            st:xs:Add(cast(number, v) * spacing)
+            st:ys:Add(0.0)
+            v = v + 1
+        end
+        st:rad:Add(r0)
+        st:rad:Add(r1)
+        st:rad:Add(r2)
+        st:rad:Add(r3)
+
+        AddPathEdge(st, 0, 1, 1)
+        AddPathEdge(st, 1, 0, 0)
+        AddPathEdge(st, 1, 2, 3)
+        AddPathEdge(st, 2, 1, 2)
+        AddPathEdge(st, 2, 3, 5)
+        AddPathEdge(st, 3, 2, 4)
+
+        v = 0
+        repeat while v < 4
+            cm:nodeCentral:Add(1)
+            cm:beadCount:Add(2.0 * st:rad:Get(v) / 0.4)
+            v = v + 1
+        end
+        integer e = 0
+        repeat while e < 6
+            cm:edgeCentral:Add(1)
+            e = e + 1
+        end
+    end
+
+        // Radii 0.2, 0.32, 0.32, 0.2 at 0.3 mm spacing give counts 1, 2, 2, 1. The count-1 crossings sit 0.05 mm
+    // outside nodes 1 and 2, so they are 0.4 mm apart along the chain: both middle nodes take count 1 (paper 3.4,
+    // "all nodes in-between"). The old filter only handled a bump on a single node.
+    action TestBumpAcrossTwoNodesIsFlattened()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildPath4(st, cm, 0.3, 0.2, 0.32, 0.32, 0.2)
+        bt:Build(st, cm)
+
+        Check(bt:nodeCount:Get(1) = 1 and bt:nodeCount:Get(2) = 1, "a two-node bump takes the surrounding count")
+        Check(bt:anchorEdge:GetSize() = 0, "the two-node bump leaves no anchors")
+    end
+
+    // The same bump at 1 mm spacing: the crossings sit 0.167 mm outside nodes 1 and 2, so they are 1.33 mm apart,
+    // beyond d_transition_max = 1 mm. The bump is kept.
+    action TestLongBumpAcrossTwoNodesIsKept()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildPath4(st, cm, 1.0, 0.2, 0.32, 0.32, 0.2)
+        bt:Build(st, cm)
+
+        Check(bt:nodeCount:Get(1) = 2 and bt:nodeCount:Get(2) = 2, "a bump longer than 1 mm keeps its counts")
+        Check(CountAnchorsAt(bt, 1) = 2, "a bump longer than 1 mm keeps both anchors")
+    end
+
+    // Radii 0.29, 0.4, 0.6: the count-1 crossing is 0.0455 mm from node 0, the open end of the chain, so its ramp
+    // (w*/2 = 0.2 mm each side) cannot fit. Node 0 takes the count across the crossing, 2, so no anchor and no jump
+    // are left (paper 3.4; Arachne filterEndOfMarkingTransition).
+    action TestChainEndTakesOtherCount()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildPath(st, cm, 0.29, 0.4, 0.6)
+        bt:Build(st, cm)
+
+        Check(bt:nodeCount:Get(0) = 2, "a chain end too short for the ramp takes the count across it")
+        Check(not HasAnchorOn(bt, 0, 1), "the crossing too close to the chain end leaves no anchor")
+    end
+
+        // Inward distributed at w* = 0.4, wrapped in the shell (maxBeads > 0) and widening (minFeatureSize > 0)
+    // meta-schemes, in the order AdaptivePath uses.
+    private action SchemeFor(integer maxBeads, number minFeatureSize) returns BeadingScheme
+        InwardDistributed id
+        id:SetWidth(0.4)
+        BeadingScheme s = id
+        if maxBeads > 0
+            ShellScheme shell
+            shell:SetWidth(0.4)
+            shell:SetBase(s)
+            shell:maxBeads = maxBeads
+            s = shell
+        end
+        if minFeatureSize > 0.0
+            WideningScheme widen
+            widen:SetWidth(0.4)
+            widen:SetBase(s)
+            widen:minFeatureSize = minFeatureSize
+            s = widen
+        end
+        return s
+    end
+
+    // The 20 mm square's centre quantizes to 50 beads plainly; with the shell (M = 4) it is capped at 4.
+    action TestShellCapsCounts()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        bt:SetScheme(SchemeFor(4, -1.0))
+        BuildFor(st, cm, bt, BigSquareContours())
+
+        integer v = FindNode(st, 10.0, 10.0)
+        Check(v >= 0 and bt:nodeCount:Get(v) = 4, "the shell scheme caps the square's centre at 4 beads")
+    end
+    // A sliver 0.16 mm long: radii 0.04, 0.07, 0.04 at 0.08 mm spacing, with widening (2 r_min = 0.1), give counts
+    // 0, 1, 0. Neither filter may delete its one bead (a feature of at least 2 r_min gets a bead, paper 4). The
+    // chain ends are closer than w*/2 to the 0 -> 1 crossings, so the tips take count 1: the whole sliver is one bead.
+    action TestTinyIslandKeepsItsBead()
+        SkeletalTrapezoidation st
+        CenterMarking cm
+        BeadTransitions bt
+        BuildSpacedPath(st, cm, 0.08, 0.04, 0.07, 0.04)
+        bt:SetScheme(SchemeFor(-1, 0.1))
+        bt:Build(st, cm)
+
+        Check(bt:nodeCount:Get(0) = 1 and bt:nodeCount:Get(1) = 1 and bt:nodeCount:Get(2) = 1,
+              "a sliver at least 2 r_min wide keeps one bead along its whole length")
+    end
+end

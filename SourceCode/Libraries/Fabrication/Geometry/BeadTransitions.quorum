@@ -1,0 +1,1124 @@
+package Libraries.Fabrication.Geometry
+
+use Libraries.Compute.Math
+use Libraries.Containers.Array
+use Libraries.Fabrication.Geometry.GeometryUtilities
+use Libraries.Fabrication.Geometry.SkeletalTrapezoidation
+use Libraries.Fabrication.Geometry.CenterMarking
+use Libraries.Fabrication.Geometry.BeadingScheme
+use Libraries.Fabrication.Geometry.InwardDistributed
+use Libraries.Data.Containers.IntegerBuffer
+use Libraries.Data.Containers.NumberBuffer
+
+// decides number of beads across feature at a skeleton node
+class BeadTransitions
+    public number nozzleWidth = 0.4
+    public number backAndForthDistance = 1.0    // flatten bumps smaller than this
+
+    // the beading scheme that decides the counts (plain inward distributed if none is set)
+    BeadingScheme scheme = undefined
+    InwardDistributed plain
+    BeadingScheme active
+
+    // per node: whole bead count (-1 if the node has none)
+    public Array<integer> nodeCount
+
+    // per anchor (a spot where the count changes from n to n + 1):
+    // the edge it is on, how far along the edge (0 to 1), the count n, and its position
+    public Array<integer> anchorEdge
+    public Array<number> anchorT
+    public Array<integer> anchorCount
+    public Array<number> anchorX
+    public Array<number> anchorY
+
+    // per anchor: where its ramp starts and ends along the edge (mm), and if the whole ramp fits on the edge
+    public Array<number> rampStart
+    public Array<number> rampEnd
+    public Array<integer> rampFits
+
+    // per anchor: the node at the low end (count n) and high end (count n + 1) of its ramp (-1 if none)
+    public Array<integer> rampLowNode
+    public Array<integer> rampHighNode
+
+    // per anchor, saved before the edges get split: the edge's length, its two end nodes,
+    // and the far node of the next marked edge past each end (-1 if none)
+    public Array<number> rampEdgeLength
+    public Array<integer> rampNodeA
+    public Array<integer> rampNodeB
+    public Array<integer> rampOuterA
+    public Array<integer> rampOuterB
+
+    // per node: the bead count used to make its beads (can be a fraction on a ramp) and the radius to use
+    public Array<number> beadAt
+    public Array<number> beadRadius
+
+    // per node: the count its beads come from, and the marked node it got it from (-1 if its own)
+    public Array<integer> propCount
+    public Array<integer> propSource
+
+    // nodes added where the meta-schemes change (paper 4)
+    public Array<integer> extraNodes
+
+    // per edge and node after the splits: 1 if marked central
+    public Array<integer> edgeMarked
+    public Array<integer> nodeMarked
+
+    public boolean splitDone = false
+    public integer unresolvedRamps = 0      // ramps whose end has no node
+
+    // per node: the marked edges leaving it
+    Array<IntegerBuffer> markedOut
+    // scratch space for the filters
+    NumberBuffer reach              // distance walked to each node
+    IntegerBuffer reachStamp        // which search last visited each node
+    integer stamp = 0               // the current search
+    IntegerBuffer sideNodes         // nodes found on one side of a crossing
+   
+    GeometryUtilities util
+    Math math
+
+    // use this beading scheme
+    action SetScheme(BeadingScheme s)
+        scheme = s
+    end
+
+    // finds the bead count at every node, smooths the counts, and places the anchors and ramps
+    action Build(SkeletalTrapezoidation st, CenterMarking cm)
+        // reset
+        nodeCount:Empty()
+        propCount:Empty()
+        propSource:Empty()
+        beadAt:Empty()
+        rampLowNode:Empty()
+        rampHighNode:Empty()
+        edgeMarked:Empty()
+        unresolvedRamps = 0
+        splitDone = false
+
+        // pick the beading scheme (plain one if none was set)
+        nozzleWidth = cm:nozzleWidth
+        if scheme = undefined
+            plain:SetWidth(nozzleWidth)
+            active = plain
+        else
+            active = scheme
+        end
+
+        // go through nodes: get each node's whole bead count from its width (-1 if it has no radius)
+        integer v = 0
+        repeat while v < st:xs:GetSize()
+            if cm:beadCount:Get(v) >= 0.0
+                nodeCount:Add(active:QuantizeCount(cm:beadCount:Get(v) * nozzleWidth))
+            else
+                nodeCount:Add(-1)
+            end
+            v = v + 1
+        end
+
+        // reset the lists of marked edges per node and the scratch space
+        markedOut:Empty()
+        reach:Empty()
+        reachStamp:Empty()
+        stamp = 0
+
+        // one empty list per node
+        integer vm = 0
+        repeat while vm < st:xs:GetSize()
+            IntegerBuffer none
+            markedOut:Add(none)
+            reach:Add(0.0)
+            reachStamp:Add(0)
+            vm = vm + 1
+        end
+
+        // go through edges: list each marked edge at the node it leaves
+        integer em = 0
+        repeat while em < st:cleanStart:GetSize()
+            if cm:edgeCentral:Get(em) = 1
+                IntegerBuffer out = markedOut:Get(st:cleanStart:Get(em))
+                out:Add(em)
+
+                // an edge with no twin is also listed at its other end
+                if st:cleanOpposite:Get(em) < 0
+                    IntegerBuffer back = markedOut:Get(st:cleanEnd:Get(em))
+                    back:Add(em)
+                end
+            end
+            em = em + 1
+        end
+
+        // smooth the counts (paper 3.4): repeat both filters until nothing changes (at most 50 times)
+        integer sweep = 0
+        boolean changed = true
+        repeat while changed and sweep < 50
+
+            // filter 1: remove short bumps where the count goes up and back down (or down and back up)
+            boolean bumps = false
+            integer eb = 0
+            repeat while eb < st:cleanStart:GetSize()
+                // only marked edges, and only one edge of each twin pair
+                integer twinB = st:cleanOpposite:Get(eb)
+                if cm:edgeCentral:Get(eb) = 1 and (twinB < 0 or twinB > eb)
+                    // find the end with the lower count and the end with the higher count
+                    integer lowB = st:cleanStart:Get(eb)
+                    integer highB = st:cleanEnd:Get(eb)
+                    if nodeCount:Get(highB) < nodeCount:Get(lowB)
+                        lowB = st:cleanEnd:Get(eb)
+                        highB = st:cleanStart:Get(eb)
+                    end
+                    integer loB = nodeCount:Get(lowB)
+                    integer hiB = nodeCount:Get(highB)
+
+                    // try each count step on this edge: flatten the high side first, then the low side
+                    boolean doneB = false
+                    integer nB = loB
+                    repeat while loB >= 0 and nB < hiB and not doneB
+                        if DissolveRegion(st, eb, highB, nB, true)
+                            doneB = true
+                        elseif DissolveRegion(st, eb, lowB, nB, false)
+                            doneB = true
+                        end
+                        nB = nB + 1
+                    end
+                    if doneB
+                        bumps = true
+                    end
+                end
+                eb = eb + 1
+            end
+
+            // filter 2: remove count steps too close to the end of a chain (a ramp needs half a width each side)
+            number endHalf = nozzleWidth / 2.0
+            boolean ends = false
+            integer ec = 0
+            repeat while ec < st:cleanStart:GetSize()
+                // only marked edges, and only one edge of each twin pair
+                integer twinC = st:cleanOpposite:Get(ec)
+                if cm:edgeCentral:Get(ec) = 1 and (twinC < 0 or twinC > ec)
+                    // find the end with the lower count and the end with the higher count
+                    integer lowC = st:cleanStart:Get(ec)
+                    integer highC = st:cleanEnd:Get(ec)
+                    if nodeCount:Get(highC) < nodeCount:Get(lowC)
+                        lowC = st:cleanEnd:Get(ec)
+                        highC = st:cleanStart:Get(ec)
+                    end
+                    integer loC = nodeCount:Get(lowC)
+                    integer hiC = nodeCount:Get(highC)
+
+                    // the counts step up on this edge
+                    if loC >= 0 and loC < hiC
+                        // high side ends too soon: lower it (but never to 0 beads)
+                        if hiC - 1 > 0 and SideEndsWithin(st, lowC, highC, CrossingFrom(st, ec, highC, hiC - 1), endHalf)
+                            SetSide(hiC - 1)
+                            ends = true
+
+                        // low side ends too soon: raise it
+                        elseif SideEndsWithin(st, highC, lowC, CrossingFrom(st, ec, lowC, loC), endHalf)
+                            SetSide(loC + 1)
+                            ends = true
+                        end
+                    end
+                end
+                ec = ec + 1
+            end
+
+            // keep going while either filter changed something
+            changed = bumps or ends
+            sweep = sweep + 1
+        end
+
+        // reset the anchors
+        anchorEdge:Empty()
+        anchorT:Empty()
+        anchorCount:Empty()
+        anchorX:Empty()
+        anchorY:Empty()
+        number anchorHalf = nozzleWidth / 2.0
+
+        // go through edges: put an anchor wherever the count steps from n to n + 1
+        integer fe = 0
+        repeat while fe < st:cleanStart:GetSize()
+            // only marked edges, and only one edge of each twin pair
+            integer twinA = st:cleanOpposite:Get(fe)
+            if cm:edgeCentral:Get(fe) = 1 and (twinA < 0 or twinA > fe)
+                integer aa = st:cleanStart:Get(fe)
+                integer ab = st:cleanEnd:Get(fe)
+                integer qa = nodeCount:Get(aa)
+                integer qb = nodeCount:Get(ab)
+
+                // both ends have a count, and the counts differ
+                if qa >= 0 and qb >= 0 and qa not= qb
+                    // lower and higher count
+                    integer loA = qa
+                    integer hiA = qb
+                    if qb < qa
+                        loA = qb
+                        hiA = qa
+                    end
+                    number ra = st:rad:Get(aa)
+                    number rb = st:rad:Get(ab)
+
+                    // one anchor per count step (skip flat edges)
+                    integer na = loA
+                    repeat while na < hiA and ra not= rb
+                        // how far along the edge the radius reaches the step's radius (0 to 1)
+                        number ta = (TransitionRadius(na) - ra) / (rb - ra)
+                        if ta >= 0.0 and ta <= 1.0
+                            // the anchor's distance along the edge
+                            number lenA = SegmentLength(st, fe)
+                            number centre = ta * lenA
+                            boolean keep = true
+
+                            // ramp runs past the start of the edge: keep only if a marked edge continues there
+                            if centre - anchorHalf < 0.0
+                                if ChainNeighbourAt(st, cm, fe, aa) < 0
+                                    keep = false
+                                end
+                            end
+
+                            // ramp runs past the end of the edge: same check
+                            if keep and centre + anchorHalf > lenA
+                                if ChainNeighbourAt(st, cm, fe, ab) < 0
+                                    keep = false
+                                end
+                            end
+
+                            // store the anchor
+                            if keep
+                                anchorEdge:Add(fe)
+                                anchorT:Add(ta)
+                                anchorCount:Add(na)
+                                anchorX:Add(st:xs:Get(aa) + (st:xs:Get(ab) - st:xs:Get(aa)) * ta)
+                                anchorY:Add(st:ys:Get(aa) + (st:ys:Get(ab) - st:ys:Get(aa)) * ta)
+                            end
+                        end
+                        na = na + 1
+                    end
+                end
+            end
+            fe = fe + 1
+        end
+
+        // counts for unmarked nodes (paper 3.5): they take the count of the marked node uphill from them
+
+        // one "uphill" neighbour per node (-1 = none yet)
+        integer np = st:xs:GetSize()
+        Array<integer> uphill
+        integer vu = 0
+        repeat while vu < np
+            uphill:Add(-1)
+            vu = vu + 1
+        end
+
+        // go through edges: for each node, keep the neighbour with the biggest radius above it
+        integer ep = 0
+        repeat while ep < st:cleanStart:GetSize()
+            ConsiderUphill(st, uphill, st:cleanStart:Get(ep), st:cleanEnd:Get(ep))
+            ConsiderUphill(st, uphill, st:cleanEnd:Get(ep), st:cleanStart:Get(ep))
+            ep = ep + 1
+        end
+
+        // go through nodes
+        integer vp = 0
+        repeat while vp < np
+            // start with the node's own count
+            integer value = nodeCount:Get(vp)
+            integer source = -1
+
+            // unmarked node inside the part: walk uphill until a marked node
+            if value >= 0 and cm:nodeCentral:Get(vp) = 0 and st:rad:Get(vp) > 0.0
+                integer cur = vp
+                integer hops = 0
+                repeat while cm:nodeCentral:Get(cur) = 0 and uphill:Get(cur) >= 0 and hops < np
+                    cur = uphill:Get(cur)
+                    hops = hops + 1
+                end
+
+                // found a marked node with a count: take its count, remember where it came from
+                if cm:nodeCentral:Get(cur) = 1 and nodeCount:Get(cur) >= 0
+                    value = nodeCount:Get(cur)
+                    source = cur
+                end
+            end
+            propCount:Add(value)
+            propSource:Add(source)
+            vp = vp + 1
+        end
+
+        // reset the ramps
+        rampStart:Empty()
+        rampEnd:Empty()
+        rampFits:Empty()
+        rampEdgeLength:Empty()
+        rampNodeA:Empty()
+        rampNodeB:Empty()
+        rampOuterA:Empty()
+        rampOuterB:Empty()
+        number rampHalf = nozzleWidth / 2.0
+
+        // go through anchors: each ramp is one nozzle width long, centred on its anchor (paper Fig. 7)
+        integer ir = 0
+        repeat while ir < anchorEdge:GetSize()
+            // the anchor's edge and its two ends
+            integer er = anchorEdge:Get(ir)
+            integer rampA = st:cleanStart:Get(er)
+            integer rampB = st:cleanEnd:Get(er)
+            number edgeLen = SegmentLength(st, er)
+
+            // ramp start and end, measured along the edge
+            number rampCentre = anchorT:Get(ir) * edgeLen
+            number rampFrom = rampCentre - rampHalf
+            number rampTo = rampCentre + rampHalf
+
+            // does the whole ramp fit on the edge?
+            integer fits = 0
+            if rampFrom >= 0.0 and rampTo <= edgeLen
+                fits = 1
+            end
+
+            // store the ramp, the edge, and the next marked edge past each end
+            rampStart:Add(rampFrom)
+            rampEnd:Add(rampTo)
+            rampFits:Add(fits)
+            rampEdgeLength:Add(edgeLen)
+            rampNodeA:Add(rampA)
+            rampNodeB:Add(rampB)
+            rampOuterA:Add(OuterFarNode(st, cm, er, rampA))
+            rampOuterB:Add(OuterFarNode(st, cm, er, rampB))
+            ir = ir + 1
+        end
+    end
+
+    // splits the skeleton edges so there is a node at every step along each ramp (paper 3.4)
+    // and at every radius where the meta-schemes change (paper 4); only runs once
+    public action SplitRampEnds(SkeletalTrapezoidation st, CenterMarking cm)
+        // already done
+        if splitDone
+            return now
+        end
+
+        // save each original edge's length (splitting changes the edges)
+        integer originalEdges = st:cleanStart:GetSize()
+        Array<number> origLen
+        integer e = 0
+        repeat while e < originalEdges
+            origLen:Add(SegmentLength(st, e))
+            e = e + 1
+        end
+
+        // all the cuts to make: which edge, and how far along it
+        Array<integer> cutEdge
+        Array<number> cutPos
+
+        // distance between ramp steps
+        number step = st:splitLength
+        if step <= 0.0
+            step = nozzleWidth / 4.0
+        end
+
+        // go through anchors: one cut at every step along the ramp
+        integer i = 0
+        repeat while i < anchorEdge:GetSize()
+            integer edge = anchorEdge:Get(i)
+            integer va = st:cleanStart:Get(edge)
+            integer vb = st:cleanEnd:Get(edge)
+            number len = origLen:Get(edge)
+            number sFrom = rampStart:Get(i)
+            number sTo = rampEnd:Get(i)
+
+            // how many steps fit on the ramp
+            integer steps = cast(integer, (sTo - sFrom) / step + 0.000001)
+            if steps < 0
+                steps = 0
+            end
+
+            integer k = 0
+            repeat while k <= steps
+                number p = sFrom + cast(number, k) * step
+                // before the start of the edge: cut the marked edge that continues there
+                if p < -0.000001
+                    RecordOuterCut(st, cm, cutEdge, cutPos, edge, va, -p, origLen)
+                // past the end of the edge: cut the marked edge that continues there
+                elseif p > len + 0.000001
+                    RecordOuterCut(st, cm, cutEdge, cutPos, edge, vb, p - len, origLen)
+                // on the edge: cut it here
+                else
+                    RecordCut(st, cutEdge, cutPos, edge, p, origLen)
+                end
+                k = k + 1
+            end
+            i = i + 1
+        end
+
+        // the radii where the meta-schemes change (their diameters, halved)
+        Array<number> radii
+        Array<number> diameters = active:NonlinearDiameters()
+        integer di = 0
+        repeat while di < diameters:GetSize()
+            if diameters:Get(di) > 0.0
+                radii:Add(diameters:Get(di) / 2.0)
+            end
+            di = di + 1
+        end
+
+        // positions of those new nodes, so they can be found after the split
+        Array<number> extraX
+        Array<number> extraY
+
+        // go through original edges: cut each marked edge where its radius passes one of those radii
+        integer f = 0
+        repeat while f < originalEdges
+            // only marked edges, and only one edge of each twin pair
+            integer twinF = st:cleanOpposite:Get(f)
+            if cm:edgeCentral:Get(f) = 1 and (twinF < 0 or twinF > f)
+                integer fa = st:cleanStart:Get(f)
+                integer fb = st:cleanEnd:Get(f)
+                number ra = st:rad:Get(fa)
+                number rb = st:rad:Get(fb)
+                integer r = 0
+                repeat while r < radii:GetSize()
+                    number target = radii:Get(r)
+                    // the radius is between the two ends' radii
+                    if (target - ra) * (target - rb) < 0.0
+                        // how far along the edge (0 to 1), then record the cut and its position
+                        number t = (target - ra) / (rb - ra)
+                        RecordCut(st, cutEdge, cutPos, f, t * origLen:Get(f), origLen)
+                        extraX:Add(st:xs:Get(fa) + (st:xs:Get(fb) - st:xs:Get(fa)) * t)
+                        extraY:Add(st:ys:Get(fa) + (st:ys:Get(fb) - st:ys:Get(fa)) * t)
+                    end
+                    r = r + 1
+                end
+            end
+            f = f + 1
+        end
+
+        // copy each original edge's mark
+        edgeMarked:Empty()
+        integer m = 0
+        repeat while m < originalEdges
+            edgeMarked:Add(cm:edgeCentral:Get(m))
+            m = m + 1
+        end
+
+        // go through original edges: make all of each edge's cuts
+        integer g = 0
+        repeat while g < originalEdges
+            // this edge's cuts (only ones strictly inside it)
+            Array<number> cuts
+            integer c = 0
+            repeat while c < cutEdge:GetSize()
+                if cutEdge:Get(c) = g
+                    number cp = cutPos:Get(c)
+                    if cp > 0.000001 and cp < origLen:Get(g) - 0.000001
+                        cuts:Add(cp)
+                    end
+                end
+                c = c + 1
+            end
+
+            if cuts:GetSize() > 0
+                // remember how many edges there were, then sort the cuts nearest first
+                integer prior = st:cleanStart:GetSize()
+                cuts:Sort()
+                number total = SegmentLength(st, g)
+                integer cur = g
+                number offset = 0.0
+                integer kc = 0
+                repeat while kc < cuts:GetSize()
+                    number pc = cuts:Get(kc)
+                    // skip a cut at the same spot as the last one
+                    if pc - offset > 0.000001
+                        // split the piece that is left, then keep going on its far part
+                        st:SplitAt(cur, (pc - offset) / (total - offset))
+                        cur = st:cleanStart:GetSize() - 2
+                        offset = pc
+                    end
+                    kc = kc + 1
+                end
+
+                // the new pieces get the same mark as the edge they came from
+                integer grown = st:cleanStart:GetSize() - prior
+                integer j = 0
+                repeat while j < grown
+                    edgeMarked:Add(cm:edgeCentral:Get(g))
+                    j = j + 1
+                end
+            end
+            g = g + 1
+        end
+
+        // new nodes have no count yet (SetFractionalCounts gives them one)
+        integer v = nodeCount:GetSize()
+        repeat while v < st:xs:GetSize()
+            nodeCount:Add(-1)
+            propCount:Add(-1)
+            propSource:Add(-1)
+            v = v + 1
+        end
+
+        // find the new nodes at the meta-scheme radii
+        extraNodes:Empty()
+        integer x = 0
+        repeat while x < extraX:GetSize()
+            integer node = st:NodeIndexAt(extraX:Get(x), extraY:Get(x))
+            if node >= 0
+                extraNodes:Add(node)
+            end
+            x = x + 1
+        end
+
+        // mark the nodes: start with the central ones
+        nodeMarked:Empty()
+        v = 0
+        repeat while v < st:xs:GetSize()
+            integer mark = 0
+            if v < cm:nodeCentral:GetSize() and cm:nodeCentral:Get(v) = 1
+                mark = 1
+            end
+            nodeMarked:Add(mark)
+            v = v + 1
+        end
+
+        // also mark both ends of every marked edge (except ends on the outline)
+        integer markedEdge = 0
+        repeat while markedEdge < st:cleanStart:GetSize()
+            if markedEdge < edgeMarked:GetSize() and edgeMarked:Get(markedEdge) = 1
+                integer ea = st:cleanStart:Get(markedEdge)
+                integer eb = st:cleanEnd:Get(markedEdge)
+                if st:rad:Get(ea) > 0.0
+                    nodeMarked:Set(ea, 1)
+                end
+                if st:rad:Get(eb) > 0.0
+                    nodeMarked:Set(eb, 1)
+                end
+            end
+            markedEdge = markedEdge + 1
+        end
+
+        // point the anchors at the new pieces
+        ReindexAnchors(st)
+        splitDone = true
+    end
+
+    // after splitting: point each anchor at the piece of its edge it now lies on
+    public action ReindexAnchors(SkeletalTrapezoidation st)
+        // go through anchors
+        integer i = 0
+        repeat while i < anchorEdge:GetSize()
+            // find the first edge that passes through the anchor
+            integer e = -1
+            integer s = 0
+            repeat while s < st:cleanStart:GetSize() and e < 0
+                integer sa = st:cleanStart:Get(s)
+                integer sb = st:cleanEnd:Get(s)
+                number d2 = util:SegmentDistance2(anchorX:Get(i), anchorY:Get(i), st:xs:Get(sa), st:ys:Get(sa),
+                                                  st:xs:Get(sb), st:ys:Get(sb))
+                if d2 < 0.000000000001
+                    e = s
+                end
+                s = s + 1
+            end
+
+            // found it: work out how far along that piece the anchor is (0 to 1)
+            if e >= 0
+                integer a = st:cleanStart:Get(e)
+                integer b = st:cleanEnd:Get(e)
+                number dx = st:xs:Get(b) - st:xs:Get(a)
+                number dy = st:ys:Get(b) - st:ys:Get(a)
+                number len2 = dx * dx + dy * dy
+                number t = ((anchorX:Get(i) - st:xs:Get(a)) * dx + (anchorY:Get(i) - st:ys:Get(a)) * dy) / len2
+                anchorEdge:Set(i, e)
+                anchorT:Set(i, t)
+            end
+            i = i + 1
+        end
+    end
+
+    // gives every node the count and radius its beads are made from
+    // along a ramp the count goes smoothly from n to n + 1 (paper Eq. 7)
+    public action SetFractionalCounts(SkeletalTrapezoidation st)
+        // reset
+        beadAt:Empty()
+        rampLowNode:Empty()
+        rampHighNode:Empty()
+        unresolvedRamps = 0
+
+        // radius per node: an unmarked node uses its source node's radius, the rest use their own
+        beadRadius:Empty()
+        integer s = 0
+        repeat while s < st:xs:GetSize()
+            if s < propSource:GetSize() and propSource:Get(s) >= 0
+                beadRadius:Add(st:rad:Get(propSource:Get(s)))
+            else
+                beadRadius:Add(st:rad:Get(s))
+            end
+            s = s + 1
+        end
+
+        // count per node: start from the whole counts
+        integer v = 0
+        repeat while v < nodeCount:GetSize()
+            if v < propCount:GetSize()
+                beadAt:Add(cast(number, propCount:Get(v)))
+            else
+                beadAt:Add(cast(number, nodeCount:Get(v)))
+            end
+            v = v + 1
+        end
+
+        // distance between ramp steps
+        number step = st:splitLength
+        if step <= 0.0
+            step = nozzleWidth / 4.0
+        end
+
+        // go through anchors
+        integer i = 0
+        repeat while i < anchorEdge:GetSize()
+            // the count goes up toward the bigger radius; find which ramp end is low and which is high
+            boolean falling = st:rad:Get(rampNodeA:Get(i)) > st:rad:Get(rampNodeB:Get(i))
+            number lowPos = rampStart:Get(i)
+            number highPos = rampEnd:Get(i)
+            if falling
+                lowPos = rampEnd:Get(i)
+                highPos = rampStart:Get(i)
+            end
+
+            // the nodes at the two ends of the ramp
+            integer low = RampEndNode(st, i, lowPos)
+            integer high = RampEndNode(st, i, highPos)
+            if low < 0 or high < 0
+                unresolvedRamps = unresolvedRamps + 1
+            end
+            rampLowNode:Add(low)
+            rampHighNode:Add(high)
+
+            // go along the ramp step by step
+            number width = nozzleWidth
+            integer steps = cast(integer, width / step + 0.000001)
+            integer k = 0
+            repeat while k <= steps
+                // distance along the ramp (never past its end)
+                number t = cast(number, k) * step
+                if t > width
+                    t = width
+                end
+
+                // the node at this step gets a count between n and n + 1
+                integer node = RampEndNode(st, i, rampStart:Get(i) + t)
+                if node >= 0
+                    number frac = t / width
+                    number count = cast(number, anchorCount:Get(i)) + frac
+                    if falling
+                        count = cast(number, anchorCount:Get(i) + 1) - frac
+                    end
+                    beadAt:Set(node, count)
+                end
+                k = k + 1
+            end
+            i = i + 1
+        end
+
+        // meta-scheme nodes no ramp reached: average the counts of the nearest nodes along the chain
+
+        // one empty list per node
+        Array<IntegerBuffer> around
+        integer fv = 0
+        repeat while fv < st:xs:GetSize()
+            IntegerBuffer none
+            around:Add(none)
+            fv = fv + 1
+        end
+
+        // go through edges: list each marked edge at the node it leaves
+        integer fe = 0
+        repeat while fe < st:cleanStart:GetSize()
+            if fe < edgeMarked:GetSize() and edgeMarked:Get(fe) = 1
+                IntegerBuffer list = around:Get(st:cleanStart:Get(fe))
+                list:Add(fe)
+            end
+            fe = fe + 1
+        end
+
+        // go through the meta-scheme nodes
+        integer xi = 0
+        repeat while xi < extraNodes:GetSize()
+            integer extra = extraNodes:Get(xi)
+
+            // only ones that still have no count
+            if beadAt:Get(extra) < 0.0
+                IntegerBuffer outList = around:Get(extra)
+                number sumWeight = 0.0
+                number sumValue = 0.0
+
+                // try each direction along the chain
+                integer fk = 0
+                repeat while fk < outList:GetSize()
+                    // walk until a node with a count (at most 50 steps)
+                    integer prev = extra
+                    integer cur = st:cleanEnd:Get(outList:Get(fk))
+                    number dist = NodeDistance(st, prev, cur)
+                    integer walked = 0
+                    boolean walking = beadAt:Get(cur) < 0.0
+                    repeat while walking
+                        // the next node along a marked edge (not going back)
+                        integer nxt = -1
+                        IntegerBuffer nextOut = around:Get(cur)
+                        integer nk = 0
+                        repeat while nk < nextOut:GetSize() and nxt < 0
+                            integer to = st:cleanEnd:Get(nextOut:Get(nk))
+                            if to not= prev
+                                nxt = to
+                            end
+                            nk = nk + 1
+                        end
+
+                        // stop if stuck or too far, otherwise take the step
+                        if nxt < 0 or walked >= 50
+                            walking = false
+                        else
+                            dist = dist + NodeDistance(st, cur, nxt)
+                            prev = cur
+                            cur = nxt
+                            walked = walked + 1
+                            walking = beadAt:Get(cur) < 0.0
+                        end
+                    end
+
+                    // found a count: nearer nodes count more (weight = 1 / distance)
+                    if beadAt:Get(cur) >= 0.0
+                        number weight = 1.0 / util:Max2(dist, 0.000000001)
+                        sumWeight = sumWeight + weight
+                        sumValue = sumValue + weight * beadAt:Get(cur)
+                    end
+                    fk = fk + 1
+                end
+
+                // the weighted average
+                if sumWeight > 0.0
+                    beadAt:Set(extra, sumValue / sumWeight)
+                end
+            end
+            xi = xi + 1
+        end
+    end
+
+    // the radius where the count steps from n to n + 1 (half the scheme's diameter)
+    private action TransitionRadius(integer n) returns number
+        return active:TransitionDiameter(n) / 2.0
+    end
+
+    // records a cut pos mm along edge g
+    // twins are split together, so the cut is stored on the lower-numbered edge of the pair
+    private action RecordCut(SkeletalTrapezoidation st, Array<integer> cutEdge, Array<number> cutPos,
+                             integer g, number pos, Array<number> origLen)
+        integer twin = st:cleanOpposite:Get(g)
+        // the twin has the lower number: store it there, measured from that edge's start
+        if twin >= 0 and twin < g
+            cutEdge:Add(twin)
+            cutPos:Add(origLen:Get(g) - pos)
+        else
+            cutEdge:Add(g)
+            cutPos:Add(pos)
+        end
+    end
+
+    // records a cut d mm past node v, on the marked edge that continues past edge e there
+    private action RecordOuterCut(SkeletalTrapezoidation st, CenterMarking cm, Array<integer> cutEdge,
+                                  Array<number> cutPos, integer e, integer v, number d, Array<number> origLen)
+        // the next marked edge (none: nothing to cut)
+        integer g = ChainNeighbourAt(st, cm, e, v)
+        if g < 0
+            return now
+        end
+
+        // measure from that edge's start
+        number pos = d
+        if st:cleanStart:Get(g) not= v
+            pos = origLen:Get(g) - d
+        end
+        RecordCut(st, cutEdge, cutPos, g, pos, origLen)
+    end
+
+    // the node p mm along anchor i's original edge (or past its ends, on the next marked edge); -1 if none
+    private action RampEndNode(SkeletalTrapezoidation st, integer i, number p) returns integer
+        number len0 = rampEdgeLength:Get(i)
+        integer va = rampNodeA:Get(i)
+        integer vb = rampNodeB:Get(i)
+
+        // on the edge: find the node at that spot
+        if p >= 0.0 and p <= len0
+            number dx = st:xs:Get(vb) - st:xs:Get(va)
+            number dy = st:ys:Get(vb) - st:ys:Get(va)
+            return st:NodeIndexAt(st:xs:Get(va) + p * dx / len0, st:ys:Get(va) + p * dy / len0)
+        end
+
+        // past the start (or past the end): which end, the next edge's far node, and how far past
+        integer v = va
+        integer far = rampOuterA:Get(i)
+        number d = -p
+        if p > len0
+            v = vb
+            far = rampOuterB:Get(i)
+            d = p - len0
+        end
+
+        // no next edge there
+        if far < 0
+            return -1
+        end
+
+        // find the node d mm along the next edge
+        number gx = st:xs:Get(far) - st:xs:Get(v)
+        number gy = st:ys:Get(far) - st:ys:Get(v)
+        number glen = math:SquareRoot(gx * gx + gy * gy)
+        return st:NodeIndexAt(st:xs:Get(v) + d * gx / glen, st:ys:Get(v) + d * gy / glen)
+    end
+
+    // length of edge e (mm)
+    private action SegmentLength(SkeletalTrapezoidation st, integer e) returns number
+        integer a = st:cleanStart:Get(e)
+        integer b = st:cleanEnd:Get(e)
+        number dx = st:xs:Get(b) - st:xs:Get(a)
+        number dy = st:ys:Get(b) - st:ys:Get(a)
+        return math:SquareRoot(dx * dx + dy * dy)
+    end
+
+    // the marked edge (not e or its twin) that touches node v, or -1
+    private action ChainNeighbourAt(SkeletalTrapezoidation st, CenterMarking cm, integer e, integer v) returns integer
+        integer twin = st:cleanOpposite:Get(e)
+        // go through edges
+        integer f = 0
+        repeat while f < st:cleanStart:GetSize()
+            // a different marked edge
+            if f not= e and f not= twin and cm:edgeCentral:Get(f) = 1
+                // that touches v
+                if st:cleanStart:Get(f) = v or st:cleanEnd:Get(f) = v
+                    return f
+                end
+            end
+            f = f + 1
+        end
+        return -1
+    end
+
+    // the far node of the marked edge that continues past edge e at node v, or -1
+    private action OuterFarNode(SkeletalTrapezoidation st, CenterMarking cm, integer e, integer v) returns integer
+        // the next marked edge
+        integer g = ChainNeighbourAt(st, cm, e, v)
+        if g < 0
+            return -1
+        end
+        // its other end
+        if st:cleanStart:Get(g) = v
+            return st:cleanEnd:Get(g)
+        end
+        return st:cleanStart:Get(g)
+    end
+
+    // keeps `to` as from's uphill neighbour if it is higher than the one kept so far
+    private action ConsiderUphill(SkeletalTrapezoidation st, Array<integer> uphill, integer from, integer to)
+        // not higher: ignore
+        if st:rad:Get(to) <= st:rad:Get(from)
+            return now
+        end
+        // higher than the best so far: keep it
+        integer best = uphill:Get(from)
+        if best < 0 or st:rad:Get(to) > st:rad:Get(best)
+            uphill:Set(from, to)
+        end
+    end
+
+    // distance between nodes a and b (mm)
+    private action NodeDistance(SkeletalTrapezoidation st, integer a, integer b) returns number
+        number dx = st:xs:Get(b) - st:xs:Get(a)
+        number dy = st:ys:Get(b) - st:ys:Get(a)
+        return math:SquareRoot(dx * dx + dy * dy)
+    end
+
+    // filter 1 (paper 3.4): tries to flatten the region past one count step, starting at node `start`
+    // the region is flattened only if every other way out of it is the same step, close by
+    // returns true if it flattened the region
+    private action DissolveRegion(SkeletalTrapezoidation st, integer origin, integer start, integer n, boolean high) returns boolean
+        // start must be on the right side of the step
+        if not OnSide(nodeCount:Get(start), n, high)
+            return false
+        end
+
+        // never flatten a feature down to 0 beads
+        if high and n = 0
+            return false
+        end
+
+        // the step is too far from start: not a short bump
+        integer originTwin = st:cleanOpposite:Get(origin)
+        number limit = backAndForthDistance
+        number d0 = CrossingFrom(st, origin, start, n)
+        if d0 >= limit
+            return false
+        end
+
+        // new search: start the region at start
+        stamp = stamp + 1
+        IntegerBuffer region
+        IntegerBuffer work
+        reach:Set(start, d0)
+        reachStamp:Set(start, stamp)
+        region:Add(start)
+        work:Add(start)
+
+        // grow the region one node at a time
+        repeat while work:GetSize() > 0
+            // take the last node off the work list
+            integer last = work:GetSize() - 1
+            integer u = work:Get(last)
+            work:RemoveAt(last)
+            number du = reach:Get(u)
+            IntegerBuffer out = markedOut:Get(u)
+
+            // the chain ends here: it's a real feature, keep it
+            if out:GetSize() < 2
+                return false
+            end
+
+            // go through u's marked edges (not the one we came in on)
+            integer k = 0
+            repeat while k < out:GetSize()
+                integer g = out:Get(k)
+                if g not= origin and g not= originTwin
+                    integer w = OtherNode(st, g, u)
+                    integer qw = nodeCount:Get(w)
+
+                    // a node with no count: stop
+                    if qw < 0
+                        return false
+                    end
+
+                    // w is still inside the region
+                    if OnSide(qw, n, high)
+                        // too far from the step: not a short bump
+                        number dw = du + SegmentLength(st, g)
+                        if dw >= limit
+                            return false
+                        end
+
+                        // first visit: add w to the region
+                        if reachStamp:Get(w) not= stamp
+                            reachStamp:Set(w, stamp)
+                            reach:Set(w, dw)
+                            region:Add(w)
+                            work:Add(w)
+
+                        // found a shorter way to w: update it
+                        elseif dw < reach:Get(w) - 0.000001
+                            reach:Set(w, dw)
+                            work:Add(w)
+                        end
+
+                    // w is outside: the step out of the region here is too far away
+                    elseif du + CrossingFrom(st, g, u, n) >= limit
+                        return false
+                    end
+                end
+                k = k + 1
+            end
+        end
+
+        // flatten: the whole region takes the count from the other side of the step
+        integer value = n
+        if not high
+            value = n + 1
+        end
+        integer i = 0
+        repeat while i < region:GetSize()
+            nodeCount:Set(region:Get(i), value)
+            i = i + 1
+        end
+        return true
+    end
+
+    // true if every marked path from u (not going back to from) ends within `half` mm
+    // the nodes it visits are saved in sideNodes for SetSide
+    private action SideEndsWithin(SkeletalTrapezoidation st, integer from, integer u, number du, number half) returns boolean
+        // new search
+        stamp = stamp + 1
+        sideNodes:Empty()
+        return AllEndWithin(st, from, u, du, half)
+    end
+
+    // walks every marked path from u (du mm walked so far); true if all of them end within `half` mm
+    private action AllEndWithin(SkeletalTrapezoidation st, integer from, integer u, number du, number half) returns boolean
+        // walked too far: the chain doesn't end close by
+        if du >= half
+            return false
+        end
+
+        // visit u
+        reachStamp:Set(u, stamp)
+        sideNodes:Add(u)
+
+        // go through u's marked edges
+        IntegerBuffer out = markedOut:Get(u)
+        integer k = 0
+        repeat while k < out:GetSize()
+            integer g = out:Get(k)
+            integer w = OtherNode(st, g, u)
+
+            // don't go back the way we came
+            if w not= from
+                // came back to a visited node: it's a loop, so the chain doesn't end
+                if reachStamp:Get(w) = stamp
+                    return false
+                end
+
+                // keep walking from w
+                if not AllEndWithin(st, u, w, du + SegmentLength(st, g), half)
+                    return false
+                end
+            end
+            k = k + 1
+        end
+        return true
+    end
+
+    // gives every node saved by SideEndsWithin the count value
+    private action SetSide(integer value)
+        integer i = 0
+        repeat while i < sideNodes:GetSize()
+            nodeCount:Set(sideNodes:Get(i), value)
+            i = i + 1
+        end
+    end
+
+    // true if count is above n (high side) or at most n (low side)
+    private action OnSide(integer count, integer n, boolean high) returns boolean
+        if high
+            return count > n
+        end
+        return count >= 0 and count <= n
+    end
+
+    // distance from node u along edge e to where the count steps from n to n + 1
+    // (half the edge if the step isn't on this edge)
+    private action CrossingFrom(SkeletalTrapezoidation st, integer e, integer u, integer n) returns number
+        integer w = OtherNode(st, e, u)
+        number len = SegmentLength(st, e)
+        number ru = st:rad:Get(u)
+        number rw = st:rad:Get(w)
+        number target = TransitionRadius(n)
+
+        // the step's radius is between the two ends' radii: find how far along
+        if ru not= rw and (target - ru) * (target - rw) <= 0.0
+            return len * (target - ru) / (rw - ru)
+        end
+        return len / 2.0
+    end
+
+    // the node at the other end of edge e from node v
+    private action OtherNode(SkeletalTrapezoidation st, integer e, integer v) returns integer
+        if st:cleanStart:Get(e) = v
+            return st:cleanEnd:Get(e)
+        end
+        return st:cleanStart:Get(e)
+    end
+end
