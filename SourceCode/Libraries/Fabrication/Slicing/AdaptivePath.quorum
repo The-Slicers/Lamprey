@@ -32,7 +32,7 @@ class AdaptivePath
                                         // (the sampled skeleton's radius can be a few micrometres over)
 
     number tolerance = 0.000001
-    number outsideTolerance = 0.005
+    number outsideTolerance = 0.00
     number snapDistance = 0.02          // how close two line ends have to be to become a point/join
     text reason = ""                    // reports issue if generation fails for a contour
 
@@ -241,7 +241,8 @@ class AdaptivePath
                 // get half of line that can hold dot's area (pi w^2 / 4) 
                 number dotWidth = Capped(tx:dotWidth:Get(d), tx:dotIndex:Get(d))
                 number half = 3.141592653589793 * dotWidth / 8.0    // half of line
-                number limit = 0.95 * tx:dotRadius:Get(d)
+                number clearance = OutsideBy(outline, tx:dotX:Get(d), tx:dotY:Get(d))
+                number limit = 0.95 * util:Min2(tx:dotRadius:Get(d), clearance)
                 if half > limit
                     half = limit
                 end

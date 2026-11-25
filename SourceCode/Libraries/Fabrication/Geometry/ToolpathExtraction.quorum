@@ -558,16 +558,22 @@ class ToolpathExtraction
             return false
         end
 
-        // each bead end runs on along its offset line, square to its rib (node to foot)
+        // the node, and the feet of the two ribs (where they meet the outline)
         integer ribA = siteRib:Get(a)
         integer ribB = siteRib:Get(b)
         integer node = st:ribNode:Get(ribA)
         number jx = st:xs:Get(node)
         number jy = st:ys:Get(node)
-        number ux = st:ys:Get(st:ribFoot:Get(ribA)) - jy
-        number uy = jx - st:xs:Get(st:ribFoot:Get(ribA))
-        number vx = st:ys:Get(st:ribFoot:Get(ribB)) - jy
-        number vy = jx - st:xs:Get(st:ribFoot:Get(ribB))
+        number footAX = st:xs:Get(st:ribFoot:Get(ribA))
+        number footAY = st:ys:Get(st:ribFoot:Get(ribA))
+        number footBX = st:xs:Get(st:ribFoot:Get(ribB))
+        number footBY = st:ys:Get(st:ribFoot:Get(ribB))
+
+        // each bead end runs on along its offset line, square to its rib (node to foot)
+        number ux = footAY - jy
+        number uy = jx - footAX
+        number vx = footBY - jy
+        number vy = jx - footBX
 
         // where the lines meet: a + t u = b + q v (none if they are parallel, as on opposite walls)
         number det = vx * uy - ux * vy
@@ -593,6 +599,16 @@ class ToolpathExtraction
         number gx = mx - jx
         number gy = my - jy
         if fx * fx + fy * fy < gx * gx + gy * gy
+            return false
+        end
+
+        // the meeting point must stay on the node's side of each foot
+        // (sites lie between node and foot, so they are inside; this point is made by
+        // extending lines, so it can poke past the outline when a rib isn't square to its segment)
+        if (cx - footAX) * (jx - footAX) + (cy - footAY) * (jy - footAY) <= 0.0
+            return false
+        end
+        if (cx - footBX) * (jx - footBX) + (cy - footBY) * (jy - footBY) <= 0.0
             return false
         end
 
