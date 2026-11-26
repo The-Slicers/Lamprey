@@ -5,6 +5,7 @@ use Libraries.Containers.Integer32BitArray
 use Libraries.Containers.HashTable
 use Libraries.Containers.Array
 use Libraries.Data.Containers.IntegerBuffer
+use Libraries.Data.Containers.BitArrayFill
 
 /*
 The ConvexHull class finds the convex hull of a set of 2D points with
@@ -40,6 +41,8 @@ class ConvexHull
     Number64BitArray sortedY
     Number64BitArray hullX
     Number64BitArray hullY
+
+    BitArrayFill fill
 
     /* A new Number64BitArray has no storage until SetSize, so start empty. */
     on create
@@ -256,7 +259,7 @@ class ConvexHull
         Integer32BitArray temp
         indices:SetSize(size)
         temp:SetSize(size)
-        temp:Fill(0)
+        fill:Fill(temp, 0)
         integer i = 0
         repeat while i < size
             indices:Set(i, i)

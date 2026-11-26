@@ -3,6 +3,7 @@ package Libraries.Data.Containers
 use Libraries.Containers.Integer32BitArray
 use Libraries.Language.Errors.InvalidArgumentError
 use Libraries.Language.Errors.InvalidLocationError
+use Libraries.Data.Containers.BitArrayFill
 
 /*
 The IntegerBuffer class is a growable list of integers, stored in an
@@ -44,6 +45,7 @@ class IntegerBuffer
     Integer32BitArray items
     integer capacity = 0
     integer count = 0
+    BitArrayFill fill
 
     /*
     Adds an integer to the end.
@@ -203,7 +205,9 @@ class IntegerBuffer
         end
         Reserve(size)
         // Empty keeps old values in memory, so clear the slots being reused
-        items:Fill(0, count, 0)
+        if size > count
+            fill:Fill(items, count, size, 0)
+        end
         count = size
     end
 
@@ -221,7 +225,7 @@ class IntegerBuffer
         ids:Fill(1) // 1, 1, 1
     */
     action Fill(integer value)
-        items:Fill(value)
+        fill:Fill(items, value)
     end
 
     /*
@@ -256,7 +260,7 @@ class IntegerBuffer
             alert(error)
         end
         
-        items:Fill(from, to, value)
+        fill:Fill(items, from, to, value)
     end
 
     /*

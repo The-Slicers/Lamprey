@@ -44,6 +44,7 @@ class NumberBuffer
     Number64BitArray items
     integer capacity = 0
     integer count = 0
+    BitArrayFill fill
 
     /*
     Adds a number to the end.
@@ -203,7 +204,9 @@ class NumberBuffer
         end
         Reserve(size)
         // Empty keeps old values in memory, so clear the slots being reused
-        items:Fill(0, count, 0.0)
+        if size > count
+            fill:Fill(items, count, size, 0.0)
+        end
         count = size
     end
 
@@ -221,7 +224,7 @@ class NumberBuffer
         ids:Fill(1) // 1, 1, 1
     */
     action Fill(number value)
-        items:Fill(value)
+        fill:Fill(items, value)
     end
 
     /*
@@ -256,7 +259,7 @@ class NumberBuffer
             alert(error)
         end
         
-        items:Fill(from, to, value)
+        fill:Fill(items, from, to, value)
     end
 
     /*

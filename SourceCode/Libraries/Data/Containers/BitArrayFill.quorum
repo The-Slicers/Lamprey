@@ -1,0 +1,86 @@
+package Libraries.Data.Containers
+
+use Libraries.Containers.Integer32BitArray
+use Libraries.Containers.Number32BitArray
+use Libraries.Containers.Number64BitArray
+use Libraries.Language.Errors.InvalidLocationError
+
+/*
+The BitArrayFill class sets every item, or a range of items, of an
+Integer32BitArray, Number32BitArray or Number64BitArray to one value in a
+single call (java.util.Arrays.fill), instead of a Quorum loop of Set calls.
+It does the same job as the Fill actions proposed for those classes in the
+Quorum standard library, but lives in Lamprey's own plugin, so it works with
+the Quorum release Lamprey already builds against.
+
+Like the arrays themselves, the array must have had SetSize called first.
+A range runs from "from" (inclusive) to "to" (exclusive); it must satisfy
+0 <= from <= to <= the array's size, or an InvalidLocationError is raised.
+An empty range (from = to, such as 0 to a count that is still 0) changes
+nothing, as with java.util.Arrays.fill.
+
+Attribute: Example
+
+    use Libraries.Containers.Integer32BitArray
+    use Libraries.Data.Containers.BitArrayFill
+
+    class Main
+        action Main
+            Integer32BitArray values
+            values:SetSize(5)
+            BitArrayFill fill
+            fill:Fill(values, 0)         // [0, 0, 0, 0, 0]
+            fill:Fill(values, 2, 4, 1)   // [0, 0, 1, 1, 0]
+        end
+    end
+*/
+class BitArrayFill
+    /* Sets every item of array to value. */
+    action Fill(Integer32BitArray array, integer value)
+        FillInteger(array, value)
+    end
+
+    /* Sets the items of array from "from" (inclusive) to "to" (exclusive) to value. */
+    action Fill(Integer32BitArray array, integer from, integer to, integer value)
+        CheckRange(from, to, array:GetSize())
+        FillIntegerRange(array, from, to, value)
+    end
+
+    /* Sets every item of array to value (stored as a 32-bit number). */
+    action Fill(Number32BitArray array, number value)
+        FillNumber32(array, value)
+    end
+
+    /* Sets the items of array from "from" (inclusive) to "to" (exclusive) to value. */
+    action Fill(Number32BitArray array, integer from, integer to, number value)
+        CheckRange(from, to, array:GetSize())
+        FillNumber32Range(array, from, to, value)
+    end
+
+    /* Sets every item of array to value. */
+    action Fill(Number64BitArray array, number value)
+        FillNumber64(array, value)
+    end
+
+    /* Sets the items of array from "from" (inclusive) to "to" (exclusive) to value. */
+    action Fill(Number64BitArray array, integer from, integer to, number value)
+        CheckRange(from, to, array:GetSize())
+        FillNumber64Range(array, from, to, value)
+    end
+
+    private action CheckRange(integer from, integer to, integer size)
+        if from < 0 or to > size or from > to
+            InvalidLocationError error
+            error:SetErrorMessage("BitArrayFill: the range " + from + " to " + to
+                + " is not inside an array of size " + size + ".")
+            alert(error)
+        end
+    end
+
+    private system action FillInteger(Integer32BitArray array, integer value)
+    private system action FillIntegerRange(Integer32BitArray array, integer from, integer to, integer value)
+    private system action FillNumber32(Number32BitArray array, number value)
+    private system action FillNumber32Range(Number32BitArray array, integer from, integer to, number value)
+    private system action FillNumber64(Number64BitArray array, number value)
+    private system action FillNumber64Range(Number64BitArray array, integer from, integer to, number value)
+end

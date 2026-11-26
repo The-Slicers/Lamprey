@@ -10,6 +10,7 @@ use Libraries.System.FileReader
 use Libraries.Data.Compression.ZipWriter
 use Libraries.Data.Formats.NumberFormatter
 use Libraries.Fabrication.ArgumentChecker
+use Libraries.Data.Containers.BitArrayFill
 
 /*
 The BambuPackager class packages a G-code file as a Bambu Lab .gcode.3mf
@@ -115,6 +116,7 @@ class BambuPackager
     number packStartTime = 0.0
     number lastStepTime = 0.0
 
+    BitArrayFill fill
     Math math
     NumberFormatter format
     ArgumentChecker checker
@@ -1165,7 +1167,7 @@ class BambuPackager
 
         Number64BitArray depth
         depth:SetSize(size * size)
-        depth:Fill(-1.0)
+        fill:Fill(depth, -1.0)
 
         zip:BeginImage(size, size)
         integer s = 0

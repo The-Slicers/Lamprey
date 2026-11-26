@@ -14,11 +14,23 @@ if not exist "%JTS%" (
 )
 
 if exist classes rmdir /s /q classes
+if exist stub-classes rmdir /s /q stub-classes
 mkdir classes || goto :fail
+mkdir stub-classes || goto :fail
 
 rem cmd has no equivalent of $(find ...), so collect the sources into a javac
 rem argument file. Paths are quoted and use forward slashes so spaces and
 rem backslashes survive javac's argfile parsing.
+rem stubs\ stands in for the Quorum runtime classes BitArrayFill uses; they
+rem are compiled only to compile against, and are not packaged (see
+rem stubs\README.md)
+if exist stubs.txt del stubs.txt
+for /r stubs %%f in (*.java) do (
+    set "p=%%f"
+    >>stubs.txt echo "!p:\=/!"
+)
+javac --release 8 -d stub-classes @stubs.txt || goto :fail
+
 if exist sources.txt del sources.txt
 for /r src %%f in (*.java) do (
     set "p=%%f"
@@ -29,16 +41,20 @@ if not exist sources.txt (
     goto :fail
 )
 
-javac --release 8 -cp "%JTS%" -d classes @sources.txt || goto :fail
+javac --release 8 -cp "%JTS%;stub-classes" -d classes @sources.txt || goto :fail
 jar --create --file lamprey-plugins.jar -C classes . || goto :fail
 
 rmdir /s /q classes
+rmdir /s /q stub-classes
 del sources.txt
+del stubs.txt
 echo Built %CD%\lamprey-plugins.jar
 exit /b 0
 
 :fail
 if exist classes rmdir /s /q classes
+if exist stub-classes rmdir /s /q stub-classes
+if exist stubs.txt del stubs.txt
 if exist sources.txt del sources.txt
 echo Build failed. 1>&2
 exit /b 1
