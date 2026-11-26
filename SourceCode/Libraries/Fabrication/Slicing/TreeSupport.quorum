@@ -1070,12 +1070,7 @@ class TreeSupport
         integer layer = 0
         repeat while layer < planeTotal
             firstTipOfSurface:Set(layer, tipX:GetSize())
-            i = 0
-            repeat while i < rows * cols
-                cur:Set(i, 0)
-                i = i + 1
-            end
-
+            cur:Fill(0, rows * cols, 0)
             if hasBox:Get(layer) = 1
                 if layer > 0
                     ComputeOverhangIslands(layer)

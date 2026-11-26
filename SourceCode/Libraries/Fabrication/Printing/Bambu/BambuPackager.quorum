@@ -1165,11 +1165,7 @@ class BambuPackager
 
         Number64BitArray depth
         depth:SetSize(size * size)
-        integer cell = 0
-        repeat while cell < size * size
-            depth:Set(cell, -1.0)
-            cell = cell + 1
-        end
+        depth:Fill(-1.0)
 
         zip:BeginImage(size, size)
         integer s = 0
