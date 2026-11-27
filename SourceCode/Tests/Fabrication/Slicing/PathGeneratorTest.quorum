@@ -31,6 +31,7 @@ class PathGeneratorTest is LampreyTest
         SkinOnlyNearSurfaces()
         NoInfillAtZeroDensity()
         ThinParts()
+        CurvedThinPart()
         TopSurfaces()
         TopSurfaceOfALedge()
         Ironing()
@@ -449,6 +450,81 @@ class PathGeneratorTest is LampreyTest
         end
         ExpectInteger(lines, 1, "the thin strip gets one center line")
         ExpectInteger(dots, 1, "the tiny square gets one dot")
+    end
+
+    /*
+    A half ring 0.3 mm wide (radius 9.85 to 10.15 mm), too thin for a wall.
+    Its centroid is in the empty middle, so a straight centre line along its
+    long axis would cut across the gap; the centre line has to follow the
+    arc and stay inside the ring.
+    */
+    action CurvedThinPart
+        Case("a curved part too thin for a wall")
+        Contour ring
+        integer steps = 36
+        integer k = 0
+        repeat while k <= steps
+            number angle = math:pi * cast(number, k) / cast(number, steps)
+            ring:AddPoint(10.15 * math:Cosine(angle), 10.15 * math:Sine(angle))
+            k = k + 1
+        end
+        k = steps
+        repeat while k >= 0
+            number back = math:pi * cast(number, k) / cast(number, steps)
+            ring:AddPoint(9.85 * math:Cosine(back), 9.85 * math:Sine(back))
+            k = k - 1
+        end
+        ring:closed = true
+        ring:planeIndex = 0
+        Array<Contour> outlines
+        outlines:Add(ring)
+
+        PathGenerator paths
+        paths:SetLineWidth(0.4)
+        paths:SetWallCount(2)
+        paths:Generate(outlines, 1)
+        Array<Contour> ringWalls = paths:GetWalls()
+        ExpectInteger(ringWalls:GetSize(), 0, "no wall fits in 0.3 mm")
+
+        Array<Contour> skin = paths:GetSkin()
+        integer lines = 0
+        number total = 0.0
+        boolean inside = true
+        integer i = 0
+        repeat while i < skin:GetSize()
+            Contour line = skin:Get(i)
+            if line:keepShort
+                lines = lines + 1
+                integer j = 0
+                repeat while j < line:GetSize()
+                    if not OnRing(line:xs:Get(j), line:ys:Get(j))
+                        inside = false
+                    end
+                    if j + 1 < line:GetSize()
+                        number mx = (line:xs:Get(j) + line:xs:Get(j + 1)) / 2.0
+                        number my = (line:ys:Get(j) + line:ys:Get(j + 1)) / 2.0
+                        if not OnRing(mx, my)
+                            inside = false
+                        end
+                        number dx = line:xs:Get(j + 1) - line:xs:Get(j)
+                        number dy = line:ys:Get(j + 1) - line:ys:Get(j)
+                        total = total + math:SquareRoot(dx * dx + dy * dy)
+                    end
+                    j = j + 1
+                end
+            end
+            i = i + 1
+        end
+        ExpectInteger(lines, 1, "the half ring gets one centre line")
+        ExpectTrue(inside, "every point of the centre line, and the middle of every piece, is inside the ring")
+        // the arc is 31.4 mm along its middle; the ends stop half a line width short
+        ExpectAtLeast(total, 29.0, "the centre line follows most of the arc")
+    end
+
+    // inside the half ring of CurvedThinPart (with a micrometre to spare)
+    action OnRing(number x, number y) returns boolean
+        number r = math:SquareRoot(x * x + y * y)
+        return r >= 9.849 and r <= 10.151 and y >= -0.001
     end
 
     action RejectsBadSettings

@@ -2,6 +2,7 @@ package Tests.Fabrication.Slicing
 
 use Libraries.Containers.Array
 use Libraries.Game.Graphics.Models.Data.ModelData
+use Libraries.Game.Graphics.Models.Data.MeshData
 use Libraries.Language.Errors.InvalidArgumentError
 use Libraries.Fabrication.Geometry.TriangleMesh
 use Libraries.Fabrication.Slicing.MeshSlicer
@@ -22,6 +23,10 @@ class MeshSlicerTest is LampreyTest
         SlicesACube()
         DetectsUnits()
         PutsTheBaseDown()
+        IgnoresASmallFlatSide()
+        KeepsOrientationWhenAsked()
+        Rotates()
+        SlicesUnevenPlanes()
         RejectsMisuse()
     end
 
@@ -48,8 +53,6 @@ class MeshSlicerTest is LampreyTest
         Array<Segment> segments = slicer:Slice(planes)
         // each plane cuts both triangles of each of the 4 sides
         ExpectInteger(segments:GetSize(), 800, "segments")
-        ExpectInteger(slicer:GetOddCrossingCount(), 0, "a closed mesh has no odd crossings")
-        ExpectInteger(slicer:GetMaxCrossingsPerFace(), 2, "two crossings per triangle")
         Array<text> warnings = slicer:GetWarnings()
         ExpectInteger(warnings:GetSize(), 0, "no warnings for a clean 20 mm cube")
         Segment first = segments:Get(0)
@@ -95,6 +98,125 @@ class MeshSlicerTest is LampreyTest
         MeshSlicer raised = Prepared(models:Box(5, 5, 7, 25, 25, 27))
         NumberBuffer raisedRange = raised:GetSliceRange()
         ExpectNumber(raisedRange:Get(0), 0, 0.000001, "a model above Z = 0 is moved down to the bed")
+    end
+
+    // A 10 x 10 x 10 block with a 2 x 2 pillar on it, 30 mm tall, flush with
+    // the block at x = 0: the flat faces on -X (160 mm^2) beat the bottom
+    // (100 mm^2), but cover only 0.4 of that side of the 10 x 40 box.
+    action BlockWithPillar returns ModelData
+        ModelData model
+        Array<MeshData> meshes
+        meshes:Add(models:BoxMesh(0, 0, 0, 10, 10, 10))
+        meshes:Add(models:BoxMesh(0, 0, 10, 2, 2, 40))
+        model:SetMeshes(meshes)
+        return model
+    end
+
+    action IgnoresASmallFlatSide
+        Case("a side only partly flat is the base only if enough of it is flat")
+        MeshSlicer byDefault = Prepared(BlockWithPillar())
+        ExpectText(byDefault:GetBaseDirection(), "-X", "0.4 of the side is flat: enough at the default share of 0.05")
+
+        TriangleMesh mesh
+        mesh:Load(BlockWithPillar())
+        MeshSlicer strict
+        strict:SetMinBaseShare(0.5)
+        strict:SetTriangles(mesh)
+        ExpectText(strict:GetBaseDirection(), "-Z", "with a share of 0.5 the side is not flat enough: it stays upright")
+        NumberBuffer range = strict:GetSliceRange()
+        ExpectNumber(range:Get(1), 40, 0.000001, "standing, it is 40 mm tall")
+    end
+
+    // A 10 x 20 x 30 box: auto-orient lays it on a 20 x 30 side.
+    action KeepsOrientationWhenAsked
+        Case("auto-orient can be turned off")
+        MeshSlicer turned = Prepared(models:Box(0, 0, 0, 10, 20, 30))
+        ExpectText(turned:GetBaseDirection(), "-X", "auto-orient puts the biggest side down")
+        NumberBuffer turnedRange = turned:GetSliceRange()
+        ExpectNumber(turnedRange:Get(1), 10, 0.000001, "lying on its biggest side it is 10 mm tall")
+
+        TriangleMesh mesh
+        mesh:Load(models:Box(0, 0, 0, 10, 20, 30))
+        MeshSlicer kept
+        kept:SetAutoOrient(false)
+        kept:SetTriangles(mesh)
+        ExpectText(kept:GetBaseDirection(), "-Z", "with auto-orient off the file's bottom stays down")
+        NumberBuffer keptRange = kept:GetSliceRange()
+        ExpectNumber(keptRange:Get(1), 30, 0.000001, "standing as in the file it is 30 mm tall")
+    end
+
+    // The height of a 10 x 20 x 30 box after the given rotation, with or without auto-orient.
+    action RotatedHeight(boolean orient, number x, number y, number z) returns number
+        TriangleMesh mesh
+        mesh:Load(models:Box(0, 0, 0, 10, 20, 30))
+        MeshSlicer slicer
+        slicer:SetAutoOrient(orient)
+        slicer:SetRotation(x, y, z)
+        slicer:SetTriangles(mesh)
+        NumberBuffer range = slicer:GetSliceRange()
+        return range:Get(1) - range:Get(0)
+    end
+
+    action Rotates
+        Case("rotation")
+        ExpectNumber(RotatedHeight(false, 90, 0, 0), 20, 0.000001, "X 90 stands the 20 mm side up")
+        ExpectNumber(RotatedHeight(false, 0, 90, 0), 10, 0.000001, "Y 90 stands the 10 mm side up")
+        ExpectNumber(RotatedHeight(false, 0, 0, 45), 30, 0.000001, "Z 45 turns it on the bed: as tall as before")
+        ExpectNumber(RotatedHeight(false, -90, 0, 0), 20, 0.000001, "X -90 stands the 20 mm side up too")
+        // auto-orient lays it on a 20 x 30 side (10 tall, 20 deep), then X 90 stands it on its 30 x 10 side
+        ExpectNumber(RotatedHeight(true, 90, 0, 0), 20, 0.000001, "the rotation comes after auto-orient")
+
+        TriangleMesh mesh
+        mesh:Load(models:Box(0, 0, 0, 10, 20, 30))
+        MeshSlicer slicer
+        slicer:SetAutoOrient(false)
+        slicer:SetRotation(0, 0, 90)
+        slicer:SetTriangles(mesh)
+        ExpectInteger(slicer:GetUniqueVertexCount(), 8, "a quarter turn keeps the 8 corners exact")
+
+        boolean tooFar = false
+        check
+            MeshSlicer wild
+            wild:SetRotation(0, 0, 400)
+        detect e1 is InvalidArgumentError
+            tooFar = true
+        end
+        ExpectTrue(tooFar, "a rotation past 360 degrees is refused")
+    end
+
+    // Planes need not be evenly spaced (a thicker first layer, variable layers).
+    action SlicesUnevenPlanes
+        Case("uneven planes")
+        MeshSlicer slicer = Prepared(models:Cube())
+        NumberBuffer planes
+        planes:Add(0.15)
+        planes:Add(0.35)
+        planes:Add(0.5)
+        planes:Add(10.0)
+        planes:Add(19.95)
+        Array<Segment> segments = slicer:Slice(planes)
+        ExpectInteger(segments:GetSize(), 40, "8 segments on each of 5 uneven planes")
+        integer onLast = 0
+        integer i = 0
+        repeat while i < segments:GetSize()
+            Segment seg = segments:Get(i)
+            if seg:planeIndex = 4
+                onLast = onLast + 1
+            end
+            i = i + 1
+        end
+        ExpectInteger(onLast, 8, "the top plane, 0.05 mm under the top, is cut too")
+
+        boolean unordered = false
+        check
+            NumberBuffer backwards
+            backwards:Add(5.0)
+            backwards:Add(1.0)
+            Array<Segment> none = slicer:Slice(backwards)
+        detect e2
+            unordered = true
+        end
+        ExpectTrue(unordered, "planes out of order are refused")
     end
 
     action RejectsMisuse

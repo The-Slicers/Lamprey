@@ -311,7 +311,7 @@ class BeadPlacementTests
         VoronoiDiagram diagram
         diagram:Generate(edges)
 
-        st:Build(contours, edges, diagram)
+        st:Build(edges, diagram)
         cm:Build(st)
         bt:Build(st, cm)
         bt:SplitRampEnds(st, cm)

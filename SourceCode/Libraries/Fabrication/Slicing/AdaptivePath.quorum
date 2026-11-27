@@ -27,13 +27,15 @@ class AdaptivePath
     number retreatShare = 0.75          // the amount an end is pulled back
     number minFeatureShare = 0.25
     number sampleShare = 0.25           // outline sample spacing for the voronoi diagram, as a share of a width
-    number widthSlack = 0.01            // a bead up to this share wider than HighWidth is printed at HighWidth
     integer clampedPoints = 0           // bead points printed at HighWidth because they asked for more
-                                        // (the sampled skeleton's radius can be a few micrometres over)
+    number widestRequested = 0.0        // the widest any bead point asked to be in the last Generate (mm)
+    number overShare = 0.35             // an island whose beads ask for more than this share over HighWidth
+                                        // (about 2 widths at the defaults) is rejected: capping that much
+                                        // would leave a real gap, so it gets uniform walls instead
 
-    number tolerance = 0.000001
     number outsideTolerance = 0.00
     number snapDistance = 0.02          // how close two line ends have to be to become a point/join
+    integer endMeetings = 0             // open bead ends that met another bead's end and were left as they are
     text reason = ""                    // reports issue if generation fails for a contour
 
     Math math
@@ -47,6 +49,8 @@ class AdaptivePath
         valid = false
         reason = ""
         clampedPoints = 0
+        widestRequested = 0.0
+        endMeetings = 0
         Array<Contour> walls
 
         if outline:GetSize() = 0
@@ -76,7 +80,7 @@ class AdaptivePath
             return walls
         end
         SkeletalTrapezoidation st
-        st:Build(outline, edges, voronoi)
+        st:Build(edges, voronoi)
 
         // marking centeral edges
         CenterMarking cm
@@ -129,7 +133,7 @@ class AdaptivePath
                 integer k = from
                 repeat while k < to
                     integer s = tx:polySites:Get(k)
-                    run:AddPoint(tx:siteX:Get(s), tx:siteY:Get(s), Capped(tx:siteWidth:Get(s), tx:polyIndex:Get(p)))
+                    run:AddPoint(tx:siteX:Get(s), tx:siteY:Get(s), Capped(tx:siteWidth:Get(s)))
                     k = k + 1
                 end
 
@@ -204,30 +208,19 @@ class AdaptivePath
             end
         end
 
-        // check open (unclosed) lines
+        // the runs still in use, with the ends that run into another bead's side pulled back
+        Array<Contour> live
         i = 0
         repeat while i < runs:GetSize()
             if not gone:Get(i)
-                Contour path = runs:Get(i)
-
-                // check if end point is within snapDistance of another open/closed line end
-                if not path:closed and TouchesOther(runs, gone, i, path:xs:Get(0), path:ys:Get(0))
-                    path = Retreat(path, true)
-                end
-
-                // same check on other end
-                if not path:closed and path:GetSize() >= 2
-                    integer last = path:GetSize() - 1
-                    if TouchesOther(runs, gone, i, path:xs:Get(last), path:ys:Get(last))
-                        path = Retreat(path, false)
-                    end
-                end
-
-                // both ends checked (maybe shortened), keep path is has atleast 2pts left
-                if path:GetSize() >= 2
-                    walls:Add(path)
-                end
+                live:Add(runs:Get(i))
             end
+            i = i + 1
+        end
+        Array<Contour> trimmed = TrimTouchingEnds(live)
+        i = 0
+        repeat while i < trimmed:GetSize()
+            walls:Add(trimmed:Get(i))
             i = i + 1
         end
 
@@ -239,7 +232,7 @@ class AdaptivePath
             if tx:dotIndex:Get(d) < WallCount
 
                 // get half of line that can hold dot's area (pi w^2 / 4) 
-                number dotWidth = Capped(tx:dotWidth:Get(d), tx:dotIndex:Get(d))
+                number dotWidth = Capped(tx:dotWidth:Get(d))
                 number half = 3.141592653589793 * dotWidth / 8.0    // half of line
                 number clearance = OutsideBy(outline, tx:dotX:Get(d), tx:dotY:Get(d))
                 number limit = 0.95 * util:Min2(tx:dotRadius:Get(d), clearance)
@@ -292,16 +285,9 @@ class AdaptivePath
             end
 
             
-            // check every point for each wall
+            // check every point for each wall (widths are already capped at HighWidth by Capped)
             integer pt = 0
             repeat while pt < wall:GetSize()
-                // outerwall point wider than limit (HighWidth())
-                number pointWidth = wall:ws:Get(pt)
-                if wall:wallIndex = 0 and pointWidth > HighWidth() + tolerance
-                    reason = "outer width " + pointWidth + " above " + HighWidth()
-                    return walls
-                end
-
                 // check if every wall point is inside the polygon outline; flips between in/out per outline loop
                 // SLOW!!!!
                 boolean inside = false
@@ -325,6 +311,13 @@ class AdaptivePath
 
         if not hasOuter
             reason = "no outer wall"
+            return walls
+        end
+
+        // a bead that asked for far more than the widest printable width
+        if widestRequested > HighWidth() * (1.0 + overShare)
+            reason = "a bead asked for " + widestRequested + " mm, more than " + (HighWidth() * (1.0 + overShare))
+                + " mm (capping it at " + HighWidth() + " mm would leave a gap)"
             return walls
         end
 
@@ -363,15 +356,19 @@ class AdaptivePath
     end
 
     /*
-    The width a bead is printed at. An outer bead is never printed wider than HighWidth. BeadTransitions
+    The width a bead is printed at: never wider than HighWidth, whichever bead it is. BeadTransitions
     dissolves a short stretch where the bead count would go up and straight back down (as on a sculpted model's
     bumps), so there the beads share a wider feature: on a werewolf model the outer bead reached 0.64-0.76 mm,
     and rejecting those layers sent 70 of 352 to uniform walls. Printed at HighWidth the bead leaves at most a
-    few hundredths of a millimetre unfilled in that stretch. A width just over HighWidth (within widthSlack,
-    the sampled skeleton's radius being a few micrometres over the true one) is HighWidth for every bead.
+    few hundredths of a millimetre unfilled in that stretch. Inner beads used to be printed at whatever width
+    they asked for, which could be far more than the nozzle can lay down; they are capped the same way now.
+    Generate rejects the island if any bead asked for more than overShare past HighWidth (widestRequested).
     */
-    private action Capped(number width, integer index) returns number
-        if width > HighWidth() and (index = 0 or width <= HighWidth() * (1.0 + widthSlack))
+    private action Capped(number width) returns number
+        if width > widestRequested
+            widestRequested = width
+        end
+        if width > HighWidth()
             clampedPoints = clampedPoints + 1
             return HighWidth()
         end
@@ -381,6 +378,11 @@ class AdaptivePath
     // how many bead points the last Generate printed at HighWidth instead of wider
     action GetClampedCount returns integer
         return clampedPoints
+    end
+
+    // the widest any bead point asked to be in the last Generate (mm), before capping
+    action GetWidestRequested returns number
+        return widestRequested
     end
 
     // calculates width of a strip
@@ -448,29 +450,91 @@ class AdaptivePath
         to:keepShort = from:keepShort
     end
 
-    // true when (x, y) lies on another remaining toolpath
-    private action TouchesOther(Array<Contour> work, Array<boolean> gone, integer self, number x, number y) returns boolean
+    /*
+    Pulls back each open bead's ends that run into the side of another bead, by retreatShare of the end's width,
+    so the two don't pile plastic onto the same spot (a T-junction). An end that meets only the end of another
+    open bead is left alone: the two carry on from each other (a bead whose index changes there), and pulling
+    both back used to leave a gap of about one and a half widths between them. Closed beads are kept as they
+    are. Beads left with fewer than 2 points are dropped. Returns the beads, trimmed; GetEndMeetingCount counts
+    the ends that were left alone.
+    */
+    action TrimTouchingEnds(Array<Contour> beads) returns Array<Contour>
+        Array<Contour> result
+        integer i = 0
+        repeat while i < beads:GetSize()
+            Contour path = beads:Get(i)
+            if not path:closed and path:GetSize() >= 2
+                integer last = path:GetSize() - 1
+                // both ends are judged against the beads as they were, before any trimming
+                integer front = EndContact(beads, i, path:xs:Get(0), path:ys:Get(0))
+                integer back = EndContact(beads, i, path:xs:Get(last), path:ys:Get(last))
+                if front = 1
+                    path = Retreat(path, true)
+                elseif front = 2
+                    endMeetings = endMeetings + 1
+                end
+                if back = 1 and path:GetSize() >= 2
+                    path = Retreat(path, false)
+                elseif back = 2
+                    endMeetings = endMeetings + 1
+                end
+            end
+            if path:GetSize() >= 2
+                result:Add(path)
+            end
+            i = i + 1
+        end
+        return result
+    end
+
+    // how many open bead ends met the end of another bead and kept their full length (since the last Generate)
+    action GetEndMeetingCount returns integer
+        return endMeetings
+    end
+
+    // How (x, y), an end of beads[self], touches the other beads: 0 not at all, 1 on the side of one (anywhere
+    // but within snapDistance of an open bead's end), 2 only at the ends of other open beads.
+    private action EndContact(Array<Contour> beads, integer self, number x, number y) returns integer
+        number snap2 = snapDistance * snapDistance
+        integer contact = 0
         integer o = 0
-        repeat while o < work:GetSize()
-            if o not= self and not gone:Get(o)
-                Contour c = work:Get(o)
-                integer n = c:GetSize()
+        repeat while o < beads:GetSize()
+            if o not= self
+                Contour other = beads:Get(o)
+                integer n = other:GetSize()
                 integer segments = n - 1
-                if c:closed
+                if other:closed
                     segments = n
                 end
+                boolean near = false
                 integer s = 0
-                repeat while s < segments
+                repeat while s < segments and not near
                     integer t = (s + 1) mod n
-                    if util:SegmentDistance2(x, y, c:xs:Get(s), c:ys:Get(s), c:xs:Get(t), c:ys:Get(t)) < snapDistance * snapDistance
-                        return true
+                    if util:SegmentDistance2(x, y, other:xs:Get(s), other:ys:Get(s), other:xs:Get(t), other:ys:Get(t)) < snap2
+                        near = true
                     end
                     s = s + 1
+                end
+                if near
+                    boolean atEnd = false
+                    if not other:closed and n >= 2
+                        number hx = x - other:xs:Get(0)
+                        number hy = y - other:ys:Get(0)
+                        number tx = x - other:xs:Get(n - 1)
+                        number ty = y - other:ys:Get(n - 1)
+                        if hx * hx + hy * hy < snap2 or tx * tx + ty * ty < snap2
+                            atEnd = true
+                        end
+                    end
+                    if not atEnd
+                        return 1
+                    end
+                    contact = 2
                 end
             end
             o = o + 1
         end
-        return false
+        return contact
     end
 
     // w shortened at one end by retreatShare of that end's width; empty when w is shorter than that

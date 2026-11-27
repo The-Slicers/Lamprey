@@ -1,6 +1,7 @@
 package Tests
 
 use Libraries.Containers.Array
+use Libraries.Compute.Math
 use Libraries.Fabrication.Geometry.Contour
 use Libraries.Fabrication.Slicing.AdaptivePath
 
@@ -10,6 +11,7 @@ every wall carries one width per point, and the outer wall is index 0. Walls may
 be closed loops or open polylines (paper 3.6).
 */
 class AdaptivePathTests
+    Math math
     integer passed = 0
     integer failed = 0
 
@@ -26,6 +28,8 @@ class AdaptivePathTests
         TestRingHasCentreBeadOnEverySide()
         TestCentreBeadSurvivesRounding()
         TestShortBulgeKeepsAdaptiveWalls()
+        TestEndAgainstSideIsPulledBack()
+        TestEndsThatMeetKeepTheirLength()
 
         output "AdaptivePath tests: passed " + passed + ", failed " + failed
         return failed
@@ -38,6 +42,58 @@ class AdaptivePathTests
             failed = failed + 1
             output "FAIL: " + name
         end
+    end
+
+    // an open bead of two points, 0.4 mm wide, with the given bead index
+    private action Bead(number x0, number y0, number x1, number y1, integer index) returns Contour
+        Contour bead
+        bead:AddPoint(x0, y0, 0.4)
+        bead:AddPoint(x1, y1, 0.4)
+        bead:closed = false
+        bead:wallIndex = index
+        return bead
+    end
+
+    private action Length(Contour c) returns number
+        number dx = c:TailX() - c:HeadX()
+        number dy = c:TailY() - c:HeadY()
+        return math:SquareRoot(dx * dx + dy * dy)
+    end
+
+    // A bead ending on the side of another (a T-junction) is pulled back by 0.75 of its width; the other is
+    // left alone.
+    action TestEndAgainstSideIsPulledBack
+        Array<Contour> beads
+        beads:Add(Bead(0, 0, 10, 0, 0))
+        beads:Add(Bead(5, 0, 5, 5, 1))
+        AdaptivePath path
+        path:SetWidth(0.4)
+        Array<Contour> trimmed = path:TrimTouchingEnds(beads)
+        Check(trimmed:GetSize() = 2, "T-junction: both beads kept")
+        if trimmed:GetSize() = 2
+            Contour bar = trimmed:Get(0)
+            Contour stem = trimmed:Get(1)
+            Check(Length(bar) > 9.999, "T-junction: the bead whose side is touched keeps its length")
+            Check(stem:HeadY() > 0.299 and stem:HeadY() < 0.301, "T-junction: the touching end is pulled back 0.3 mm")
+            Check(stem:TailY() > 4.999, "T-junction: the free end stays")
+        end
+        Check(path:GetEndMeetingCount() = 0, "T-junction: no ends met end to end")
+    end
+
+    // Two open beads of different indexes that meet end to end continue each other: neither is shortened.
+    action TestEndsThatMeetKeepTheirLength
+        Array<Contour> beads
+        beads:Add(Bead(0, 0, 5, 0, 0))
+        beads:Add(Bead(5, 0, 10, 0, 1))
+        AdaptivePath path
+        path:SetWidth(0.4)
+        Array<Contour> trimmed = path:TrimTouchingEnds(beads)
+        Check(trimmed:GetSize() = 2, "end to end: both beads kept")
+        if trimmed:GetSize() = 2
+            Check(Length(trimmed:Get(0)) > 4.999, "end to end: the first bead keeps its length")
+            Check(Length(trimmed:Get(1)) > 4.999, "end to end: the second bead keeps its length")
+        end
+        Check(path:GetEndMeetingCount() = 2, "end to end: both meeting ends are counted")
     end
 
     // a 10 mm square, counter-clockwise

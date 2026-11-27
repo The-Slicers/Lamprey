@@ -60,14 +60,14 @@ class SkeletalTrapezoidation
     number normalY_par = 0.0
 
     // builds skeleton that the adaptive walls are placed onto
-    // A sampled diagram (VoronoiDiagram:sampled, from the JTS plugin) holds only the edges inside the outline, so
-    // there is no inside test. Its edges between two segments are straight (the plugin joins each run into one
+    // The diagram (VoronoiDiagram, from the JTS plugin's sampled outline) holds only the edges inside the outline,
+    // so there is no inside test. Its edges between two segments are straight (the plugin joins each run into one
     // edge, as an exact diagram has them); edges with a reflex corner on a side are split on the exact curve here,
     // as with Boost. A node's radius is the mean of its distances to the outline segments (or corners) on the two
     // sides of its longest edge: the mean cancels most of the sampling error (a node sits a little off the true
     // centre line), and the longest edge is the run between two walls the node belongs to, where that mean is
     // exact.
-    action Build(Array<Contour> contours, OutlineEdges edges, VoronoiDiagram voronoi)
+    action Build(OutlineEdges edges, VoronoiDiagram voronoi)
         // reset
         rad:Empty()
         cleanStart:Empty()
@@ -90,7 +90,6 @@ class SkeletalTrapezoidation
         ribbed = ribs
         supportEdges = edges
         hasSupports = true
-        boolean sampled = voronoi:sampled
 
         // get nodes (the diagram's vertices), track if unique using hash table
         xs = voronoi:vertX:CopyToArray()
@@ -105,161 +104,141 @@ class SkeletalTrapezoidation
             p = p + 1
         end
 
-        // find voronoi edges inside the outline
+        // go through the voronoi edges (all inside the outline)
         integer i = 0
         repeat while i < voronoi:vertex0:GetSize()
             integer startP = voronoi:vertex0:Get(i)
             integer endP = voronoi:vertex1:Get(i)
             if startP >= 0 and endP >= 0
 
-                // find midpoint of edge
-                // (only finite edges can have midpoints)
-                number midX = (xs:Get(startP) + xs:Get(endP)) / 2.0
-                number midY = (ys:Get(startP) + ys:Get(endP)) / 2.0
-                boolean inside = sampled     // a sampled diagram has only inside edges
+                boolean split = false
 
-                // check if inside or outside shape (holes are outside)
-                integer c = 0
-                repeat while not sampled and c < contours:GetSize()
-                    Contour loop = contours:Get(c)
-                    if loop:ContainsPoint(midX, midY)
-                        inside = not inside
+                integer ce0 = voronoi:cell0:Get(i)
+                integer ce1 = voronoi:cell1:Get(i)
+                integer ca0 = voronoi:category0:Get(i)
+                integer ca1 = voronoi:category1:Get(i)
+
+                // segment endpoints indicated by 1 or 2 for boost
+                // segments indicated by 8 or 9 for boost
+                boolean point0 = (ca0 = 1) or (ca0 = 2)
+                boolean point1 = (ca1 = 1) or (ca1 = 2)
+                boolean seg0 = (ca0 = 8) or (ca0 = 9)
+                boolean seg1 = (ca1 = 8) or (ca1 = 9)
+                
+                // is a point-to-segment (parabola or curved edge); make the frame
+                if (point0 and seg1) or (point1 and seg0)
+                    integer pointCell = ce0
+                    integer pointCat = ca0
+                    integer segCell = ce1
+
+                    // switch point and segment
+                    if ca0 >= 8
+                        pointCell = ce1
+                        pointCat = ca1
+                        segCell = ce0
                     end
-                    c = c + 1
+
+                    // point coordinates
+                    number px = edges:ScaleDown(edges:x0:Get(pointCell))
+                    number py = edges:ScaleDown(edges:y0:Get(pointCell))
+                    if pointCat = 2
+                        px = edges:ScaleDown(edges:x1:Get(pointCell))
+                        py = edges:ScaleDown(edges:y1:Get(pointCell))
+                    end
+
+                    // segment end point coordinates
+                    number sx0 = edges:ScaleDown(edges:x0:Get(segCell))
+                    number sy0 = edges:ScaleDown(edges:y0:Get(segCell))
+                    number sx1 = edges:ScaleDown(edges:x1:Get(segCell))
+                    number sy1 = edges:ScaleDown(edges:y1:Get(segCell))
+
+                    // save to frame
+                    originX_par = sx0
+                    originY_par = sy0
+                    dist_par = 0.0
+
+                    number segLength = math:SquareRoot((sx1 - sx0) * (sx1 - sx0) + (sy1 - sy0) * (sy1 - sy0))
+                    if segLength > 0.0
+                        axisX_par = (sx1 - sx0) / segLength
+                        axisY_par = (sy1 - sy0) / segLength
+
+                        // projecting point's foot onto the segment's line
+                        offset_par = (px - sx0) * axisX_par + (py - sy0) * axisY_par
+                        number fx = sx0 + axisX_par * offset_par
+                        number fy = sy0 + axisY_par * offset_par
+
+                        // calculating how far above segment is the point
+                        dist_par = math:SquareRoot((px - fx) * (px - fx) + (py - fy) * (py - fy))
+                        if dist_par > 0.0
+                            normalX_par = (px - fx) / dist_par
+                            normalY_par = (py - fy) / dist_par
+                        end
+                    end
+
+                    // point is NOT on the segment line (is a curve)
+                    if dist_par > min_PLDist
+                        SplitEdge(edges, startP, endP, true, ce0, ca0, ce1, ca1)
+                        split = true
+                    end
+
+                // is a point-to-point (straight bisector); split to give its nodes ribs
+                elseif point0 and point1
+                    // first point is segment start point
+                    number qx0 = edges:ScaleDown(edges:x0:Get(ce0))
+                    number qy0 = edges:ScaleDown(edges:y0:Get(ce0))
+                    // is segment end point
+                    if ca0 = 2
+                        qx0 = edges:ScaleDown(edges:x1:Get(ce0))
+                        qy0 = edges:ScaleDown(edges:y1:Get(ce0))
+                    end
+
+                    // get second point 
+                    number qx1 = edges:ScaleDown(edges:x0:Get(ce1))
+                    number qy1 = edges:ScaleDown(edges:y0:Get(ce1))
+                    if ca1 = 2
+                        qx1 = edges:ScaleDown(edges:x1:Get(ce1))
+                        qy1 = edges:ScaleDown(edges:y1:Get(ce1))
+                    end
+
+                    // find vector between points (its length is their distance)
+                    number qdx = qx1 - qx0
+                    number qdy = qy1 - qy0
+                    number spacing = math:SquareRoot(qdx * qdx + qdy * qdy)
+
+                    // spacing = 0 -> same point, no bisector
+                    // has bisector: setup bisector frame
+                    if spacing > min_PLDist
+                        // get midpoint (equal distance from both points so is on bisector)
+                        originX_line = (qx0 + qx1) / 2.0
+                        originY_line = (qy0 + qy1) / 2.0
+
+                        // rotating vector between points by 90 deg to get line perpendicular to line between them
+                        // i.e. getting the bisector direction
+                        axisX_line = (0.0 - qdy) / spacing
+                        axisY_line = qdx / spacing
+
+                        dist_line = spacing / 2.0
+
+                        SplitEdge(edges, startP, endP, false, ce0, ca0, ce1, ca1)
+                        split = true
+                    end
                 end
 
-                // split edges inside the outline if curved
-                if inside
-                    boolean split = false
-
-                    integer ce0 = voronoi:cell0:Get(i)
-                    integer ce1 = voronoi:cell1:Get(i)
-                    integer ca0 = voronoi:category0:Get(i)
-                    integer ca1 = voronoi:category1:Get(i)
-
-                    // segment endpoints indicated by 1 or 2 for boost
-                    // segments indicated by 8 or 9 for boost
-                    boolean point0 = (ca0 = 1) or (ca0 = 2)
-                    boolean point1 = (ca1 = 1) or (ca1 = 2)
-                    boolean seg0 = (ca0 = 8) or (ca0 = 9)
-                    boolean seg1 = (ca1 = 8) or (ca1 = 9)
-                    
-                    // is a point-to-segment (parabola or curved edge); make the frame
-                    if (point0 and seg1) or (point1 and seg0)
-                        integer pointCell = ce0
-                        integer pointCat = ca0
-                        integer segCell = ce1
-
-                        // switch point and segment
-                        if ca0 >= 8
-                            pointCell = ce1
-                            pointCat = ca1
-                            segCell = ce0
-                        end
-
-                        // point coordinates
-                        number px = edges:ScaleDown(edges:x0:Get(pointCell))
-                        number py = edges:ScaleDown(edges:y0:Get(pointCell))
-                        if pointCat = 2
-                            px = edges:ScaleDown(edges:x1:Get(pointCell))
-                            py = edges:ScaleDown(edges:y1:Get(pointCell))
-                        end
-
-                        // segment end point coordinates
-                        number sx0 = edges:ScaleDown(edges:x0:Get(segCell))
-                        number sy0 = edges:ScaleDown(edges:y0:Get(segCell))
-                        number sx1 = edges:ScaleDown(edges:x1:Get(segCell))
-                        number sy1 = edges:ScaleDown(edges:y1:Get(segCell))
-
-                        // save to frame
-                        originX_par = sx0
-                        originY_par = sy0
-                        dist_par = 0.0
-
-                        number segLength = math:SquareRoot((sx1 - sx0) * (sx1 - sx0) + (sy1 - sy0) * (sy1 - sy0))
-                        if segLength > 0.0
-                            axisX_par = (sx1 - sx0) / segLength
-                            axisY_par = (sy1 - sy0) / segLength
-
-                            // projecting point's foot onto the segment's line
-                            offset_par = (px - sx0) * axisX_par + (py - sy0) * axisY_par
-                            number fx = sx0 + axisX_par * offset_par
-                            number fy = sy0 + axisY_par * offset_par
-
-                            // calculating how far above segment is the point
-                            dist_par = math:SquareRoot((px - fx) * (px - fx) + (py - fy) * (py - fy))
-                            if dist_par > 0.0
-                                normalX_par = (px - fx) / dist_par
-                                normalY_par = (py - fy) / dist_par
-                            end
-                        end
-
-                        // point is NOT on the segment line (is a curve)
-                        if dist_par > min_PLDist
-                            SplitEdge(edges, startP, endP, true, ce0, ca0, ce1, ca1)
-                            split = true
-                        end
-
-                    // is a point-to-point (straight bisector); split to give its nodes ribs
-                    elseif point0 and point1
-                        // first point is segment start point
-                        number qx0 = edges:ScaleDown(edges:x0:Get(ce0))
-                        number qy0 = edges:ScaleDown(edges:y0:Get(ce0))
-                        // is segment end point
-                        if ca0 = 2
-                            qx0 = edges:ScaleDown(edges:x1:Get(ce0))
-                            qy0 = edges:ScaleDown(edges:y1:Get(ce0))
-                        end
-
-                        // get second point 
-                        number qx1 = edges:ScaleDown(edges:x0:Get(ce1))
-                        number qy1 = edges:ScaleDown(edges:y0:Get(ce1))
-                        if ca1 = 2
-                            qx1 = edges:ScaleDown(edges:x1:Get(ce1))
-                            qy1 = edges:ScaleDown(edges:y1:Get(ce1))
-                        end
-
-                        // find vector between points (its length is their distance)
-                        number qdx = qx1 - qx0
-                        number qdy = qy1 - qy0
-                        number spacing = math:SquareRoot(qdx * qdx + qdy * qdy)
-
-                        // spacing = 0 -> same point, no bisector
-                        // has bisector: setup bisector frame
-                        if spacing > min_PLDist
-                            // get midpoint (equal distance from both points so is on bisector)
-                            originX_line = (qx0 + qx1) / 2.0
-                            originY_line = (qy0 + qy1) / 2.0
-
-                            // rotating vector between points by 90 deg to get line perpendicular to line between them
-                            // i.e. getting the bisector direction
-                            axisX_line = (0.0 - qdy) / spacing
-                            axisY_line = qdx / spacing
-
-                            dist_line = spacing / 2.0
-
-                            SplitEdge(edges, startP, endP, false, ce0, ca0, ce1, ca1)
-                            split = true
-                        end
-                    end
-
-                    // is segment-to-segment
-                    // store as single straight edge, add ribs to both ends
-                    if not split
-                        AddEdge(startP, endP, -1, ce0, ca0, ce1, ca1, voronoi:linear:Get(i))
-                        CreateSupports(edges, startP, ce0, ca0)
-                        CreateSupports(edges, startP, ce1, ca1)
-                        CreateSupports(edges, endP, ce0, ca0)
-                        CreateSupports(edges, endP, ce1, ca1)
-                    end
+                // is segment-to-segment
+                // store as single straight edge, add ribs to both ends
+                if not split
+                    AddEdge(startP, endP, -1, ce0, ca0, ce1, ca1, 1)
+                    CreateSupports(edges, startP, ce0, ca0)
+                    CreateSupports(edges, startP, ce1, ca1)
+                    CreateSupports(edges, endP, ce0, ca0)
+                    CreateSupports(edges, endP, ce1, ca1)
                 end
             end
             i = i + 1
         end
 
         // calculate each node's radius
-        // radius is distance to nearest point of the outline (i.e. distance to its cells)
-        // exact diagram: from the first edge touching the node; sampled diagram: from its longest edge
+        // radius is distance to nearest point of the outline (i.e. distance to its cells), from the node's longest edge
         // (outline feet keep the radius 0 CreateSupports gave them)
         Array<number> longest
         integer ln = 0
@@ -274,8 +253,8 @@ class SkeletalTrapezoidation
             number dxe = xs:Get(b) - xs:Get(a)
             number dye = ys:Get(b) - ys:Get(a)
             number len = math:SquareRoot(dxe * dxe + dye * dye)
-            SetRadius(edges, a, e, len, longest, sampled)
-            SetRadius(edges, b, e, len, longest, sampled)
+            SetRadius(edges, a, e, len, longest)
+            SetRadius(edges, b, e, len, longest)
             e = e + 1
         end
 
@@ -283,28 +262,23 @@ class SkeletalTrapezoidation
         RepairTwins()
     end
 
-    // gives node v its radius from edge e (of length len) if it has none yet, or, on a sampled diagram, if e is the
-    // longest edge seen at v so far
-    private action SetRadius(OutlineEdges edges, integer v, integer e, number len, Array<number> longest, boolean sampled)
+    // gives node v its radius from edge e (of length len) if it has none yet, or if e is the longest edge seen
+    // at v so far
+    private action SetRadius(OutlineEdges edges, integer v, integer e, number len, Array<number> longest)
         if rad:Get(v) < 0.0
-            rad:Set(v, NodeRadius(edges, v, e, sampled))
+            rad:Set(v, NodeRadius(edges, v, e))
             longest:Set(v, len)
-        elseif sampled and longest:Get(v) >= 0.0 and len > longest:Get(v)
-            rad:Set(v, NodeRadius(edges, v, e, sampled))
+        elseif longest:Get(v) >= 0.0 and len > longest:Get(v)
+            rad:Set(v, NodeRadius(edges, v, e))
             longest:Set(v, len)
         end
     end
 
-    // radius of node v, from edge e's sides
-    // exact diagram: the distance to side 0 (a node is equally far from both)
-    // sampled diagram: the mean distance to the two sides, since the node is equally far from two samples,
-    // not from the two segments; on a strip the mean is exact, where either side alone is off by about
-    // spacing^2 / (8 * radius). Build uses the node's longest edge.
-    private action NodeRadius(OutlineEdges edges, integer v, integer e, boolean sampled) returns number
+    // radius of node v, from edge e's sides: the mean distance to the two sides, since the node is equally far
+    // from two outline samples, not from the two segments; on a strip the mean is exact, where either side alone
+    // is off by about spacing^2 / (8 * radius). Build uses the node's longest edge.
+    private action NodeRadius(OutlineEdges edges, integer v, integer e) returns number
         number d0 = PointToOutline(edges, xs:Get(v), ys:Get(v), cleanCell0:Get(e), cleanCategory0:Get(e))
-        if not sampled
-            return d0
-        end
         number d1 = PointToOutline(edges, xs:Get(v), ys:Get(v), cleanCell1:Get(e), cleanCategory1:Get(e))
         return (d0 + d1) / 2.0
     end

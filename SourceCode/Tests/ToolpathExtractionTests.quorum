@@ -139,7 +139,7 @@ class ToolpathExtractionTests
         edges:BuildEdges(contours)
         VoronoiDiagram voronoi
         voronoi:Generate(edges)
-        st:Build(contours, edges, voronoi)
+        st:Build(edges, voronoi)
         cm:Build(st)
         bt:Build(st, cm)
         bt:SplitRampEnds(st, cm)

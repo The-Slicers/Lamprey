@@ -582,7 +582,6 @@ class PathOrderer
 
     // Does vertex v turn at least as sharply as every vertex within
     // seamCornerReach of it along the loop, both ways?
-//    private action SharpestNearby(Contour loop, NumberBuffer turn, integer v) returns boolean
     private action SharpestNearby(Contour loop, NumberBuffer turn, integer v, number reach) returns boolean
         integer n = loop:GetSize()
         number here = turn:Get(v)
@@ -618,7 +617,6 @@ class PathOrderer
     // along the loop, so a corner rounded off over a few short edges (as
     // tessellated models have) still counts, and the slight bend at each
     // vertex of a smooth curve doesn't.
-//    private action TurnCosine(Contour loop, integer v) returns number
     private action TurnCosine(Contour loop, integer v, number reach) returns number
         integer n = loop:GetSize()
         number vx = loop:xs:Get(v)
@@ -671,8 +669,7 @@ class PathOrderer
         integer i = 0
         repeat while i < n
             integer v = (start + i) mod n
-//            AddSpaced(path, src:xs:Get(v), src:ys:Get(v), false)
-        AddSpaced(path, src:xs:Get(v), src:ys:Get(v), WidthAt(src, v), src:IsAdaptive(), false)
+            AddSpaced(path, src:xs:Get(v), src:ys:Get(v), WidthAt(src, v), src:IsAdaptive(), false)
             i = i + 1
         end
         path:closed = true
@@ -720,7 +717,6 @@ class PathOrderer
             if i = n - 1
                 isLast = true
             end
-//            AddSpaced(path, src:xs:Get(v), src:ys:Get(v), isLast)
             AddSpaced(path, src:xs:Get(v), src:ys:Get(v), WidthAt(src, v), src:IsAdaptive(), isLast)
             i = i + 1
         end
@@ -784,7 +780,6 @@ class PathOrderer
                 if i = n - 1
                     isLast = true
                 end
-//                AddSpaced(path, src:xs:Get(v), src:ys:Get(v), isLast)
                 AddSpaced(path, src:xs:Get(v), src:ys:Get(v), WidthAt(src, v), src:IsAdaptive(), isLast)
                 i = i + 1
             end
@@ -939,12 +934,22 @@ class PathOrderer
         end
     end
 
+    // The island a path belongs to, judged at a point on the path: a loop's
+    // first point, the middle vertex of an open path, or the middle of a
+    // two-point line. (The point halfway between an open path's two ends can
+    // be off the path: for a C-shaped wall it can fall in another island.)
     private action IslandOf(Contour path, Array<Contour> islands) returns integer
         number x = path:HeadX()
         number y = path:HeadY()
         if not path:closed
-            x = (path:HeadX() + path:TailX()) / 2.0
-            y = (path:HeadY() + path:TailY()) / 2.0
+            integer size = path:GetSize()
+            if size >= 3
+                x = path:xs:Get(size / 2)
+                y = path:ys:Get(size / 2)
+            else
+                x = (path:HeadX() + path:TailX()) / 2.0
+                y = (path:HeadY() + path:TailY()) / 2.0
+            end
         end
 
         integer best = -1

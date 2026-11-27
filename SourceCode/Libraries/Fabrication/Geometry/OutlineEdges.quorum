@@ -19,9 +19,6 @@ class OutlineEdges
     public Array<integer> x1
     public Array<integer> y1
 
-    Array<integer> fromCont     // tracks which contour an edge is from (for reading boost output)
-    Array<integer> startsAt     // tracks vertex an edge starts at (for reading boost output)
-
     // tracking purposefully dropped stuff
     public integer contour_drops = 0
     public integer false_vertices = 0
@@ -32,8 +29,6 @@ class OutlineEdges
         y0:Empty()
         x1:Empty()
         y1:Empty()
-        fromCont:Empty()
-        startsAt:Empty()
         contour_drops = 0
         false_vertices = 0
 
@@ -66,7 +61,7 @@ class OutlineEdges
         repeat while k < outline:GetSize()
             Contour c = outline:Get(k)
             if c:closed and c:GetSize() >= 3
-                GetEdges(c, k)
+                GetEdges(c)
             else
                 contour_drops = contour_drops + 1
             end
@@ -123,14 +118,17 @@ class OutlineEdges
         integer outX = nextX - currX
         integer outY = nextY - currY
 
-        integer cross_product = inX * outY - inY * outX     // 0 -> vectors are parallel
-        integer dot_product = inX * outX + inY * outY       // positive -> vectors go same direction
+        // the products are worked out as numbers: in micrometres two edges over
+        // about 46 mm long overflow a 32-bit integer, while a number holds
+        // these whole values exactly
+        number cross_product = cast(number, inX) * cast(number, outY) - cast(number, inY) * cast(number, outX)    // 0 -> vectors are parallel
+        number dot_product = cast(number, inX) * cast(number, outX) + cast(number, inY) * cast(number, outY)      // positive -> vectors go same direction
 
         return cross_product = 0 and dot_product > 0
     end
 
     // go through each segment in a closed contour (loop)
-    action GetEdges(Contour c, integer index)
+    action GetEdges(Contour c)
         integer points = c:GetSize()
         
         integer curr = 0
@@ -153,8 +151,6 @@ class OutlineEdges
                 y0:Add(currY)
                 x1:Add(nextX)
                 y1:Add(nextY)
-                fromCont:Add(index)
-                startsAt:Add(curr)
             end
 
             if NotVertex(c, curr)
@@ -163,29 +159,6 @@ class OutlineEdges
 
             curr = curr + 1
         end
-    end
-
-//    action StartXArr() returns Array<integer>
-//        return x0
-//    end
-//
-//    action StartYArr() returns Array<integer>
-//        return y0
-//    end
-//
-//    action EndXArr() returns Array<integer>
-//        return x1
-//    end
-//
-//    action EndYArr() returns Array<integer>
-//        return y1
-//    end
-
-    action fromContour(integer index) returns integer
-        return fromCont:Get(index)
-    end
-    action EdgeStartsAt(integer index) returns integer
-        return startsAt:Get(index)
     end
 
 end

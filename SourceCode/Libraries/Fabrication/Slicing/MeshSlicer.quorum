@@ -13,13 +13,16 @@ use Libraries.Data.Containers.IntegerBuffer
 
 /*
 The MeshSlicer class cuts a triangle mesh into horizontal slices. SetTriangles
-takes the mesh, turns it so its largest flat face is on the bed, scales it to
+takes the mesh, turns it so its largest flat face is on the bed (unless
+SetAutoOrient is off), applies any rotation from SetRotation, scales it to
 millimetres and moves its lowest point to Z = 0. Slice then cuts every
 triangle with every plane it spans, giving one Segment per cut, ready for
-ContourGenerator to join into loops.
+ContourGenerator to join into loops. The planes can be any heights in
+ascending order: evenly spaced from BuildPlanes, or uneven (a different first
+layer, variable layer heights).
 
 Warnings about the model (a size that suggests the wrong units, a model
-larger than the bed, a mesh with holes) are collected in GetWarnings rather
+larger than the bed) are collected in GetWarnings rather
 than printed.
 
 Attribute: Example
@@ -48,12 +51,6 @@ class MeshSlicer
     Integer32BitArray faceCorners
     boolean loaded = false
 
-    integer maxCrossingsPerFace = 0
-    integer oddCount = 0
-
-    number firstPlaneZ = 0.0
-    number planeDelta = 0.0
-
     IntegerBuffer mergedIds
     integer uniqueVertices = 0
 
@@ -61,6 +58,14 @@ class MeshSlicer
     number forcedUnitScale = 0.0
     number bedSize = 220.0
     integer baseDirection = 4
+    boolean autoOrient = true
+    // a side of the bounding box can be the base only if the triangles lying
+    // flat on it cover at least this share of that side
+    number minBaseShare = 0.05
+    // the turn SetRotation asks for, in degrees about X, then Y, then Z
+    number rotationX = 0.0
+    number rotationY = 0.0
+    number rotationZ = 0.0
     Array<text> warnings
 
     number minX = 0.0
@@ -118,9 +123,85 @@ class MeshSlicer
     end
 
     /*
-    Takes the triangles to slice: copies them turned so the base faces down,
-    scaled to millimetres and resting on Z = 0, and merges vertices that sit
-    at exactly the same spot (so neighbouring triangles share edges).
+    Whether SetTriangles turns the model so its largest flat face is on the
+    bed (on by default). Off keeps the orientation the file has, with -Z down.
+
+    Attribute: Parameter toggle True to turn the model onto its base.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.TriangleMesh
+        use Libraries.Fabrication.Slicing.MeshSlicer
+
+        TriangleMesh mesh       // filled with mesh:Load(modelData)
+        MeshSlicer slicer
+        slicer:SetAutoOrient(false)     // the file is already the right way up
+        slicer:SetTriangles(mesh)
+    */
+    action SetAutoOrient(boolean toggle)
+        autoOrient = toggle
+    end
+
+    /*
+    How much of a side of the model's bounding box the triangles lying flat on
+    it must cover for that side to be chosen as the base (0.05, a twentieth,
+    by default). It keeps a model with no flat bottom from being turned onto
+    a tiny flat spot somewhere else; such a model stays as the file has it.
+
+    Attribute: Parameter share The share, from 0 to 1.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.TriangleMesh
+        use Libraries.Fabrication.Slicing.MeshSlicer
+
+        TriangleMesh mesh       // filled with mesh:Load(modelData)
+        MeshSlicer slicer
+        slicer:SetMinBaseShare(0.2)     // only turn the model onto a large flat side
+        slicer:SetTriangles(mesh)
+    */
+    action SetMinBaseShare(number share)
+        checker:RequireRange("MeshSlicer:SetMinBaseShare share", share, 0, 1)
+        minBaseShare = share
+    end
+
+    /*
+    Turns the model by these angles (degrees) when SetTriangles copies it:
+    first about the X axis, then Y, then Z, each counter-clockwise when
+    looking down that axis toward the origin (so X 90 tips the top of the
+    model toward -Y, and Z 90 turns it a quarter turn to the left on the
+    bed). The turn comes after auto-orient has put the model on its base, so
+    Z turns it on the bed and X or Y tip it onto another side; with
+    SetAutoOrient(false) it turns the model from the file's orientation.
+
+    Attribute: Parameter xDegrees The turn about X, -360 to 360.
+    Attribute: Parameter yDegrees The turn about Y, -360 to 360.
+    Attribute: Parameter zDegrees The turn about Z, -360 to 360.
+
+    Attribute: Example
+
+        use Libraries.Fabrication.Geometry.TriangleMesh
+        use Libraries.Fabrication.Slicing.MeshSlicer
+
+        TriangleMesh mesh       // filled with mesh:Load(modelData)
+        MeshSlicer slicer
+        slicer:SetRotation(0, 0, 45)    // turn it 45 degrees on the bed
+        slicer:SetTriangles(mesh)
+    */
+    action SetRotation(number xDegrees, number yDegrees, number zDegrees)
+        checker:RequireRange("MeshSlicer:SetRotation xDegrees", xDegrees, -360, 360)
+        checker:RequireRange("MeshSlicer:SetRotation yDegrees", yDegrees, -360, 360)
+        checker:RequireRange("MeshSlicer:SetRotation zDegrees", zDegrees, -360, 360)
+        rotationX = xDegrees
+        rotationY = yDegrees
+        rotationZ = zDegrees
+    end
+
+    /*
+    Takes the triangles to slice: copies them turned so the base faces down
+    (SetAutoOrient), turned by SetRotation, scaled to millimetres and resting
+    on Z = 0, and merges vertices that sit at exactly the same spot (so
+    neighbouring triangles share edges).
 
     Attribute: Parameter mesh The loaded mesh.
 
@@ -146,7 +227,10 @@ class MeshSlicer
         warnings:Empty()
 
         ComputeBounds(srcX, srcY, srcZ)
-        baseDirection = FindBaseDirection(srcX, srcY, srcZ)
+        baseDirection = 4
+        if autoOrient
+            baseDirection = FindBaseDirection(srcX, srcY, srcZ)
+        end
         unitScale = DetectUnitScale()
 
         // copy into our own arrays, rotated so the base faces -Z
@@ -192,6 +276,10 @@ class MeshSlicer
                 vertZ:Set(i, -x)
             end
             i = i + 1
+        end
+
+        if rotationX not= 0 or rotationY not= 0 or rotationZ not= 0
+            Rotate(count)
         end
 
         // shift so the lowest point is at Z = 0
@@ -286,8 +374,7 @@ class MeshSlicer
     action BuildPlanes(number zMin, number zMax, number delta) returns NumberBuffer
         checker:RequirePositive("MeshSlicer:BuildPlanes layer height", delta)
         NumberBuffer planes
-        firstPlaneZ = zMin + delta / 2.0
-        planeDelta = delta
+        number firstPlaneZ = zMin + delta / 2.0
 
         integer i = 0
         repeat while firstPlaneZ + i * delta < zMax
@@ -301,11 +388,15 @@ class MeshSlicer
     end
 
     /*
-    Cuts every triangle with every plane it spans. Triangles cut an odd
-    number of times (a mesh with holes or flipped faces) are counted in
-    GetOddCrossingCount and skipped.
+    Cuts every triangle with every plane it spans. The planes may be any
+    heights, evenly spaced or not, as long as they go up (each higher than the
+    one before). A triangle crosses a plane
+    on two of its edges or none (each corner is either below the plane or at
+    or above it, and a loop of three corners changes side an even number of
+    times), so each cut gives one Segment. Holes in the mesh show up later,
+    as chains ContourGenerator can't close.
 
-    Attribute: Parameter planeZ The plane heights, from BuildPlanes.
+    Attribute: Parameter planeZ The plane heights in ascending order, such as BuildPlanes gives.
     Attribute: Returns The segments of every plane, in no particular order.
 
     Attribute: Example
@@ -326,12 +417,16 @@ class MeshSlicer
     */
     action Slice(NumberBuffer planeZ) returns Array<Segment>
         RequireLoaded("Slice")
-        if planeDelta <= 0
-            alert("MeshSlicer:Slice needs the planes from BuildPlanes, which hasn't been called.")
+        integer planeCount = planeZ:GetSize()
+        integer next = 1
+        repeat while next < planeCount
+            if not (planeZ:Get(next) > planeZ:Get(next - 1))
+                alert("MeshSlicer:Slice needs the plane heights in ascending order, but plane " + next + " (" + planeZ:Get(next)
+                    + " mm) is not above plane " + (next - 1) + " (" + planeZ:Get(next - 1) + " mm).")
+            end
+            next = next + 1
         end
         Array<Segment> result
-        maxCrossingsPerFace = 0
-        oddCount = 0
 
         integer cornersPerFace = 3
         // one crossing per triangle edge at most, so a few are made once and
@@ -344,7 +439,6 @@ class MeshSlicer
             spare = spare + 1
         end
         integer faceCount = GetFaceCount()
-        integer planeCount = planeZ:GetSize()
 
         integer f = 0
         repeat while f < faceCount
@@ -358,89 +452,19 @@ class MeshSlicer
                 c = c + 1
             end
 
-            // only the planes between the triangle's lowest and highest
-            // corner can cut it (padded by one on each side for rounding)
-            integer idStart = util:CeilingToInt((zMin - firstPlaneZ) / planeDelta) - 1
-            integer idEnd = util:FloorToInt((zMax - firstPlaneZ) / planeDelta) + 1
-            if idStart < 0
-                idStart = 0
-            end
-            if idEnd > planeCount - 1
-                idEnd = planeCount - 1
-            end
-
-            integer i = idStart
-            repeat while i <= idEnd
-                integer n = CollectCrossings(f, cornersPerFace, planeZ:Get(i), crossings)
-                if n > maxCrossingsPerFace
-                    maxCrossingsPerFace = n
-                end
-                // a closed triangle is crossed 0 or 2 times; odd means bad data
-                if n mod 2 not= 0
-                    oddCount = oddCount + 1
-                elseif n = 2
+            // only the planes from the triangle's lowest corner up to its
+            // highest can cut it (a corner at a plane's height counts as
+            // above it, so a plane at zMin cuts nothing, one at zMax can)
+            integer i = FirstPlaneAtOrAbove(planeZ, zMin)
+            repeat while i < planeCount and planeZ:Get(i) <= zMax
+                if CollectCrossings(f, cornersPerFace, planeZ:Get(i), crossings) = 2
                     EmitSegment(crossings, i, result)
                 end
                 i = i + 1
             end
             f = f + 1
         end
-        if oddCount > 0
-            warnings:Add(oddCount + " triangle cuts crossed a slice an odd number of times and were skipped: the mesh has holes or bad faces, so some outlines may be open. Repairing the model usually fixes this.")
-        end
         return result
-    end
-
-    /*
-    The most crossings any triangle had with one plane in the last Slice (2 for a clean mesh).
-
-    Attribute: Returns The most crossings any triangle had with one plane in the last Slice (2 for a clean mesh).
-
-    Attribute: Example
-
-        use Libraries.Containers.Array
-        use Libraries.Fabrication.Geometry.TriangleMesh
-        use Libraries.Fabrication.Slicing.MeshSlicer
-        use Libraries.Fabrication.Slicing.Segment
-        use Libraries.Data.Containers.NumberBuffer
-
-        TriangleMesh mesh       // filled with mesh:Load(modelData)
-        MeshSlicer slicer
-        slicer:SetTriangles(mesh)
-        NumberBuffer range = slicer:GetSliceRange()
-        NumberBuffer planes = slicer:BuildPlanes(range:Get(0), range:Get(1), 0.2)
-        Array<Segment> segments = slicer:Slice(planes)
-        if slicer:GetMaxCrossingsPerFace() > 2
-            output "Some triangles overlap themselves."
-        end
-    */
-    action GetMaxCrossingsPerFace returns integer
-        return maxCrossingsPerFace
-    end
-
-    /*
-    How many triangle / plane cuts were skipped in the last Slice for having an odd number of crossings.
-
-    Attribute: Returns How many triangle / plane cuts were skipped in the last Slice for having an odd number of crossings.
-
-    Attribute: Example
-
-        use Libraries.Containers.Array
-        use Libraries.Fabrication.Geometry.TriangleMesh
-        use Libraries.Fabrication.Slicing.MeshSlicer
-        use Libraries.Fabrication.Slicing.Segment
-        use Libraries.Data.Containers.NumberBuffer
-
-        TriangleMesh mesh       // filled with mesh:Load(modelData)
-        MeshSlicer slicer
-        slicer:SetTriangles(mesh)
-        NumberBuffer range = slicer:GetSliceRange()
-        NumberBuffer planes = slicer:BuildPlanes(range:Get(0), range:Get(1), 0.2)
-        Array<Segment> segments = slicer:Slice(planes)
-        output slicer:GetOddCrossingCount() + " cuts skipped (0 for a closed mesh)"
-    */
-    action GetOddCrossingCount returns integer
-        return oddCount
     end
 
     /*
@@ -560,7 +584,9 @@ class MeshSlicer
     // Adds up, for each of the six sides of the bounding box, the area of
     // the triangles lying flat on it, and picks the side with the most as
     // the base. The current bottom (-Z) wins unless another side has 20%
-    // more. Returns 0..5 for -X, +X, -Y, +Y, -Z, +Z.
+    // more, and a side whose flat triangles cover less than minBaseShare of
+    // it can't win (a sliver of flat surface on a curved model is no base).
+    // Returns 0..5 for -X, +X, -Y, +Y, -Z, +Z.
     private action FindBaseDirection(Number64BitArray x, Number64BitArray y, Number64BitArray z) returns integer
         number eps = 0.002 * util:Max2(maxX - minX, util:Max2(maxY - minY, maxZ - minZ))
 
@@ -623,15 +649,89 @@ class MeshSlicer
             f = f + 1
         end
 
+        // the area of each side of the bounding box
+        number sizeX = maxX - minX
+        number sizeY = maxY - minY
+        number sizeZ = maxZ - minZ
+        NumberBuffer sideArea
+        sideArea:Add(sizeY * sizeZ)
+        sideArea:Add(sizeY * sizeZ)
+        sideArea:Add(sizeX * sizeZ)
+        sideArea:Add(sizeX * sizeZ)
+        sideArea:Add(sizeX * sizeY)
+        sideArea:Add(sizeX * sizeY)
+
         integer base = 4
         i = 0
         repeat while i < 6
-            if area:Get(i) > area:Get(base) * 1.2
+            if area:Get(i) >= minBaseShare * sideArea:Get(i) and area:Get(i) > area:Get(base) * 1.2
                 base = i
             end
             i = i + 1
         end
         return base
+    end
+
+    // The index of the first plane at or above z (planes ascending), or the
+    // plane count if every plane is below z.
+    private action FirstPlaneAtOrAbove(NumberBuffer planes, number z) returns integer
+        integer low = 0
+        integer high = planes:GetSize()
+        repeat while low < high
+            integer middle = (low + high) / 2
+            if planes:Get(middle) < z
+                low = middle + 1
+            else
+                high = middle
+            end
+        end
+        return low
+    end
+
+    // Turns the first count vertices by SetRotation's angles: about X, then
+    // Y, then Z (the matrix Rz * Ry * Rx). Sines and cosines within 10^-12 of
+    // 0 or 1 are made exact, so quarter turns move vertices exactly.
+    private action Rotate(integer count)
+        number toRadians = math:pi / 180.0
+        number cx = Exact(math:Cosine(rotationX * toRadians))
+        number sx = Exact(math:Sine(rotationX * toRadians))
+        number cy = Exact(math:Cosine(rotationY * toRadians))
+        number sy = Exact(math:Sine(rotationY * toRadians))
+        number cz = Exact(math:Cosine(rotationZ * toRadians))
+        number sz = Exact(math:Sine(rotationZ * toRadians))
+
+        number m00 = cz * cy
+        number m01 = cz * sy * sx - sz * cx
+        number m02 = cz * sy * cx + sz * sx
+        number m10 = sz * cy
+        number m11 = sz * sy * sx + cz * cx
+        number m12 = sz * sy * cx - cz * sx
+        number m20 = 0.0 - sy
+        number m21 = cy * sx
+        number m22 = cy * cx
+
+        integer i = 0
+        repeat while i < count
+            number x = vertX:Get(i)
+            number y = vertY:Get(i)
+            number z = vertZ:Get(i)
+            vertX:Set(i, m00 * x + m01 * y + m02 * z)
+            vertY:Set(i, m10 * x + m11 * y + m12 * z)
+            vertZ:Set(i, m20 * x + m21 * y + m22 * z)
+            i = i + 1
+        end
+    end
+
+    // v, with values within 10^-12 of 0, 1 or -1 made exactly that
+    private action Exact(number v) returns number
+        if v > -0.000000000001 and v < 0.000000000001
+            return 0.0
+        elseif v > 0.999999999999
+            return 1.0
+        elseif v < -0.999999999999
+            return -1.0
+        end
+        return v
     end
 
     private action ComputeBounds(Number64BitArray x, Number64BitArray y, Number64BitArray z)

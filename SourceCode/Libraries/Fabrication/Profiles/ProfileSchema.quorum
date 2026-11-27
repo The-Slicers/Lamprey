@@ -47,6 +47,11 @@ class ProfileSchema
 
         // ---- slicing ----
         AddNumber("slicing", "unitScale", "0", 0, 10000, "Model unit scale; 0 = detect from the model size, 25.4 for inch files")
+        AddBoolean("slicing", "autoOrient", "true", "Turn the model so its largest flat face is on the bed; false keeps the file's orientation")
+        AddNumber("slicing", "minBaseShare", "0.05", 0, 1, "Auto-orient: a side becomes the base only if flat faces cover this share of it")
+        AddNumber("slicing", "rotateX", "0", -360, 360, "Turn the model about X after auto-orient (degrees, counter-clockwise looking down X)")
+        AddNumber("slicing", "rotateY", "0", -360, 360, "Turn the model about Y after rotateX (degrees, counter-clockwise looking down Y)")
+        AddNumber("slicing", "rotateZ", "0", -360, 360, "Turn the model on the bed after rotateX and rotateY (degrees, counter-clockwise from above)")
         AddNumber("slicing", "layerHeight", "0.2", 0.04, 1.0, "Layer height (mm)")
         AddNumber("slicing", "cutAmount", "0", 0, 1000, "Height cut off the bottom of the model (mm)")
         AddNumber("slicing", "contourMaxGap", "0.2", 0, 5, "Largest gap closed when joining slice segments into loops (mm)")

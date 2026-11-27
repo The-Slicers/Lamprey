@@ -11,7 +11,6 @@ class OutlineEdgesTests
 
     action Run returns integer
         TestSquareWithHole()
-        TestHoleEdgesHaveBackReferences()
         TestStraightVertexIsCounted()
         TestSmallLoopKept()
         TestOpenAndShortLoopsDropped()
@@ -85,21 +84,6 @@ class OutlineEdgesTests
         Check(edges:false_vertices = 0, "square with hole has no straight vertices")
     end
 
-    // Each edge records its loop and the vertex it starts at.
-    action TestHoleEdgesHaveBackReferences
-        Array<Contour> outline
-        outline:Add(Square(0, 0, 1, 1))
-        outline:Add(HoleSquare(0.4, 0.4, 0.6, 0.6))
-
-        OutlineEdges edges
-        edges:BuildEdges(outline)
-
-        Check(edges:fromContour(0) = 0 and edges:fromContour(3) = 0, "outer edges come from loop 0")
-        Check(edges:fromContour(4) = 1 and edges:fromContour(7) = 1, "hole edges come from loop 1")
-        Check(edges:EdgeStartsAt(0) = 0 and edges:EdgeStartsAt(3) = 3, "outer edges start at vertices 0 to 3")
-        Check(edges:EdgeStartsAt(4) = 0 and edges:EdgeStartsAt(7) = 3, "hole edges start at vertices 0 to 3")
-    end
-
     // A vertex on a straight run is counted; the corners are not.
     action TestStraightVertexIsCounted
         Contour c
@@ -163,8 +147,8 @@ class OutlineEdgesTests
     end
 
     // 0.0001 mm rounds to 0 along with vertex 0, so the edge between them has no
-    // length and is dropped. The other four edges are kept, and their start
-    // vertices still refer to the original loop.
+    // length and is dropped. The other four edges are kept, in the loop's
+    // order.
     action TestZeroLengthEdgeDropped
         Contour c
         c:AddPoint(0, 0)
@@ -181,8 +165,10 @@ class OutlineEdgesTests
         edges:BuildEdges(outline)
 
         Check(edges:x0:GetSize() = 4, "the zero-length edge is dropped, leaving 4")
-        Check(edges:EdgeStartsAt(0) = 1, "the first kept edge starts at vertex 1")
-        Check(edges:EdgeStartsAt(3) = 4, "the last kept edge starts at vertex 4")
+        Check(edges:x0:Get(0) = 0 and edges:y0:Get(0) = 0 and edges:x1:Get(0) = 1000 and edges:y1:Get(0) = 0,
+            "the first kept edge runs from the merged start to (1, 0)")
+        Check(edges:x0:Get(3) = 0 and edges:y0:Get(3) = 1000 and edges:x1:Get(3) = 0 and edges:y1:Get(3) = 0,
+            "the last kept edge runs from (0, 1) back to the start")
     end
 
     // Rounding is half away from zero. Values chosen away from .5 so floating

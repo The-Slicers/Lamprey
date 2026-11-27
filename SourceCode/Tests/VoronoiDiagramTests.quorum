@@ -90,13 +90,12 @@ class VoronoiDiagramTests
     end
 
     // True when directed edge j is the twin of directed edge k: cells, categories
-    // and vertices swapped, with the same linear flag.
+    // and vertices swapped.
     action IsTwin(VoronoiDiagram diagram, integer j, integer k) returns boolean
         boolean cellsSwap = diagram:cell0:Get(j) = diagram:cell1:Get(k) and diagram:cell1:Get(j) = diagram:cell0:Get(k)
         boolean categoriesSwap = diagram:category0:Get(j) = diagram:category1:Get(k) and diagram:category1:Get(j) = diagram:category0:Get(k)
         boolean verticesSwap = diagram:vertex0:Get(j) = diagram:vertex1:Get(k) and diagram:vertex1:Get(j) = diagram:vertex0:Get(k)
-        boolean sameLinear = diagram:linear:Get(j) = diagram:linear:Get(k)
-        return cellsSwap and categoriesSwap and verticesSwap and sameLinear
+        return cellsSwap and categoriesSwap and verticesSwap
     end
 
     // True when some directed edge is the twin of edge k.
@@ -211,7 +210,7 @@ class VoronoiDiagramTests
         Check(inRange, "cells are segments 0-7 and vertices are valid")
     end
 
-    // Every edge is straight, has two ends, and has some length.
+    // Every edge has two different ends (the plugin only makes straight edges).
     action TestEdgesAreStraightAndBounded
         VoronoiDiagram diagram
         diagram:Generate(EdgesOf(ReferenceOutline()))
@@ -219,12 +218,12 @@ class VoronoiDiagramTests
         boolean ok = true
         integer k = 0
         repeat while k < diagram:cell0:GetSize()
-            if diagram:linear:Get(k) not= 1 or diagram:vertex0:Get(k) = diagram:vertex1:Get(k)
+            if diagram:vertex0:Get(k) = diagram:vertex1:Get(k)
                 ok = false
             end
             k = k + 1
         end
-        Check(ok, "every edge is straight, with two different ends")
+        Check(ok, "every edge has two different ends")
     end
 
     // Only the skeleton is returned: no edge's midpoint is in the hole or outside the square.

@@ -13,10 +13,10 @@ operating system without a native library.
 
 JTS diagrams points, not segments, so the outline is sampled every `spacing`
 mm (and at every corner). The diagram therefore comes out already cut down to
-the skeleton: only edges inside the outline, all straight (linear = 1), no
-unbounded edges, and each run between the same two segments joined into one
-edge. SkeletalTrapezoidation reads `sampled` to skip its own inside test, and
-measures radii to the real outline segments and corners.
+the skeleton: only edges inside the outline, all straight, no unbounded
+edges, and each run between the same two segments joined into one edge.
+SkeletalTrapezoidation needs no inside test of its own, and measures radii to
+the real outline segments and corners.
 
 The arrays hold one entry per directed edge; every edge appears twice, once per
 direction, with its cells, categories and vertices swapped. A cell is a
@@ -57,9 +57,6 @@ class VoronoiDiagram
     number scale = 1000.0
     number spacing = 0.1                // mm between outline samples
 
-    /* True: the edges come from a sampled outline (inside only, straight). */
-    public boolean sampled = true
-
     boolean failed = false
     text error = ""
 
@@ -77,7 +74,6 @@ class VoronoiDiagram
     public Array<integer> category1
     public Array<integer> vertex0          // vertex where edge starts
     public Array<integer> vertex1          // vertex were edge ends
-    public Array<integer> linear
 
     /*
     Builds the diagram of the outline's segments, replacing any earlier one.
@@ -97,7 +93,6 @@ class VoronoiDiagram
         category1:Empty()
         vertex0:Empty()
         vertex1:Empty()
-        linear:Empty()
 
         if edges:x0:GetSize() = 0
             return now
@@ -136,7 +131,6 @@ class VoronoiDiagram
             category1:Add(plugin:GetEdgeCategory1(e))
             vertex0:Add(plugin:GetEdgeVertex0(e))
             vertex1:Add(plugin:GetEdgeVertex1(e))
-            linear:Add(1)
             e = e + 1
         end
     end

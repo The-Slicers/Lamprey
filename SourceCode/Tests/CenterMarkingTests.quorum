@@ -103,7 +103,7 @@ class CenterMarkingTests
         VoronoiDiagram diagram
         diagram:Generate(edges)
 
-        st:Build(contours, edges, diagram)
+        st:Build(edges, diagram)
     end
 
     // ------------------------------------------------------------ helpers

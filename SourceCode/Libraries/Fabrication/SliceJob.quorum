@@ -178,8 +178,15 @@ class SliceJob
         // the slicer now has its own copy of the vertices (it shares only the
         // corner list), so the mesh's coordinates can go before slicing
         mesh = undefined
-        Log("base faced " + slicer:GetBaseDirection() + " in the file, unit scale " + format:Short(slicer:GetUnitScale())
-            + ", " + slicer:GetUniqueVertexCount() + " distinct vertices")
+        text placed = "base faced " + slicer:GetBaseDirection() + " in the file"
+        if not profile:GetBoolean("autoOrient")
+            placed = "kept the file's orientation (autoOrient is off)"
+        end
+        if profile:GetNumber("rotateX") not= 0 or profile:GetNumber("rotateY") not= 0 or profile:GetNumber("rotateZ") not= 0
+            placed = placed + ", then turned " + format:Short(profile:GetNumber("rotateX")) + " degrees about X, "
+                + format:Short(profile:GetNumber("rotateY")) + " about Y and " + format:Short(profile:GetNumber("rotateZ")) + " about Z"
+        end
+        Log(placed + ", unit scale " + format:Short(slicer:GetUnitScale()) + ", " + slicer:GetUniqueVertexCount() + " distinct vertices")
         NumberBuffer planeRange = slicer:GetSliceRange()
         number layerHeight = profile:GetNumber("layerHeight")
         number cutAmount = profile:GetNumber("cutAmount")
@@ -189,7 +196,7 @@ class SliceJob
 
         Array<Segment> segments = slicer:Slice(planes)
         Warn(slicer:GetWarnings(), "")
-        Log("segments: " + segments:GetSize() + " (at most " + slicer:GetMaxCrossingsPerFace() + " crossings per triangle)")
+        Log("segments: " + segments:GetSize())
 
         ContourGenerator conGen
         ConfigureContours(profile, conGen)
@@ -223,8 +230,9 @@ class SliceJob
         paths:SetProgress(verbose)
         paths:Generate(contours, planeCount)
         if paths:GetAdaptiveFallbackCount() > 0
-            Report("adaptive walls fell back to uniform walls on " + paths:GetAdaptiveFallbackCount() + " of "
-                + planeCount + " layers (verbose output gives each layer's reason)")
+            Report(paths:GetAdaptiveFallbackIslandCount() + " islands on " + paths:GetAdaptiveFallbackCount() + " of "
+                + planeCount + " layers fell back from adaptive to uniform walls; the rest of those layers kept "
+                + "adaptive walls (verbose output gives each island's reason)")
         end
         Array<Contour> walls = paths:GetWalls()
         Array<Contour> skin = paths:GetSkin()
@@ -335,6 +343,9 @@ class SliceJob
 
     private action ConfigureSlicer(Profile profile, MeshSlicer slicer)
         slicer:SetUnitScale(profile:GetNumber("unitScale"))
+        slicer:SetAutoOrient(profile:GetBoolean("autoOrient"))
+        slicer:SetMinBaseShare(profile:GetNumber("minBaseShare"))
+        slicer:SetRotation(profile:GetNumber("rotateX"), profile:GetNumber("rotateY"), profile:GetNumber("rotateZ"))
         number width = profile:GetNumber("bedWidth")
         number depth = profile:GetNumber("bedDepth")
         if depth > width
